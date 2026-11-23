@@ -4,14 +4,26 @@
 
 <h1 align="center">TypX</h1>
 
-**TypX (`typx`)** is a standalone, lightweight terminal editor for **[Typst](https://typst.app/)**, forked from **[`zyedidia/micro`](https://github.com/zyedidia/micro)** and inspired by **LyX**'s WYSIWYM (*What You See Is What You Mean*) document-processing philosophy.
+<p align="center">
+  <a href="https://github.com/monicafaye/TypX/releases"><img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-2b8a9e?style=flat-square" alt="Platforms: Windows, macOS, Linux" /></a>
+  <a href="https://typst.app/"><img src="https://img.shields.io/badge/built%20for-Typst-239dad?style=flat-square" alt="Built for Typst" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-4c9a2a?style=flat-square" alt="License: GPLv3" /></a>
+  <img src="https://img.shields.io/badge/go-1.23%2B-00add8?style=flat-square" alt="Go 1.23+" />
+</p>
+
+**TypX (`typx`)** is a standalone, lightweight terminal editor for **[Typst](https://typst.app/)**, forked from **[`zyedidia/micro`](https://github.com/zyedidia/micro)**. It brings the terminal Typst workflow many people assemble in Neovim—live math concealment, a document outline, `tinymist` LSP, and side-by-side live preview—into a single ready-to-use binary with standard keybindings and zero plugin setup.
+
+<p align="center">
+  <img src="assets/typx-preview.png" alt="TypX in Windows Terminal showing the Document Outline sidebar, Typst editor with live Unicode math concealment, and native in-terminal Sixel live preview" width="100%" /><br />
+  <sub><em>Document Outline (<code>Alt+O</code>), live Unicode math concealment (<code>Alt+C</code>), and native in-terminal Sixel preview (<code>Alt+P</code>) running <code>samples/showcase.typ</code>.</em></sub>
+</p>
 
 TypX delivers an out-of-the-box Typst authoring workflow in a single fast Go binary:
 
 - **Micro's ergonomics**: familiar keybindings (`Ctrl+S`, `Ctrl+C`, `Ctrl+V`, `Ctrl+Z`, `Ctrl+F`), mouse support, splits, tabs, instant startup, and Lua extensibility.
 - **Typst-first syntax & themes**: built-in `typst.yaml` grammar covering Markup, Math, and Code modes, plus dedicated `typx-dark` and `typx-light` colorschemes and companion formats (`bibtex`, `markdown`, `yaml`, `toml`, `json`, `ini`, `patch`).
 - **Cursor-aware live Unicode math concealment**: renders Greek letters, arrows, relations, set/logic operators, big operators, simple super/subscripts, and typographic dashes (`---`, `--`, `...`) cleanly on non-cursor lines while unconcealing the active line for exact editing—without ever mutating the underlying `.typ` source.
-- **LyX-inspired structural & math shortcuts**: quick inline/display math (`Alt+M` / `Alt+Shift+M`), bold/italic wrappers (`Alt+B` / `Alt+E`), heading promote/demote (`Alt+Left` / `Alt+Right`), indentation-aware snippet templates (`:insert` / `Alt+I`), and Typst-aware smart pairing.
+- **Structural & math shortcuts**: quick inline/display math (`Alt+M` / `Alt+Shift+M`), bold/italic wrappers (`Alt+B` / `Alt+E`), heading promote/demote (`Alt+Left` / `Alt+Right`), indentation-aware snippet templates (`:insert` / `Alt+I`), and Typst-aware smart pairing.
 - **Document Outline sidebar**: toggleable docked sidebar (`Alt+O` / `:outline`) powered by a fast incremental pure-Go parser (with optional `tinymist` `textDocument/documentSymbol` enrichment), live cursor tracking, keyboard/mouse jump, and `/` filtering.
 - **Dual Live Preview (In-Terminal Sixel + Browser)**: native right-docked continuous Sixel preview directly inside Sixel-capable terminals (`Alt+P` / `:preview inline`) with zoom, dark-mode inversion, and margin trimming, plus an auto-reloading companion browser preview (`:preview browser`) with cursor synchronization and compile-progress feedback.
 - **`tinymist` LSP & Multi-File Project Support**: automatic project root resolution (`typst.toml`, root-relative `/...` imports, `.git`, `../` imports), gutter diagnostics and `:diagnostics`, completion (`Ctrl+Space`), hover docs (`Alt+K` / `:hover`), and graceful offline operation (`--no-lsp`) when `tinymist` is absent.
@@ -19,6 +31,10 @@ TypX delivers an out-of-the-box Typst authoring workflow in a single fast Go bin
 ---
 
 ## Installation
+
+### Prebuilt binaries
+
+Prebuilt archives for `windows/amd64`, `darwin/arm64`, `darwin/amd64`, `linux/amd64`, and `linux/arm64` (with SHA-256 checksums) are published on **[GitHub Releases](https://github.com/monicafaye/TypX/releases)**. Extract the archive and place `typx` (`typx.exe` on Windows) on your `PATH`.
 
 ### Building from source
 
@@ -62,7 +78,7 @@ Or build all four targets at once with `make build-cross`.
 
 ## `tinymist` Setup (LSP & Live Preview)
 
-TypX works fully offline for syntax highlighting, math concealment, LyX shortcuts, and the Document Outline. Installing **[tinymist](https://github.com/Myriad-Dreamin/tinymist)** unlocks live diagnostics, completion, hover info, outline symbol enrichment, and live preview (both in-terminal Sixel and companion browser preview).
+TypX works fully offline for syntax highlighting, math concealment, structural/math shortcuts, and the Document Outline. Installing **[tinymist](https://github.com/Myriad-Dreamin/tinymist)** unlocks live diagnostics, completion, hover info, outline symbol enrichment, and live preview (both in-terminal Sixel and companion browser preview).
 
 ### Install `tinymist`
 
@@ -109,10 +125,11 @@ Inside TypX, run `Ctrl+E` then `tinymist-status` (or `tinymist-restart` to resta
 
 ## Quick Start & CLI Usage
 
-Open the included showcase document to explore all TypX features:
+Open the included showcase documents to explore all TypX features:
 
 ```bash
-typx samples/demo.typ            # full experience (LSP + concealment + outline)
+typx samples/demo.typ            # full feature walkthrough (LSP + concealment + outline)
+typx samples/showcase.typ        # single-page math & preview showcase
 typx --no-lsp samples/demo.typ   # offline mode without starting tinymist
 typx --preview samples/demo.typ  # open file and immediately launch live preview
 ```
@@ -145,7 +162,7 @@ Press **`Ctrl+E`** to open the command bar (`>` prompt). All TypX keybindings ap
 | Math Concealment | `:conceal [on\|off]` | `Alt+C` | Toggle live Unicode math/symbol concealment in the active buffer. |
 | Inline Math | `:math-inline` | `Alt+M` | Insert `$|$`, wrap selection in `$...$`, or exit inline math. |
 | Display Math | `:math-display` | `Alt+Shift+M` | Insert a multi-line display math block `$\n  |\n$`. |
-| Insert Palette | `:insert [name]` | `Alt+I` | Open the LyX-style template palette (`figure`, `table`, `frac`, `matrix`, `cases`, `code`, `callout`, `vec`, `hat`, `bar`). |
+| Insert Palette | `:insert [name]` | `Alt+I` | Open the snippet template palette (`figure`, `table`, `frac`, `matrix`, `cases`, `code`, `callout`, `vec`, `hat`, `bar`). |
 | Bold | `:wrap-bold` | `Alt+B` | Wrap selection or insert `*bold*` delimiters. |
 | Italic | `:wrap-italic` | `Alt+E` | Wrap selection or insert `_italic_` delimiters. |
 | Promote Heading | `:heading-promote` | `Alt+Left` | Decrease heading level (`== ` -> `= `). |
@@ -272,6 +289,13 @@ Inside TypX, press `Ctrl+E` and run `help` or open a specific topic:
 - `> help colors` — Colorschemes (`typx-dark`, `typx-light`, and built-in themes)
 - `> help keybindings` — Customizing `bindings.json` and bindable actions
 - `> help tutorial` — Quick configuration walkthrough
+
+---
+
+## Architecture & Contributing
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — System diagram, package layout, and subsystem designs (concealment coordinate mapper, `tinymist` JSON-RPC client, Sixel renderer, incremental outline parser).
+- **[AGENTS.md](AGENTS.md)** — Build/test commands (`go generate ./runtime`, `go test ./...`, `CGO_ENABLED=1 go test -race ./...`) and architectural invariants.
 
 ---
 
