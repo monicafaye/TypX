@@ -101,7 +101,6 @@ TypX/
 │   ├── colorschemes/             # typx-dark, typx-light, and core micro colorschemes
 │   ├── help/                     # Built-in TypX help topics (including typst.md)
 │   └── plugins/                  # Preserved core Lua plugins
-├── samples/                      # Showcase demo.typ document
 ├── tests/e2e/                    # Headless editor & CLI E2E suites + mocktinymist test server
 ├── tools/                        # Build metadata helpers (build-date.go, info-plist.go, testgen.go)
 ├── go.mod                        # module github.com/monicafaye/TypX

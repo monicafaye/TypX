@@ -15,7 +15,7 @@
 
 <p align="center">
   <img src="assets/typx-preview.png" alt="TypX in Windows Terminal showing the Document Outline sidebar, Typst editor with live Unicode math concealment, and native in-terminal Sixel live preview" width="100%" /><br />
-  <sub><em>Document Outline (<code>Alt+O</code>), live Unicode math concealment (<code>Alt+C</code>), and native in-terminal Sixel preview (<code>Alt+P</code>) running <code>samples/showcase.typ</code>.</em></sub>
+  <sub><em>Document Outline (<code>Alt+O</code>), live Unicode math concealment (<code>Alt+C</code>), and native in-terminal Sixel preview (<code>Alt+P</code>).</em></sub>
 </p>
 
 TypX delivers an out-of-the-box Typst authoring workflow in a single fast Go binary:
@@ -125,13 +125,12 @@ Inside TypX, run `Ctrl+E` then `tinymist-status` (or `tinymist-restart` to resta
 
 ## Quick Start & CLI Usage
 
-Open the included showcase documents to explore all TypX features:
+Open any `.typ` document with TypX:
 
 ```bash
-typx samples/demo.typ            # full feature walkthrough (LSP + concealment + outline)
-typx samples/showcase.typ        # single-page math & preview showcase
-typx --no-lsp samples/demo.typ   # offline mode without starting tinymist
-typx --preview samples/demo.typ  # open file and immediately launch live preview
+typx paper.typ            # open with LSP, math concealment, and outline
+typx --no-lsp paper.typ   # offline mode without starting tinymist
+typx --preview paper.typ  # open file and immediately launch live preview
 ```
 
 ### CLI Flags

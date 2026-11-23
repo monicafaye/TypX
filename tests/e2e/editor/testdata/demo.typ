@@ -1,7 +1,6 @@
-// TypX Demo & Verification Document
-// Try opening this file in TypX:
-//   typx samples/demo.typ
-//   typx --no-lsp samples/demo.typ
+// TypX E2E Demo & Verification Fixture
+//   typx demo.typ
+//   typx --no-lsp demo.typ
 //
 // Useful shortcuts to try inside TypX:
 //   Alt+C       Toggle live Unicode math concealment (:conceal)

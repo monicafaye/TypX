@@ -26,9 +26,9 @@ func demoFixturePath(t testing.TB) string {
 	t.Helper()
 	root, err := harness.RepoRoot()
 	require.NoError(t, err)
-	p := filepath.Join(root, "samples", "demo.typ")
+	p := filepath.Join(root, "tests", "e2e", "editor", "testdata", "demo.typ")
 	_, err = os.Stat(p)
-	require.NoError(t, err, "samples/demo.typ must exist")
+	require.NoError(t, err, "tests/e2e/editor/testdata/demo.typ must exist")
 	return p
 }
 
