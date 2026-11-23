@@ -4,11 +4,11 @@ import (
 	"bytes"
 
 	"github.com/micro-editor/tcell/v2"
-	"github.com/zyedidia/micro/v2/internal/buffer"
-	"github.com/zyedidia/micro/v2/internal/config"
-	"github.com/zyedidia/micro/v2/internal/display"
-	"github.com/zyedidia/micro/v2/internal/info"
-	"github.com/zyedidia/micro/v2/internal/util"
+	"github.com/monicafaye/TypX/internal/buffer"
+	"github.com/monicafaye/TypX/internal/config"
+	"github.com/monicafaye/TypX/internal/display"
+	"github.com/monicafaye/TypX/internal/info"
+	"github.com/monicafaye/TypX/internal/util"
 )
 
 type InfoKeyAction func(*InfoPane)
@@ -89,6 +89,14 @@ func (h *InfoPane) HandleEvent(event tcell.Event) {
 		ke := keyEvent(e)
 
 		done := h.DoKeyEvent(ke)
+		if !done {
+			for _, fb := range altShiftFallbackKeyEvents(ke) {
+				if h.DoKeyEvent(fb) {
+					done = true
+					break
+				}
+			}
+		}
 		hasYN := h.HasYN
 		if e.Key() == tcell.KeyRune && hasYN {
 			y := e.Rune() == 'y' || e.Rune() == 'Y'

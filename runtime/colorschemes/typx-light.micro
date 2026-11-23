@@ -1,0 +1,72 @@
+# TypX Light — High-contrast light colorscheme for Typst authoring
+# Designed for both truecolor and 256-color terminals.
+
+color-link default "#1F2328,#FAF8F5"
+color-link comment "italic #6E7781"
+color-link todo "bold #7D4E00,#FFF1B8"
+
+color-link identifier "#0550AE"
+color-link identifier.class "bold #953800"
+color-link identifier.macro "#8250DF"
+color-link identifier.var "#8250DF"
+
+color-link constant "#953800"
+color-link constant.bool "#953800"
+color-link constant.bool.true "#116329"
+color-link constant.bool.false "#CF222E"
+color-link constant.number "#953800"
+color-link constant.specialChar "#B35900"
+color-link constant.string "#116329"
+color-link constant.string.char "#0A6E7D"
+color-link constant.string.raw "#6F42C1"
+color-link constant.string.url "underline #0969DA"
+
+color-link statement "bold #8250DF"
+color-link preproc "bold #CF222E"
+color-link type "#0A6E7D"
+color-link type.keyword "bold #8250DF"
+color-link type.extended "#0A6E7D"
+color-link special "#953800"
+
+color-link symbol "#0A6E7D"
+color-link symbol.brackets "#424A53"
+color-link symbol.operator "#0550AE"
+color-link symbol.tag "#8250DF"
+color-link symbol.math "#0550AE"
+color-link conceal "bold #0A6E7D"
+
+color-link underlined "underline #0969DA"
+color-link error "bold #CF222E"
+color-link ignore "#6E7781"
+
+# Diagnostics & Gutter
+color-link gutter-error "bold #CF222E,#EFECE6"
+color-link gutter-warning "bold #9A6700,#EFECE6"
+color-link gutter-info "bold #0969DA,#EFECE6"
+
+# UI Chrome
+color-link line-number "#6E7781,#EFECE6"
+color-link current-line-number "bold #1F2328,#E2DDD3"
+color-link cursor-line "#E8E4DC"
+color-link color-column "#E8E4DC"
+color-link selection "#FAF8F5,#0969DA"
+color-link hlsearch "#1F2328,#FFD866"
+color-link match-brace "bold #FAF8F5,#0A6E7D"
+
+color-link statusline "#1F2328,#E2DDD3"
+color-link statusline.inactive "#6E7781,#EFECE6"
+color-link statusline.suggestions "#FAF8F5,#0550AE"
+color-link tabbar "#424A53,#EFECE6"
+color-link tabbar.active "bold #FAF8F5,#0550AE"
+color-link message "#1F2328,#EFECE6"
+color-link error-message "bold #FAF8F5,#CF222E"
+color-link divider "#B8B2A6,#EFECE6"
+color-link scrollbar "#B8B2A6"
+
+color-link indent-char "#C8C2B6"
+color-link tab-error "#CF222E"
+color-link trailingws "#CF222E"
+
+color-link diff-added "#116329"
+color-link diff-modified "#9A6700"
+color-link diff-deleted "#CF222E"

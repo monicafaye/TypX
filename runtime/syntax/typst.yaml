@@ -1,0 +1,100 @@
+filetype: typst
+
+detect:
+    filename: "\\.typ$"
+
+rules:
+    # Fenced raw blocks (4+ backticks before 3-backtick fences; no skip since backslashes are literal)
+    - constant.string.raw:
+        start: "````+[A-Za-z0-9_-]*"
+        end: "````+"
+        rules: []
+
+    - constant.string.raw:
+        start: "```+[A-Za-z0-9_-]*"
+        end: "```+"
+        rules: []
+
+    # Inline raw spans (no skip)
+    - constant.string.raw:
+        start: "`"
+        end: "`"
+        rules: []
+
+    # Line comments (guard against :// URLs and escaped \//)
+    - comment:
+        start: "(^|[^:\\\\])//"
+        end: "$"
+        rules:
+            - todo: "(TODO|XXX|FIXME):?"
+
+    # Block comments
+    - comment:
+        start: "/\\*"
+        end: "\\*/"
+        rules:
+            - todo: "(TODO|XXX|FIXME):?"
+
+    # Math mode ($...$ and $ ... $) — keep group == limit-group so inner patterns run
+    - symbol.math:
+        start: "(^|[^\\\\])\\$"
+        end: "\\$"
+        skip: "\\\\."
+        rules:
+            - constant.string:
+                start: "\""
+                end: "\""
+                skip: "\\\\."
+                rules:
+                    - constant.specialChar: "\\\\."
+            - comment:
+                start: "(^|[^:\\\\])//"
+                end: "$"
+                rules:
+                    - todo: "(TODO|XXX|FIXME):?"
+            - comment:
+                start: "/\\*"
+                end: "\\*/"
+                rules:
+                    - todo: "(TODO|XXX|FIXME):?"
+            - symbol.brackets: "[()\\[\\]{}]"
+            - constant.number: "\\b[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?\\b"
+            - special: "(&|\\\\[[:space:]]*$|#[A-Za-z_][A-Za-z0-9_-]*)"
+            - statement: "(<->|->|<-|=>|<=|>=|!=|~=|[=+*/^_<>!-])"
+            - type: "\\b(frac|mat|cases|vec|binom|sqrt|root|abs|norm|floor|ceil|round|sin|cos|tan|cot|sec|csc|arcsin|arccos|arctan|sinh|cosh|tanh|log|ln|exp|lim|limsup|liminf|max|min|sup|inf|arg|det|dim|gcd|hom|ker|Pr|mod|bold|italic|upright|serif|sans|frak|mono|bb|cal|scr|op|accent|hat|tilde|bar|dot|ddot|ov|underbrace|overbrace|underline|overline|cancel|lr|mid|dif|display|inline|script|sscript)\\b"
+
+    # Brackets for content [...], code {...}, and call arguments (...)
+    - symbol.brackets: "[\\[\\]{}()]"
+
+    # Numbers and Typst length/angle/ratio units (placed before headings)
+    - constant.number: "\\b(0x[0-9A-Fa-f]+|0b[01]+|0o[0-7]+)\\b"
+    - constant.number: "\\b[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?(%|(pt|mm|cm|in|em|deg|rad|fr|ms|s)\\b)?"
+
+    # Single-line quoted strings in code arguments
+    - constant.string: "\"(\\\\.|[^\"])*\""
+
+    # Code mode #-prefixed identifiers, constants, builtins, directives, and keywords
+    - identifier: "#[A-Za-z_][A-Za-z0-9_-]*(\\.[A-Za-z_][A-Za-z0-9_-]*)*"
+    - constant.bool: "#(true|false)\\b"
+    - constant: "#(none|auto)\\b"
+    - special: "#(figure|table|cite|ref|link|image|heading|text|par|block|box|grid|stack|align|pad|rect|circle|line|place|page|outline|bibliography|emph|strong|raw|list|enum|terms|footnote|quote|highlight|strike|underline|overline|sub|super|math|calc|sym|emoji)\\b"
+    - preproc: "#(import|include|set|show)\\b"
+    - statement: "#(let|if|else|for|while|return|break|continue|context)\\b"
+    - statement: "(\\]|\\})[[:space:]]*else\\b"
+    - symbol.brackets: "#[\\[{]"
+
+    # Markup emphasis and strong
+    - type: "(^|[[:space:]({\\[])_[^[:space:]_]([^_\\\\]|\\\\.)*_"
+    - special: "(^|[[:space:]({\\[])\\*[^[:space:]\\*]([^\\*\\\\]|\\\\.)*\\*"
+
+    # Markup headings (levels 1-6)
+    - statement: "^[[:space:]]*={1,6}([[:space:]].*)?$"
+
+    # List markers (-, +, /)
+    - special: "^[[:space:]]*[-+/] "
+
+    # Labels, citations, URLs, and escaped punctuation
+    - identifier: "<[A-Za-z_][A-Za-z0-9_.:-]*>"
+    - identifier: "(^|[^[:alnum:]_])@[A-Za-z_][A-Za-z0-9_.:-]*"
+    - underlined: "(https?|ftp)://[^][:space:]\\\\)>\"']*[^][:space:]\\\\)>\"',;.]"
+    - constant.specialChar: "\\\\[*_$#\\\\<>@`~\\[\\]{}]"

@@ -1,285 +1,282 @@
-<img alt="micro logo" src="./assets/micro-logo-drop.svg" width="500px"/>
+<p align="center">
+  <img src="assets/typx-logo.svg" alt="TypX logo" width="320" />
+</p>
 
-![Test Workflow](https://github.com/zyedidia/micro/actions/workflows/test.yaml/badge.svg)
-[![Go Report Card](https://goreportcard.com/badge/github.com/zyedidia/micro/v2)](https://goreportcard.com/report/github.com/zyedidia/micro/v2)
-[![Release](https://img.shields.io/github/release/zyedidia/micro.svg?label=Release)](https://github.com/zyedidia/micro/releases)
-[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/zyedidia/micro/blob/master/LICENSE)
-[![Join the chat at https://gitter.im/zyedidia/micro](https://badges.gitter.im/zyedidia/micro.svg)](https://gitter.im/zyedidia/micro?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
-[![Snap Status](https://snapcraft.io/micro/badge.svg)](https://snapcraft.io/micro)
+<h1 align="center">TypX</h1>
 
-**micro** is a terminal-based text editor that aims to be easy to use and intuitive, while also taking advantage of the capabilities
-of modern terminals. It comes as a single, batteries-included, static binary with no dependencies; you can download and use it right now!
+**TypX (`typx`)** is a standalone, lightweight terminal editor for **[Typst](https://typst.app/)**, forked from **[`zyedidia/micro`](https://github.com/zyedidia/micro)** and inspired by **LyX**'s WYSIWYM (*What You See Is What You Mean*) document-processing philosophy.
 
-As its name indicates, micro aims to be somewhat of a successor to the nano editor by being easy to install and use.
-It strives to be enjoyable as a full-time editor for people who prefer to work in a terminal, or those who regularly edit files over SSH.
+TypX delivers an out-of-the-box Typst authoring workflow in a single fast Go binary:
 
-Here is a picture of micro editing its source code.
+- **Micro's ergonomics**: familiar keybindings (`Ctrl+S`, `Ctrl+C`, `Ctrl+V`, `Ctrl+Z`, `Ctrl+F`), mouse support, splits, tabs, instant startup, and Lua extensibility.
+- **Typst-first syntax & themes**: built-in `typst.yaml` grammar covering Markup, Math, and Code modes, plus dedicated `typx-dark` and `typx-light` colorschemes and companion formats (`bibtex`, `markdown`, `yaml`, `toml`, `json`, `ini`, `patch`).
+- **Cursor-aware live Unicode math concealment**: renders Greek letters, arrows, relations, set/logic operators, big operators, simple super/subscripts, and typographic dashes (`---`, `--`, `...`) cleanly on non-cursor lines while unconcealing the active line for exact editing—without ever mutating the underlying `.typ` source.
+- **LyX-inspired structural & math shortcuts**: quick inline/display math (`Alt+M` / `Alt+Shift+M`), bold/italic wrappers (`Alt+B` / `Alt+E`), heading promote/demote (`Alt+Left` / `Alt+Right`), indentation-aware snippet templates (`:insert` / `Alt+I`), and Typst-aware smart pairing.
+- **Document Outline sidebar**: toggleable docked sidebar (`Alt+O` / `:outline`) powered by a fast incremental pure-Go parser (with optional `tinymist` `textDocument/documentSymbol` enrichment), live cursor tracking, keyboard/mouse jump, and `/` filtering.
+- **Dual Live Preview (In-Terminal Sixel + Browser)**: native right-docked continuous Sixel preview directly inside Sixel-capable terminals (`Alt+P` / `:preview inline`) with zoom, dark-mode inversion, and margin trimming, plus an auto-reloading companion browser preview (`:preview browser`) with cursor synchronization and compile-progress feedback.
+- **`tinymist` LSP & Multi-File Project Support**: automatic project root resolution (`typst.toml`, root-relative `/...` imports, `.git`, `../` imports), gutter diagnostics and `:diagnostics`, completion (`Ctrl+Space`), hover docs (`Alt+K` / `:hover`), and graceful offline operation (`--no-lsp`) when `tinymist` is absent.
 
-![Screenshot](./assets/micro-solarized.png)
-
-To see more screenshots of micro, showcasing some of the default color schemes, see [here](https://micro-editor.github.io).
-
-You can also check out the website for Micro at https://micro-editor.github.io.
-
-- - -
-
-## Features
-
-- Easy to use and install.
-- No dependencies or external files are needed — just the binary you can download further down the page.
-- Multiple cursors.
-- Common keybindings (<kbd>Ctrl-s</kbd>, <kbd>Ctrl-c</kbd>, <kbd>Ctrl-v</kbd>, <kbd>Ctrl-z</kbd>, …).
-  - Keybindings can be rebound to your liking.
-- Sane defaults.
-  - You shouldn't have to configure much out of the box (and it is extremely easy to configure).
-- Splits and tabs.
-- nano-like menu to help you remember the keybindings.
-- Extremely good mouse support.
-  - This means mouse dragging to create a selection, double click to select by word, and triple click to select by line.
-- Cross-platform (it should work on all the platforms Go runs on).
-  - Note that while Windows is supported, Mingw/Cygwin is not (see below).
-- Plugin system (plugins are written in Lua).
-  - micro has a built-in plugin manager to automatically install, remove, and update plugins.
-- Built-in diff gutter.
-- Simple autocompletion.
-- Persistent undo.
-- Automatic linting and error notifications.
-- Syntax highlighting for over [130 languages](runtime/syntax).
-- Color scheme support.
-  - By default, micro comes with 16, 256, and true color themes.
-- True color support.
-- Copy and paste with the system clipboard.
-- Small and simple.
-- Easily configurable.
-- Macros.
-- Smart highlighting of trailing whitespace and tab vs space errors.
-- Common editor features such as undo/redo, line numbers, Unicode support, soft wrapping, …
+---
 
 ## Installation
 
-To install micro, you can download a [prebuilt binary](https://github.com/zyedidia/micro/releases), or you can build it from source.
-
-If you want more information about ways to install micro, see this [wiki page](https://github.com/zyedidia/micro/wiki/Installing-Micro).
-
-Use `micro -version` to get the version information after installing. It is only guaranteed that you are installing the most recent
-stable version if you install from the prebuilt binaries, Homebrew, or Snap.
-
-A desktop entry file and man page can be found in the [assets/packaging](https://github.com/zyedidia/micro/tree/master/assets/packaging) directory.
-
-### Pre-built binaries
-
-Pre-built binaries are distributed in [releases](https://github.com/zyedidia/micro/releases).
-
-To uninstall micro, simply remove the binary, and the configuration directory at `~/.config/micro`.
-
-#### Third-party quick-install script
-
-```bash
-curl https://getmic.ro | bash
-```
-
-The script will place the micro binary in the current directory. From there, you can move it to a directory on your path of your choosing (e.g. `sudo mv micro /usr/bin`). See its [GitHub repository](https://github.com/benweissmann/getmic.ro) for more information.
-
-#### Eget
-
-With [Eget](https://github.com/zyedidia/eget) installed, you can easily get a pre-built binary:
-
-```
-eget zyedidia/micro
-```
-
-Use `--tag VERSION` to download a specific tagged version.
-
-```
-eget --tag nightly zyedidia/micro # download the nightly version (compiled every day at midnight UTC)
-eget --tag v2.0.8 zyedidia/micro  # download version 2.0.8 rather than the latest release
-```
-
-You can install `micro` by adding `--to /usr/local/bin` to the `eget` command, or move the binary manually to a directory on your `$PATH` after the download completes.
-
-See [Eget](https://github.com/zyedidia/eget) for more information.
-
-### Package managers
-
-You can install micro using Homebrew on Mac:
-
-```
-brew install micro
-```
-
-**Note for Mac:** All micro keybindings use the control or alt (option) key, not the command
-key. By default, macOS terminals do not forward alt key events. To fix this, please see
-the section on [macOS terminals](https://github.com/zyedidia/micro#macos-terminal) further below.
-
-On Linux, you can install micro through [snap](https://snapcraft.io/docs/core/install)
-
-```
-snap install micro --classic
-```
-
-Micro is also available through other package managers on Linux such as dnf, AUR, Nix, and package managers
-for other operating systems. These packages are not guaranteed to be up-to-date.
-
-<!-- * `apt install micro` (Ubuntu 20.04 `focal`, and Debian `unstable | testing | buster-backports`). At the moment, this package (2.0.1-1) is outdated and has a known bug where debug mode is enabled. -->
-
-* Linux:
-    * distro-specific package managers:
-        * `dnf install micro` (Fedora).
-        * `apt install micro` (Ubuntu and Debian).
-        * `pacman -S micro` (Arch Linux).
-        * `emerge app-editors/micro` (Gentoo).
-        * `zypper install micro-editor` (SUSE)
-        * `eopkg install micro` (Solus).
-        * `pacstall -I micro` (Pacstall).
-        * `apt-get install micro` (ALT Linux)
-        * See [wiki](https://github.com/zyedidia/micro/wiki/Installing-Micro) for details about CRUX, Termux.
-    * distro-agnostic package managers:
-        * `nix profile install nixpkgs#micro` (with [Nix](https://nixos.org/) and flakes enabled)
-        * `flox install micro` (with [Flox](https://flox.dev))
-* Windows: [Chocolatey](https://chocolatey.org), [Scoop](https://scoop.sh/) and [WinGet](https://learn.microsoft.com/en-us/windows/package-manager/winget/).
-    * `choco install micro`.
-    * `scoop install micro`.
-    * `winget install zyedidia.micro`
-* OpenBSD: Available in the ports tree and also available as a binary package.
-    * `pkg_add -v micro`.
-* NetBSD, macOS, Linux, Illumos, etc. with [pkgsrc](https://www.pkgsrc.org/)-current:
-    * `pkg_add micro`
-* macOS: Available in package managers.
-    * `sudo port install micro` (with [MacPorts](https://www.macports.org))
-    * `brew install micro` (with [Homebrew](https://brew.sh/))
-    * `nix profile install nixpkgs#micro` (with [Nix](https://nixos.org/) and flakes enabled)
-    * `flox install micro` (with [Flox](https://flox.dev))
-
-**Note for Linux desktop environments:**
-
-For interfacing with the local system clipboard, the following tools need to be installed:
-* For X11, `xclip` or `xsel`
-* For [Wayland](https://wayland.freedesktop.org/), `wl-clipboard`
-
-Without these tools installed, micro will use an internal clipboard for copy and paste, but it won't be accessible to external applications.
-
 ### Building from source
 
-If your operating system does not have a binary release, but does run Go, you can build from source.
+Requires **Go 1.23+**.
 
-Make sure that you have Go version 1.19 or greater and Go modules are enabled.
-
-```
-git clone https://github.com/zyedidia/micro
-cd micro
-make build
-sudo mv micro /usr/local/bin # optional
+```bash
+git clone https://github.com/monicafaye/TypX
+cd TypX
+go generate ./runtime
+go build -trimpath ./cmd/typx
 ```
 
-The binary will be placed in the current directory and can be moved to
-anywhere you like (for example `/usr/local/bin`).
+Or using `make` (runs `go generate ./runtime` and injects version, commit hash, and compile date metadata):
 
-The command `make install` will install the binary to `$GOPATH/bin` or `$GOBIN`.
-
-You can install directly with `go get` (`go get github.com/zyedidia/micro/cmd/micro`) but this isn't
-recommended because it doesn't build micro with version information (necessary for the plugin manager),
-and doesn't disable debug mode.
-
-### Fully static or dynamically linked binary
-
-By default, the micro binary is linked statically to increase the portability of the prebuilt binaries.
-This behavior can simply be overriden by providing `CGO_ENABLED=1` to the build target.
-
-```
-CGO_ENABLED=1 make build
+```bash
+make build      # builds ./typx (or typx.exe on Windows)
+make install    # installs to $GOBIN or $GOPATH/bin
 ```
 
-Afterwards the micro binary will dynamically link with the present core system libraries.
+### Cross-platform builds
 
-**Note for Mac:**
-Native macOS builds are done with `CGO_ENABLED=1` forced set to support adding the "Information Property List" in the linker step.
+TypX embeds all runtime assets (syntax grammars, colorschemes, help files, and core Lua plugins) via `go:embed` and compiles cleanly with `CGO_ENABLED=0`:
 
-### macOS terminal
+```bash
+go generate ./runtime
 
-If you are using macOS, you should consider using [iTerm2](https://iterm2.com/) instead of the default terminal (Terminal.app). The iTerm2 terminal has much better mouse support as well as better handling of key events. For best keybinding behavior, choose `xterm defaults` under `Preferences->Profiles->Keys->Presets...`, and select `Esc+` for `Left Option Key` in the same menu. The newest versions also support true color.
+# Windows (amd64)
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o binaries/typx-windows-amd64.exe ./cmd/typx
 
-If you still insist on using the default Mac terminal, be sure to set `Use Option key as Meta key` under
-`Preferences->Profiles->Keyboard` to use <kbd>option</kbd> as <kbd>alt</kbd>.
+# Linux (amd64)
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o binaries/typx-linux-amd64 ./cmd/typx
 
-### WSL and Windows Console
-
-If you use micro within WSL, it is highly recommended that you use the [Windows
-Terminal](https://apps.microsoft.com/store/detail/windows-terminal/9N0DX20HK701?hl=en-us&gl=us)
-instead of the default Windows Console.
-
-If you must use Windows Console for some reason, note that there is a bug in
-Windows Console WSL that causes a font change whenever micro tries to access
-the external clipboard via powershell. To fix this, use an internal clipboard
-with `set clipboard internal` (though your system clipboard will no longer be
-available in micro).
-
-### Colors and syntax highlighting
-
-If you open micro and it doesn't seem like syntax highlighting is working, this is probably because
-you are using a terminal which does not support 256 color mode. Try changing the color scheme to `simple`
-by pressing <kbd>Ctrl-e</kbd> in micro and typing `set colorscheme simple`.
-
-If you are using the default Ubuntu terminal, to enable 256 color mode make sure your `TERM` variable is set
-to `xterm-256color`.
-
-Many of the Windows terminals don't support more than 16 colors, which means
-that micro's default color scheme won't look very good. You can either set
-the color scheme to `simple`, or download and configure a better terminal emulator
-than the Windows default.
-
-### Cygwin, Mingw, Plan9
-
-Cygwin, Mingw, and Plan9 are unfortunately not officially supported. In Cygwin and Mingw, micro will often work when run using
-the `winpty` utility:
-
-```
-winpty micro.exe ...
+# macOS (Apple Silicon / Intel)
+GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o binaries/typx-darwin-arm64 ./cmd/typx
+GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o binaries/typx-darwin-amd64 ./cmd/typx
 ```
 
-Micro uses the amazing [tcell library](https://github.com/gdamore/tcell), but this
-means that micro is restricted to the platforms tcell supports. As a result, micro does not support
-Plan9 or Cygwin (although this may change in the future). Micro also doesn't support NaCl (which is deprecated anyway).
+Or build all four targets at once with `make build-cross`.
 
-## Usage
+---
 
-Once you have built the editor, start it by running `micro path/to/file.txt` or `micro` to open an empty buffer.
+## `tinymist` Setup (LSP & Live Preview)
 
-micro also supports creating buffers from `stdin`:
+TypX works fully offline for syntax highlighting, math concealment, LyX shortcuts, and the Document Outline. Installing **[tinymist](https://github.com/Myriad-Dreamin/tinymist)** unlocks live diagnostics, completion, hover info, outline symbol enrichment, and live preview (both in-terminal Sixel and companion browser preview).
 
-```sh
-ip a | micro
+### Install `tinymist`
+
+- **Windows**:
+  ```powershell
+  winget install Myriad-Dreamin.Tinymist
+  # or
+  scoop install tinymist
+  # or
+  cargo install --locked tinymist
+  ```
+- **macOS**:
+  ```bash
+  brew install tinymist
+  # or
+  cargo install --locked tinymist
+  ```
+- **Linux**:
+  ```bash
+  cargo install --locked tinymist
+  # or download a prebuilt binary from https://github.com/Myriad-Dreamin/tinymist/releases
+  ```
+
+### Automatic discovery order
+
+TypX automatically locates `tinymist` (`tinymist.exe` on Windows) in this order:
+
+1. Explicit `typst.tinymistPath` in TypX `settings.json` (or `-typst.tinymistPath <path>` on the CLI).
+2. `PATH` (`tinymist` / `tinymist.exe`).
+3. Standard OS locations:
+   - **Windows**: `%USERPROFILE%\.cargo\bin`, `%LOCALAPPDATA%\Microsoft\WinGet\Links`, `%USERPROFILE%\scoop\shims`, and installed VS Code `myriad-dreamin.tinymist` extensions.
+   - **macOS**: `/opt/homebrew/bin`, `/usr/local/bin`, `~/.cargo/bin`, `~/.local/bin`, and VS Code extensions.
+   - **Linux**: `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`, `/usr/bin`, and VS Code extensions.
+
+Verify your environment (including Sixel terminal detection and `tinymist` discovery) at any time:
+
+```bash
+typx --check
 ```
 
-You can move the cursor around with the arrow keys and mouse.
+Inside TypX, run `Ctrl+E` then `tinymist-status` (or `tinymist-restart` to restart the language server).
 
-You can also use the mouse to manipulate the text. Simply clicking and dragging
-will select text. You can also double click to enable word selection, and triple
-click to enable line selection.
+---
 
-## Documentation and Help
+## Quick Start & CLI Usage
 
-micro has a built-in help system which you can access by pressing <kbd>Ctrl-e</kbd> and typing `help`. Additionally, you can
-view the help files here:
+Open the included showcase document to explore all TypX features:
 
-- [main help](https://github.com/zyedidia/micro/tree/master/runtime/help/help.md)
-- [keybindings](https://github.com/zyedidia/micro/tree/master/runtime/help/keybindings.md)
-- [commands](https://github.com/zyedidia/micro/tree/master/runtime/help/commands.md)
-- [colors](https://github.com/zyedidia/micro/tree/master/runtime/help/colors.md)
-- [options](https://github.com/zyedidia/micro/tree/master/runtime/help/options.md)
-- [plugins](https://github.com/zyedidia/micro/tree/master/runtime/help/plugins.md)
+```bash
+typx samples/demo.typ            # full experience (LSP + concealment + outline)
+typx --no-lsp samples/demo.typ   # offline mode without starting tinymist
+typx --preview samples/demo.typ  # open file and immediately launch live preview
+```
 
-I also recommend reading the [tutorial](https://github.com/zyedidia/micro/tree/master/runtime/help/tutorial.md) for
-a brief introduction to the more powerful configuration features micro offers.
+### CLI Flags
 
-There is also an unofficial Discord, which you can join at https://discord.gg/nhWR6armnR.
+| Flag | Description |
+|---|---|
+| `--check` | Verify config directory, embedded Typst syntax, Unicode/Sixel terminal capability, and `tinymist` discovery/version, then exit. |
+| `--no-lsp` | Launch without starting `tinymist` (offline mode). |
+| `--preview` | Immediately start live preview on the opened `.typ` file (inline Sixel or browser per `typst.previewMode`). |
+| `--version` | Show TypX version, upstream `micro` base version, commit hash, and compile date. |
+| `--options` | List all configuration options and their default values. |
+| `-config-dir <dir>` | Use a custom configuration directory for this session. |
+| `-<option> <value>` | Override any option for this session (e.g., `typx -colorscheme typx-dark paper.typ`). |
+| `+LINE[:COL]` | Open buffer positioned at a specific line and optional column. |
 
-## Contributing
+---
 
-If you find any bugs, please report them! I am also happy to accept pull requests from anyone.
+## Default Keybindings & Commands
 
-You can use the [GitHub issue tracker](https://github.com/zyedidia/micro/issues)
-to report bugs, ask questions, or suggest new features.
+Press **`Ctrl+E`** to open the command bar (`>` prompt). All TypX keybindings apply in `.typ` buffers (falling back to standard `micro` actions in other file types) and can be customized in `bindings.json`.
 
-For a more informal setting to discuss the editor, you can join the [Gitter chat](https://gitter.im/zyedidia/micro) or the [Discord](https://discord.gg/nhWR6armnR). You can also use the [Discussions](https://github.com/zyedidia/micro/discussions) section on Github for a forum-like setting or for Q&A.
+### TypX / Typst Shortcuts
 
-Sometimes I am unresponsive, and I apologize! If that happens, please ping me.
+| Feature | Command | Default Keybinding | Description |
+|---|---|---|---|
+| Live Preview | `:preview [inline\|browser\|focus\|invert\|trim\|stop]` | `Alt+P` | Toggle live preview (`auto` chooses in-terminal Sixel when supported, otherwise browser preview). |
+| Document Outline | `:outline` | `Alt+O` | Toggle the docked Document Outline sidebar. |
+| Math Concealment | `:conceal [on\|off]` | `Alt+C` | Toggle live Unicode math/symbol concealment in the active buffer. |
+| Inline Math | `:math-inline` | `Alt+M` | Insert `$|$`, wrap selection in `$...$`, or exit inline math. |
+| Display Math | `:math-display` | `Alt+Shift+M` | Insert a multi-line display math block `$\n  |\n$`. |
+| Insert Palette | `:insert [name]` | `Alt+I` | Open the LyX-style template palette (`figure`, `table`, `frac`, `matrix`, `cases`, `code`, `callout`, `vec`, `hat`, `bar`). |
+| Bold | `:wrap-bold` | `Alt+B` | Wrap selection or insert `*bold*` delimiters. |
+| Italic | `:wrap-italic` | `Alt+E` | Wrap selection or insert `_italic_` delimiters. |
+| Promote Heading | `:heading-promote` | `Alt+Left` | Decrease heading level (`== ` -> `= `). |
+| Demote Heading | `:heading-demote` | `Alt+Right` | Increase heading level (`= ` -> `== `). |
+| LSP Completion | `:lsp-complete` | `Ctrl+Space` | Trigger `tinymist` autocomplete popup. |
+| LSP Hover | `:hover` | `Alt+K` | Show `tinymist` documentation / type info at cursor. |
+| Diagnostics List | `:diagnostics` | — | Show all `tinymist` diagnostics for the current `.typ` buffer. |
+| Tinymist Status | `:tinymist-status` | — | Display `tinymist` binary path, LSP state, preview URL, and stderr tail. |
+| Restart Tinymist | `:tinymist-restart` | — | Restart the `tinymist` language server subprocess. |
+
+Direct snippet commands are also registered for every template: `:insert-figure`, `:insert-table`, `:insert-frac`, `:insert-matrix`, `:insert-cases`, `:insert-code`, `:insert-callout`, `:insert-vec`, `:insert-hat`, and `:insert-bar`.
+
+### In-Terminal Sixel Preview Navigation (`:preview inline` / `:preview focus`)
+
+When the right-docked Sixel preview pane is focused:
+
+| Key / Action | Behavior |
+|---|---|
+| `Up` / `Down`, `k` / `j`, `w` / `s` | Scroll smoothly up/down through pages. |
+| `PgUp` / `PgDn`, `Ctrl+U` / `Ctrl+D`, `Space` | Page up/down through the document. |
+| `[` / `]` or `Left` / `Right` | Jump to previous/next page. |
+| `g` / `G` or `Home` / `End` | Jump to top or bottom of document. |
+| `+` / `-` | Zoom preview in/out. |
+| `t` | Toggle dark-mode color inversion (`typst.previewInvert`). |
+| `m` | Toggle page margin trimming (`typst.previewTrimMargins`). |
+| `r` | Force recompile and redraw preview. |
+| `Esc`, `Enter`, `Tab`, `Ctrl+W` | Return focus to the editor pane. |
+| `q` or `Alt+P` | Close the preview pane. |
+
+### Document Outline Navigation (`Alt+O`)
+
+When the Document Outline sidebar is focused:
+
+| Key / Action | Behavior |
+|---|---|
+| `Up` / `Down` or `k` / `j` | Move selection through headings, figures, and (optional) labels. |
+| `Home` / `End` / `PgUp` / `PgDn` | Jump to top, bottom, or page through the outline. |
+| `Enter` or Mouse Click | Jump the linked editor pane to that item, center the view, and return focus to the editor. |
+| `/` | Filter outline entries interactively (`Esc` clears filter, `Enter` confirms). |
+| `Esc` or `Tab` | Return focus to the editor without jumping. |
+| `Alt+O` or `:outline` | Close the outline sidebar. |
+
+---
+
+## Configuration
+
+TypX resolves its configuration directory in this order:
+
+1. `$TYPX_CONFIG_HOME` (if set)
+2. `<os.UserConfigDir()>/typx` (e.g., `%APPDATA%\typx` on Windows, `~/Library/Application Support/typx` on macOS, `$XDG_CONFIG_HOME/typx` or `~/.config/typx` on Linux)
+3. Fallback: `~/.config/typx`
+
+### TypX Options (`settings.json`)
+
+| Option | Scope | Default | Description |
+|---|---|---|---|
+| `typst.conceal` | local/global | `true` | Enable live Unicode math and typography concealment in `.typ` buffers. |
+| `typst.concealMode` | local/global | `"line"` | Unconceal policy: `"line"` (unconceal active cursor line) or `"token"` (unconceal only the token under the cursor). |
+| `typst.smartPairs` | local/global | `true` | Typst-aware smart pairing, skip-over, and pair-backspace for `$`, `[`, `(`, `{`, `"`. |
+| `typst.lspEnabled` | global | `true` | Enable `tinymist` LSP integration (`false` is equivalent to `--no-lsp`). |
+| `typst.tinymistPath` | global | `""` | Explicit path to `tinymist` / `tinymist.exe` (empty = auto-discover). |
+| `typst.debounceMs` | global | `150` | Debounce interval in milliseconds for `textDocument/didChange` updates. |
+| `typst.previewMode` | global | `"auto"` | Live preview mode: `"auto"` (inline Sixel when supported, else browser), `"inline"`, or `"browser"`. |
+| `typst.previewWidth` | global | `48` | Preferred width percentage for the docked in-terminal Sixel preview pane. |
+| `typst.previewPPI` | global | `144` | Render resolution (PPI) for in-terminal Sixel preview pages. |
+| `typst.previewInvert` | global | `false` | Invert colors in the in-terminal Sixel preview for dark terminals. |
+| `typst.previewTrimMargins` | global | `false` | Trim excess outer page margins in the in-terminal Sixel preview. |
+| `typst.previewOpenBrowser` | global | `true` | Automatically open the local preview URL in the OS browser when browser preview starts. |
+| `typst.outlineWidth` | global | `30` | Preferred width in columns for the Document Outline sidebar (auto-hides if terminal width `< 50`). |
+| `typst.outlineShowLabels` | global | `false` | Include standalone `<label>` anchors in the Document Outline alongside headings and figures. |
+
+Example `settings.json`:
+
+```json
+{
+  "colorscheme": "typx-dark",
+  "typst.conceal": true,
+  "typst.concealMode": "line",
+  "typst.previewMode": "auto",
+  "typst.previewInvert": true,
+  "typst.outlineWidth": 32,
+  "typst.outlineShowLabels": false
+}
+```
+
+### Built-in `.typ` Filetype Defaults
+
+When editing `.typ` files, TypX automatically applies authoring-friendly defaults (unless overridden globally or in an `"ft:typst"` block in `settings.json`):
+
+- `softwrap: true`, `wordwrap: true`
+- `tabstospaces: true`, `tabsize: 2`
+- `autoindent: true`, `ruler: true`
+- TypX statusline showing Typst lexical mode (`MARKUP` / `MATH` / `CODE` / `RAW`), word count, and `tinymist` LSP / Preview status (`LSP: ready`, `LSP: off`, `PREVIEW: ON`).
+
+### Colorschemes
+
+Try TypX's dedicated themes via `Ctrl+E`:
+
+```text
+> set colorscheme typx-dark
+> set colorscheme typx-light
+```
+
+---
+
+## Terminal Compatibility Notes
+
+- **Windows**: Use **[Windows Terminal](https://apps.microsoft.com/detail/9n0dx20hk701)** (supports Sixel graphics and truecolor) with a Unicode-capable font (e.g., Cascadia Mono, JetBrains Mono, Iosevka, JuliaMono) for full math glyph rendering.
+- **macOS**: Use a Sixel-capable terminal such as **WezTerm** or **iTerm2** for in-terminal preview (other terminals automatically fall back to browser preview). Configure the Option key to act as Meta/Alt so `Alt+*` shortcuts work:
+  - **iTerm2**: *Preferences -> Profiles -> Keys -> Left Option Key -> `Esc+`*.
+  - **Terminal.app**: *Preferences -> Profiles -> Keyboard -> Use Option as Meta key*.
+- **Linux**: Sixel preview works in terminals such as **foot**, **WezTerm**, **Konsole**, and **xterm** (with Sixel enabled). Install `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11) for system clipboard integration.
+
+---
+
+## Built-in Documentation
+
+Inside TypX, press `Ctrl+E` and run `help` or open a specific topic:
+
+- `> help typst` — TypX authoring guide (`tinymist`, `:preview`, `:outline`, `:conceal`, shortcuts, options)
+- `> help defaultkeys` — Default TypX and editor keybindings
+- `> help commands` — All command-bar commands
+- `> help options` — All global, local, and `typst.*` configuration options
+- `> help colors` — Colorschemes (`typx-dark`, `typx-light`, and built-in themes)
+- `> help keybindings` — Customizing `bindings.json` and bindable actions
+- `> help tutorial` — Quick configuration walkthrough
+
+---
+
+## Credits & License
+
+TypX is licensed under the **[GNU General Public License v3.0](LICENSE)**.
+
+TypX is derived from **[zyedidia/micro](https://github.com/zyedidia/micro)** (`v2.0.15`), whose original code is licensed under the MIT License (preserved in [LICENSE-MICRO](LICENSE-MICRO)), and integrates with **[tinymist](https://github.com/Myriad-Dreamin/tinymist)** for Typst language intelligence and live preview. See [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY) for third-party dependency licenses.

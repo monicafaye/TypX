@@ -189,7 +189,7 @@ func (n *Node) ResizeSplit(size int) bool {
 	if size <= 0 {
 		return false
 	}
-	if len(n.parent.children) <= 1 {
+	if n.parent == nil || len(n.parent.children) <= 1 {
 		// cannot resize a lone node
 		return false
 	}
@@ -213,6 +213,19 @@ func (n *Node) Resize(w, h int) {
 		return
 	}
 
+	hasFixed := false
+	for _, c := range n.children {
+		if !c.PropScale() {
+			hasFixed = true
+			break
+		}
+	}
+
+	if hasFixed {
+		n.resizeWithFixed(w, h)
+		return
+	}
+
 	x, y := n.X, n.Y
 	totw, toth := 0, 0
 	for _, c := range n.children {
@@ -233,6 +246,121 @@ func (n *Node) Resize(w, h int) {
 	n.alignSizes(totw, toth)
 }
 
+func (n *Node) resizeWithFixed(w, h int) {
+	count := len(n.children)
+	if count == 0 {
+		return
+	}
+
+	horiz := n.Kind == STHoriz
+	totalDim := h
+	if horiz {
+		totalDim = w
+	}
+
+	scalableCount := 0
+	scalableProp := 0.0
+	lastScalable := -1
+	for i, c := range n.children {
+		if c.PropScale() {
+			scalableCount++
+			lastScalable = i
+			if horiz {
+				scalableProp += c.propW
+			} else {
+				scalableProp += c.propH
+			}
+		}
+	}
+
+	dims := make([]int, count)
+	fixedSum := 0
+	for i, c := range n.children {
+		if !c.PropScale() {
+			d := c.H
+			if horiz {
+				d = c.W
+			}
+			if d < 0 {
+				d = 0
+			}
+			dims[i] = d
+			fixedSum += d
+		}
+	}
+
+	// Clamp fixed children if they would starve scalable siblings or exceed totalDim.
+	maxFixed := totalDim - scalableCount
+	if maxFixed < 0 {
+		maxFixed = 0
+	}
+	if fixedSum > maxFixed {
+		excess := fixedSum - maxFixed
+		for i := count - 1; i >= 0 && excess > 0; i-- {
+			if !n.children[i].PropScale() && dims[i] > 0 {
+				take := dims[i]
+				if take > excess {
+					take = excess
+				}
+				dims[i] -= take
+				fixedSum -= take
+				excess -= take
+			}
+		}
+	}
+
+	rem := totalDim - fixedSum
+	if rem < 0 {
+		rem = 0
+	}
+
+	if scalableCount > 0 {
+		for i, c := range n.children {
+			if !c.PropScale() {
+				continue
+			}
+			var d int
+			if scalableProp > 0 {
+				p := c.propH
+				if horiz {
+					p = c.propW
+				}
+				d = int(float64(rem) * (p / scalableProp))
+			} else {
+				d = rem / scalableCount
+			}
+			dims[i] = d
+		}
+	}
+
+	assigned := 0
+	for _, d := range dims {
+		assigned += d
+	}
+	if assigned != totalDim {
+		target := lastScalable
+		if target < 0 {
+			target = count - 1
+		}
+		dims[target] += totalDim - assigned
+		if dims[target] < 0 {
+			dims[target] = 0
+		}
+	}
+
+	x, y := n.X, n.Y
+	for i, c := range n.children {
+		c.X, c.Y = x, y
+		if horiz {
+			c.Resize(dims[i], h)
+			x += dims[i]
+		} else {
+			c.Resize(w, dims[i])
+			y += dims[i]
+		}
+	}
+}
+
 func (n *Node) alignSizes(totw, toth int) {
 	// Make sure that there are no off-by-one problems with the rounding
 	// of the sizes by making the final split fill the screen
@@ -248,8 +376,16 @@ func (n *Node) alignSizes(totw, toth int) {
 // Resets all proportions for children
 func (n *Node) markSizes() {
 	for _, c := range n.children {
-		c.propW = float64(c.W) / float64(n.W)
-		c.propH = float64(c.H) / float64(n.H)
+		if n.W > 0 {
+			c.propW = float64(c.W) / float64(n.W)
+		} else {
+			c.propW = 1
+		}
+		if n.H > 0 {
+			c.propH = float64(c.H) / float64(n.H)
+		} else {
+			c.propH = 1
+		}
 		c.markSizes()
 	}
 }
@@ -329,7 +465,7 @@ func (n *Node) applyNewSize(size int, h bool) {
 		if h {
 			a += c.H
 		} else {
-			a += c.H
+			a += c.W
 		}
 	}
 	n.markResize()
@@ -438,6 +574,143 @@ func (n *Node) VSplit(right bool) uint64 {
 	return n.hVSplit(0, right)
 }
 
+// DockLeft docks a fixed-width vertical split along the full left edge of this
+// root node without disturbing existing horizontal or vertical splits to its
+// right. The root pointer is mutated in-place so UIWindow.root remains valid.
+// Returns the new leaf's ID, or 0 if n is not a root node or width is invalid.
+func (n *Node) DockLeft(width int) uint64 {
+	if n == nil || n.parent != nil || width <= 0 || n.W <= width {
+		return 0
+	}
+
+	dockID := NewID()
+	dock := NewNode(STVert, n.X, n.Y, width, n.H, n, dockID)
+	dock.SetResize(false)
+	dock.SetPropScale(false)
+
+	remW := n.W - width
+	if n.IsLeaf() {
+		existing := NewNode(STVert, n.X+width, n.Y, remW, n.H, n, n.id)
+		n.Kind = STHoriz
+		n.children = []*Node{dock, existing}
+		n.markResize()
+		return dockID
+	}
+
+	// Capture accurate child proportions relative to current n.W/n.H before mutating.
+	n.markSizes()
+
+	if n.Kind == STHoriz {
+		n.children = append([]*Node{dock}, n.children...)
+		n.Resize(n.W, n.H)
+		n.markSizes()
+		return dockID
+	}
+
+	// n.Kind == STVert: wrap existing top-to-bottom children inside a right subtree.
+	right := NewNode(STVert, n.X+width, n.Y, remW, n.H, n, NewID())
+	right.children = n.children
+	for _, c := range right.children {
+		c.parent = right
+	}
+
+	n.Kind = STHoriz
+	n.children = []*Node{dock, right}
+	n.Resize(n.W, n.H)
+	n.markSizes()
+	return dockID
+}
+
+// DockRight docks a resizable, proportionally-scaling vertical split along the
+// full right edge of this root node without disturbing existing horizontal or
+// vertical splits (including left-docked fixed sidebars such as Outline).
+// The root pointer is mutated in-place so UIWindow.root remains valid.
+// Returns the new leaf's ID, or 0 if n is not a root node or width is invalid.
+func (n *Node) DockRight(width int) uint64 {
+	if n == nil || n.parent != nil || width <= 0 || n.W <= width {
+		return 0
+	}
+
+	dockID := NewID()
+	remW := n.W - width
+	dock := NewNode(STVert, n.X+remW, n.Y, width, n.H, n, dockID)
+	dock.SetResize(true)
+	dock.SetPropScale(true)
+
+	if n.IsLeaf() {
+		existing := NewNode(STVert, n.X, n.Y, remW, n.H, n, n.id)
+		n.Kind = STHoriz
+		n.children = []*Node{existing, dock}
+		n.markResize()
+		return dockID
+	}
+
+	// Capture accurate child proportions relative to current n.W/n.H before mutating.
+	n.markSizes()
+
+	if n.Kind == STHoriz {
+		fixedSum := 0
+		scalableProp := 0.0
+		scalableCount := 0
+		for _, c := range n.children {
+			if !c.PropScale() {
+				fixedSum += c.W
+			} else {
+				scalableProp += c.propW
+				scalableCount++
+			}
+		}
+		avail := n.W - fixedSum
+		if avail <= 1 {
+			return 0
+		}
+		dockW := width
+		if dockW >= avail {
+			dockW = avail / 2
+		}
+		if dockW <= 0 {
+			return 0
+		}
+		remainForExisting := avail - dockW
+		if scalableCount > 0 {
+			for _, c := range n.children {
+				if !c.PropScale() {
+					continue
+				}
+				if scalableProp > 0 {
+					c.propW = (c.propW / scalableProp) * (float64(remainForExisting) / float64(n.W))
+				} else {
+					c.propW = (float64(remainForExisting) / float64(scalableCount)) / float64(n.W)
+				}
+			}
+		}
+		dock.W = dockW
+		dock.propW = float64(dockW) / float64(n.W)
+		dock.propH = 1
+		n.children = append(n.children, dock)
+		n.Resize(n.W, n.H)
+		n.markSizes()
+		return dockID
+	}
+
+	// n.Kind == STVert: wrap existing top-to-bottom children inside a left subtree.
+	left := NewNode(STVert, n.X, n.Y, remW, n.H, n, NewID())
+	left.children = n.children
+	for _, c := range left.children {
+		c.parent = left
+	}
+	left.propW = float64(remW) / float64(n.W)
+	left.propH = 1
+	dock.propW = float64(width) / float64(n.W)
+	dock.propH = 1
+
+	n.Kind = STHoriz
+	n.children = []*Node{left, dock}
+	n.Resize(n.W, n.H)
+	n.markSizes()
+	return dockID
+}
+
 // unsplits the child of a split
 func (n *Node) unsplit(i int) {
 	copy(n.children[i:], n.children[i+1:])
@@ -483,7 +756,26 @@ func (n *Node) Unsplit() bool {
 // flattens the tree by removing unnecessary intermediate parents that have only one child
 // and handles the side effect of it
 func (n *Node) flatten() {
-	if n.parent == nil || len(n.children) != 1 {
+	if len(n.children) != 1 {
+		return
+	}
+	if n.parent == nil {
+		only := n.children[0]
+		if only.IsLeaf() {
+			n.id = only.id
+			n.Kind = STUndef
+			n.children = n.children[:0]
+			n.canResize = true
+			n.propScale = true
+		} else {
+			n.Kind = only.Kind
+			n.children = only.children
+			for _, c := range n.children {
+				c.parent = n
+			}
+			n.Resize(n.W, n.H)
+			n.markSizes()
+		}
 		return
 	}
 

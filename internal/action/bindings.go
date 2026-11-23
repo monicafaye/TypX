@@ -13,9 +13,9 @@ import (
 
 	"github.com/micro-editor/json5"
 	"github.com/micro-editor/tcell/v2"
-	"github.com/zyedidia/micro/v2/internal/config"
-	"github.com/zyedidia/micro/v2/internal/screen"
-	"github.com/zyedidia/micro/v2/internal/util"
+	"github.com/monicafaye/TypX/internal/config"
+	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/util"
 )
 
 var Binder = map[string]func(e Event, action string){

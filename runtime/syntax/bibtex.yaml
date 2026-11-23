@@ -1,0 +1,30 @@
+filetype: bibtex
+
+detect:
+    filename: "\\.bib$"
+
+rules:
+    # Entry types (@article, @book, @inproceedings, etc.)
+    - statement: "@[A-Za-z]+"
+
+    # Field names
+    - identifier: "^[[:space:]]*[A-Za-z][A-Za-z0-9_-]*[[:space:]]*="
+
+    # Quoted strings
+    - constant.string:
+        start: "\""
+        end: "\""
+        skip: "\\\\."
+        rules: []
+
+    # Numbers
+    - constant.number: "\\b[0-9]+\\b"
+
+    # Braces and punctuation
+    - symbol.brackets: "[{}()]"
+
+    # Comments
+    - comment:
+        start: "%"
+        end: "$"
+        rules: []

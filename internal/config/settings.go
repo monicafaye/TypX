@@ -13,7 +13,7 @@ import (
 
 	"github.com/micro-editor/json5"
 	"github.com/zyedidia/glob"
-	"github.com/zyedidia/micro/v2/internal/util"
+	"github.com/monicafaye/TypX/internal/util"
 	"golang.org/x/text/encoding/htmlindex"
 )
 
@@ -35,19 +35,27 @@ var optionValidators = map[string]optionValidator{
 	"reload":          validateChoice,
 	"scrollmargin":    validateNonNegativeValue,
 	"scrollspeed":     validateNonNegativeValue,
-	"tabsize":         validatePositiveValue,
-	"truecolor":       validateChoice,
+	"tabsize":            validatePositiveValue,
+	"truecolor":          validateChoice,
+	"typst.concealMode":  validateChoice,
+	"typst.debounceMs":   validateNonNegativeValue,
+	"typst.outlineWidth": validatePositiveValue,
+	"typst.previewMode":  validateChoice,
+	"typst.previewPPI":   validatePositiveValue,
+	"typst.previewWidth": validatePositiveValue,
 }
 
 // a list of settings with pre-defined choices
 var OptionChoices = map[string][]string{
-	"clipboard":       {"internal", "external", "terminal"},
-	"fileformat":      {"unix", "dos"},
-	"helpsplit":       {"hsplit", "vsplit"},
-	"matchbracestyle": {"underline", "highlight"},
-	"multiopen":       {"tab", "hsplit", "vsplit"},
-	"reload":          {"prompt", "auto", "disabled"},
-	"truecolor":       {"auto", "on", "off"},
+	"clipboard":         {"internal", "external", "terminal"},
+	"fileformat":        {"unix", "dos"},
+	"helpsplit":         {"hsplit", "vsplit"},
+	"matchbracestyle":   {"underline", "highlight"},
+	"multiopen":         {"tab", "hsplit", "vsplit"},
+	"reload":            {"prompt", "auto", "disabled"},
+	"truecolor":         {"auto", "on", "off"},
+	"typst.concealMode": {"line", "token"},
+	"typst.previewMode": {"auto", "inline", "browser"},
 }
 
 // a list of settings that can be globally and locally modified and their
@@ -102,36 +110,50 @@ var defaultCommonSettings = map[string]any{
 	"tabmovement":     false,
 	"tabsize":         float64(4),
 	"tabstospaces":    false,
-	"truecolor":       "auto",
-	"useprimary":      true,
-	"wordwrap":        false,
+	"truecolor":         "auto",
+	"typst.conceal":     true,
+	"typst.concealMode": "line",
+	"typst.smartPairs":  true,
+	"useprimary":        true,
+	"wordwrap":          false,
 }
 
 // a list of settings that should only be globally modified and their
 // default values
 var DefaultGlobalOnlySettings = map[string]any{
-	"autosave":       float64(0),
-	"clipboard":      "external",
-	"colorscheme":    "default",
-	"divchars":       "|-",
-	"divreverse":     true,
-	"fakecursor":     false,
-	"helpsplit":      "hsplit",
-	"infobar":        true,
-	"keymenu":        false,
-	"lockbindings":   false,
-	"mouse":          true,
-	"multiopen":      "tab",
-	"parsecursor":    false,
-	"paste":          false,
-	"pluginchannels": []string{"https://raw.githubusercontent.com/micro-editor/plugin-channel/master/channel.json"},
-	"pluginrepos":    []string{},
-	"savehistory":    true,
-	"scrollbarchar":  "|",
-	"sucmd":          "sudo",
-	"tabhighlight":   false,
-	"tabreverse":     true,
-	"xterm":          false,
+	"autosave":                 float64(0),
+	"clipboard":                "external",
+	"colorscheme":              "default",
+	"divchars":                 "|-",
+	"divreverse":               true,
+	"fakecursor":               false,
+	"helpsplit":                "hsplit",
+	"infobar":                  true,
+	"keymenu":                  false,
+	"lockbindings":             false,
+	"mouse":                    true,
+	"multiopen":                "tab",
+	"parsecursor":              false,
+	"paste":                    false,
+	"pluginchannels":           []string{"https://raw.githubusercontent.com/micro-editor/plugin-channel/master/channel.json"},
+	"pluginrepos":              []string{},
+	"savehistory":              true,
+	"scrollbarchar":            "|",
+	"sucmd":                    "sudo",
+	"tabhighlight":             false,
+	"tabreverse":               true,
+	"typst.debounceMs":         float64(150),
+	"typst.lspEnabled":         true,
+	"typst.outlineShowLabels":  false,
+	"typst.outlineWidth":       float64(30),
+	"typst.previewInvert":      false,
+	"typst.previewMode":        "auto",
+	"typst.previewOpenBrowser": true,
+	"typst.previewPPI":         float64(144),
+	"typst.previewTrimMargins": false,
+	"typst.previewWidth":       float64(48),
+	"typst.tinymistPath":       "",
+	"xterm":                    false,
 }
 
 // a list of settings that should never be globally modified
@@ -320,10 +342,43 @@ func UpdatePathGlobLocals(settings map[string]any, path string) {
 	}
 }
 
-// UpdateFileTypeLocals scans the already parsed settings and sets the options locally
-// based on whether the filetype matches to "ft:"
-// Must be called after ReadSettings
+// defaultFileTypeSettings defines TypX's built-in per-filetype defaults.
+// Applied after global defaults unless the user explicitly configured a key
+// globally, via CLI flag, or via a user "ft:<filetype>" settings block.
+var defaultFileTypeSettings = map[string]map[string]any{
+	"typst": {
+		"softwrap":     true,
+		"wordwrap":     true,
+		"tabstospaces": true,
+		"tabsize":      float64(2),
+		"autoindent":   true,
+		"ruler":        true,
+		"statusformatl": "$(filename) $(modified)$(overwrite)($(line),$(col)) $(status.paste)| " +
+			"$(typst.mode)$(typst.words)$(typst.lsp)ft:$(opt:filetype) | $(opt:encoding)",
+	},
+}
+
+// UpdateFileTypeLocals scans built-in filetype defaults and parsed settings
+// and sets the options locally based on whether the filetype matches "ft:".
+// Must be called after ReadSettings.
 func UpdateFileTypeLocals(settings map[string]any, filetype string) {
+	if ftDefaults, ok := defaultFileTypeSettings[filetype]; ok {
+		for k, v := range ftDefaults {
+			if _, userGlobal := parsedSettings[k]; userGlobal {
+				continue
+			}
+			if VolatileSettings[k] || ModifiedSettings[k] {
+				continue
+			}
+			if gval, ok := GlobalSettings[k]; ok {
+				if defVal, hasDef := defaultCommonSettings[k]; hasDef && !reflect.DeepEqual(gval, defVal) {
+					continue
+				}
+			}
+			settings[k] = v
+		}
+	}
+
 	for k, v := range parsedSettings {
 		if strings.HasPrefix(reflect.TypeOf(v).String(), "map") && strings.HasPrefix(k, "ft:") {
 			if filetype == k[3:] {

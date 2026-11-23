@@ -28,8 +28,12 @@ import (
 var (
 	// These variables should be set by the linker when compiling
 
-	// Version is the version number or commit hash
-	Version = "0.0.0-unknown"
+	// TypXVersion is the TypX release version (overridable via ldflags)
+	TypXVersion = "0.1.0-dev"
+	// MicroBaseVersion is the pinned upstream micro version TypX is forked from
+	MicroBaseVersion = "2.0.15"
+	// Version is the upstream-compatible micro version used by Lua plugin checks
+	Version = "2.0.15"
 	// SemVersion is the Semantic version
 	SemVersion semver.Version
 	// CommitHash is the commit this version was built on

@@ -3,13 +3,15 @@ package display
 import (
 	"strconv"
 	"strings"
+	"unicode"
 
 	runewidth "github.com/mattn/go-runewidth"
 	"github.com/micro-editor/tcell/v2"
-	"github.com/zyedidia/micro/v2/internal/buffer"
-	"github.com/zyedidia/micro/v2/internal/config"
-	"github.com/zyedidia/micro/v2/internal/screen"
-	"github.com/zyedidia/micro/v2/internal/util"
+	"github.com/monicafaye/TypX/internal/buffer"
+	"github.com/monicafaye/TypX/internal/config"
+	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/typst/conceal"
+	"github.com/monicafaye/TypX/internal/util"
 )
 
 // The BufWindow provides a way of displaying a certain section of a buffer.
@@ -29,6 +31,8 @@ type BufWindow struct {
 	hasMessage       bool
 	maxLineNumLength int
 	drawDivider      bool
+
+	concealCache *conceal.BufferCache
 }
 
 // NewBufWindow creates a new window at a location in the screen with a width and height
@@ -36,6 +40,7 @@ func NewBufWindow(x, y, width, height int, buf *buffer.Buffer) *BufWindow {
 	w := new(BufWindow)
 	w.View = new(View)
 	w.X, w.Y, w.Width, w.Height = x, y, width, height
+	w.concealCache = conceal.NewBufferCache()
 	w.SetBuffer(buf)
 	w.active = true
 
@@ -46,6 +51,12 @@ func NewBufWindow(x, y, width, height int, buf *buffer.Buffer) *BufWindow {
 
 // SetBuffer sets this window's buffer.
 func (w *BufWindow) SetBuffer(b *buffer.Buffer) {
+	if w.concealCache == nil {
+		w.concealCache = conceal.NewBufferCache()
+	}
+	if w.Buf != nil && w.Buf != b && w.Buf.SharedBuffer != nil {
+		w.concealCache.Invalidate(w.Buf.SharedBuffer)
+	}
 	w.Buf = b
 	b.OptionCallback = func(option string, nativeValue any) {
 		if option == "softwrap" {
@@ -56,7 +67,7 @@ func (w *BufWindow) SetBuffer(b *buffer.Buffer) {
 			}
 		}
 
-		if option == "softwrap" || option == "wordwrap" {
+		if option == "softwrap" || option == "wordwrap" || option == "typst.conceal" || option == "typst.concealMode" {
 			w.Relocate()
 			for _, c := range w.Buf.GetCursors() {
 				c.LastWrappedVisualX = c.GetVisualX(true)
@@ -172,6 +183,101 @@ func (w *BufWindow) updateDisplayInfo() {
 	}
 }
 
+func (w *BufWindow) lineConcealView(lineN int) *conceal.LineView {
+	if w.Buf == nil || !w.Buf.IsTypst() {
+		return nil
+	}
+	if on, _ := w.Buf.Settings["typst.conceal"].(bool); !on {
+		return nil
+	}
+	if lineN < 0 || lineN >= w.Buf.LinesNum() {
+		return nil
+	}
+	mode, _ := w.Buf.Settings["typst.concealMode"].(string)
+	var activeCols []int
+	if w.active {
+		for _, c := range w.Buf.GetCursors() {
+			if c.Y == lineN {
+				if mode != "token" {
+					return nil
+				}
+				activeCols = append(activeCols, c.X)
+			}
+		}
+	}
+	if w.concealCache == nil {
+		w.concealCache = conceal.NewBufferCache()
+	}
+	return w.concealCache.LineView(w.Buf.SharedBuffer, w.Buf.Version(), w.Buf, lineN, activeCols)
+}
+
+func decodeDisplayChar(runes []rune, idx int) (r rune, combc []rune, nextIdx int) {
+	r = runes[idx]
+	nextIdx = idx + 1
+	for nextIdx < len(runes) && unicode.Is(unicode.Mark, runes[nextIdx]) {
+		combc = append(combc, runes[nextIdx])
+		nextIdx++
+	}
+	return r, combc, nextIdx
+}
+
+func concealGlyphStyle(syntaxStyle tcell.Style) tcell.Style {
+	if s, ok := config.Colorscheme["conceal"]; ok {
+		return s
+	}
+	if _, ok := config.Colorscheme["symbol.math"]; ok {
+		return config.GetColor("symbol.math")
+	}
+	if _, ok := config.Colorscheme["symbol"]; ok {
+		return config.GetColor("symbol")
+	}
+	return syntaxStyle
+}
+
+func (w *BufWindow) getStartInfoConcealed(lv *conceal.LineView, n, lineN int) (int, int, int, *tcell.Style) {
+	tabsize := util.IntOpt(w.Buf.Settings["tabsize"])
+	width := 0
+	visIdx := 0
+	curStyle := config.DefStyle
+	var s *tcell.Style
+	prevStyleCol := 0
+	for visIdx < len(lv.DisplayText) {
+		r, _, nextIdx := decodeDisplayChar(lv.DisplayText, visIdx)
+		bufCol := lv.VisualToBuf(visIdx)
+		for col := prevStyleCol; col <= bufCol; col++ {
+			var found bool
+			curStyle, found = w.getStyle(curStyle, buffer.Loc{X: col, Y: lineN})
+			if found {
+				st := curStyle
+				s = &st
+			}
+		}
+		prevStyleCol = bufCol + 1
+
+		rw := 0
+		switch r {
+		case '\t':
+			rw = tabsize - (width % tabsize)
+		default:
+			rw = runewidth.RuneWidth(r)
+		}
+		if width+rw > n {
+			return visIdx, n - width, bufCol, s
+		}
+		width += rw
+		visIdx = nextIdx
+	}
+	for col := prevStyleCol; col < lv.OriginalLen; col++ {
+		var found bool
+		curStyle, found = w.getStyle(curStyle, buffer.Loc{X: col, Y: lineN})
+		if found {
+			st := curStyle
+			s = &st
+		}
+	}
+	return len(lv.DisplayText), n - width, lv.OriginalLen, s
+}
+
 func (w *BufWindow) getStartInfo(n, lineN int) ([]byte, int, int, *tcell.Style) {
 	tabsize := util.IntOpt(w.Buf.Settings["tabsize"])
 	width := 0
@@ -245,7 +351,7 @@ func (w *BufWindow) Relocate() bool {
 
 	// horizontal relocation (scrolling)
 	if !b.Settings["softwrap"].(bool) {
-		cx := activeC.GetVisualX(false)
+		cx := w.VLocFromLoc(activeC.Loc).VisualX
 		rw := runewidth.RuneWidth(activeC.RuneUnder(activeC.X))
 		if rw == 0 {
 			rw = 1 // tab or newline
@@ -513,11 +619,22 @@ func (w *BufWindow) displayBuffer() {
 		leadingwsEnd := len(util.GetLeadingWhitespace(bline))
 		trailingwsStart := blineLen - util.CharacterCount(util.GetTrailingWhitespace(bline))
 
-		line, nColsBeforeStart, bslice, startStyle := w.getStartInfo(w.StartCol, bloc.Y)
+		lv := w.lineConcealView(bloc.Y)
+		var line []byte
+		var nColsBeforeStart, bslice int
+		var startStyle *tcell.Style
+		visIdx := 0
+		if lv != nil {
+			visIdx, nColsBeforeStart, bslice, startStyle = w.getStartInfoConcealed(lv, w.StartCol, bloc.Y)
+		} else {
+			line, nColsBeforeStart, bslice, startStyle = w.getStartInfo(w.StartCol, bloc.Y)
+		}
 		if startStyle != nil {
 			curStyle = *startStyle
 		}
 		bloc.X = bslice
+		prevStyleCol := bslice
+		var activeSpan *conceal.Span
 
 		// returns the rune to be drawn, style of it and if the bg should be preserved
 		getRuneStyle := func(r rune, style tcell.Style, showoffset int, linex int, isplaceholder bool) (rune, tcell.Style, bool) {
@@ -622,7 +739,20 @@ func (w *BufWindow) displayBuffer() {
 			}
 
 			if highlight {
-				if w.Buf.HighlightSearch && w.Buf.SearchMatch(bloc) {
+				matchedSearch := false
+				if w.Buf.HighlightSearch {
+					if activeSpan != nil {
+						for col := activeSpan.BufStart; col < activeSpan.BufEnd; col++ {
+							if w.Buf.SearchMatch(buffer.Loc{X: col, Y: bloc.Y}) {
+								matchedSearch = true
+								break
+							}
+						}
+					} else {
+						matchedSearch = w.Buf.SearchMatch(bloc)
+					}
+				}
+				if matchedSearch {
 					style = config.DefStyle.Reverse(true)
 					if s, ok := config.Colorscheme["hlsearch"]; ok {
 						style = s
@@ -639,9 +769,22 @@ func (w *BufWindow) displayBuffer() {
 				}
 
 				for _, c := range cursors {
-					if c.HasSelection() &&
-						(bloc.GreaterEqual(c.CurSelection[0]) && bloc.LessThan(c.CurSelection[1]) ||
-							bloc.LessThan(c.CurSelection[0]) && bloc.GreaterEqual(c.CurSelection[1])) {
+					selected := false
+					if c.HasSelection() {
+						if activeSpan != nil {
+							selStart, selEnd := c.CurSelection[0], c.CurSelection[1]
+							if selEnd.LessThan(selStart) {
+								selStart, selEnd = selEnd, selStart
+							}
+							spanStart := buffer.Loc{X: activeSpan.BufStart, Y: bloc.Y}
+							spanEnd := buffer.Loc{X: activeSpan.BufEnd, Y: bloc.Y}
+							selected = selStart.LessThan(spanEnd) && spanStart.LessThan(selEnd)
+						} else {
+							selected = bloc.GreaterEqual(c.CurSelection[0]) && bloc.LessThan(c.CurSelection[1]) ||
+								bloc.LessThan(c.CurSelection[0]) && bloc.GreaterEqual(c.CurSelection[1])
+						}
+					}
+					if selected {
 						// The current character is selected
 						style = config.DefStyle.Reverse(true)
 
@@ -660,7 +803,18 @@ func (w *BufWindow) displayBuffer() {
 				}
 
 				for _, m := range b.Messages {
-					if bloc.GreaterEqual(m.Start) && bloc.LessThan(m.End) ||
+					if activeSpan != nil {
+						msgStart, msgEnd := m.Start, m.End
+						if msgEnd.LessThan(msgStart) {
+							msgStart, msgEnd = msgEnd, msgStart
+						}
+						spanStart := buffer.Loc{X: activeSpan.BufStart, Y: bloc.Y}
+						spanEnd := buffer.Loc{X: activeSpan.BufEnd, Y: bloc.Y}
+						if msgStart.LessThan(spanEnd) && spanStart.LessThan(msgEnd) {
+							style = style.Underline(true)
+							break
+						}
+					} else if bloc.GreaterEqual(m.Start) && bloc.LessThan(m.End) ||
 						bloc.LessThan(m.End) && bloc.GreaterEqual(m.Start) {
 						style = style.Underline(true)
 						break
@@ -679,8 +833,14 @@ func (w *BufWindow) displayBuffer() {
 
 			if showcursor {
 				for _, c := range cursors {
-					if c.X == bloc.X && c.Y == bloc.Y && !c.HasSelection() {
-						w.showCursor(w.X+vloc.X, w.Y+vloc.Y, c.Num == 0)
+					if !c.HasSelection() && c.Y == bloc.Y {
+						onCursor := c.X == bloc.X
+						if activeSpan != nil {
+							onCursor = c.X >= activeSpan.BufStart && c.X < activeSpan.BufEnd
+						}
+						if onCursor {
+							w.showCursor(w.X+vloc.X, w.Y+vloc.Y, c.Num == 0)
+						}
 					}
 				}
 			}
@@ -707,10 +867,15 @@ func (w *BufWindow) displayBuffer() {
 		}
 
 		type glyph struct {
-			r     rune
-			combc []rune
-			style tcell.Style
-			width int
+			r         rune
+			combc     []rune
+			style     tcell.Style
+			width     int
+			linex     int
+			bufCol    int
+			bufEnd    int
+			concealed bool
+			span      conceal.Span
 		}
 
 		var word []glyph
@@ -721,13 +886,50 @@ func (w *BufWindow) displayBuffer() {
 		}
 		wordwidth := 0
 
-		totalwidth := w.StartCol - nColsBeforeStart
-		for len(line) > 0 && vloc.X < maxWidth {
-			r, combc, size := util.DecodeCharacter(line)
-			line = line[size:]
+		hasMore := func() bool {
+			if lv != nil {
+				return visIdx < len(lv.DisplayText)
+			}
+			return len(line) > 0
+		}
 
-			loc := buffer.Loc{X: bloc.X + len(word), Y: bloc.Y}
-			curStyle, _ = w.getStyle(curStyle, loc)
+		totalwidth := w.StartCol - nColsBeforeStart
+		for hasMore() && vloc.X < maxWidth {
+			var r rune
+			var combc []rune
+			var gStyle tcell.Style
+			var gBufCol, gBufEnd int
+			var gConcealed bool
+			var gSpan conceal.Span
+
+			if lv != nil {
+				curVisIdx := visIdx
+				r, combc, visIdx = decodeDisplayChar(lv.DisplayText, curVisIdx)
+				gBufCol = lv.VisualToBuf(curVisIdx)
+				for col := prevStyleCol; col <= gBufCol; col++ {
+					curStyle, _ = w.getStyle(curStyle, buffer.Loc{X: col, Y: bloc.Y})
+				}
+				prevStyleCol = gBufCol + 1
+
+				gStyle = curStyle
+				if sp, ok := lv.SpanAtBufCol(gBufCol); ok {
+					gConcealed = true
+					gSpan = sp
+					gStyle = concealGlyphStyle(curStyle)
+					gBufEnd = sp.BufEnd
+				} else {
+					gBufEnd = gBufCol + 1
+				}
+			} else {
+				var size int
+				r, combc, size = util.DecodeCharacter(line)
+				line = line[size:]
+
+				gBufCol = bloc.X + len(word)
+				gBufEnd = gBufCol + 1
+				curStyle, _ = w.getStyle(curStyle, buffer.Loc{X: gBufCol, Y: bloc.Y})
+				gStyle = curStyle
+			}
 
 			width := 0
 
@@ -742,19 +944,20 @@ func (w *BufWindow) displayBuffer() {
 				totalwidth += width
 			}
 
-			word = append(word, glyph{r, combc, curStyle, width})
+			word = append(word, glyph{r, combc, gStyle, width, linex, gBufCol, gBufEnd, gConcealed, gSpan})
 			wordwidth += width
 
 			// Collect a complete word to know its width.
 			// If wordwrap is off, every single character is a complete "word".
 			if wordwrap {
-				if !util.IsWhitespace(r) && len(line) > 0 && wordwidth < w.bufWidth {
+				if !util.IsWhitespace(r) && hasMore() && wordwidth < w.bufWidth {
 					continue
 				}
 			}
 
 			// If a word (or just a wide rune) does not fit in the window
 			if vloc.X+wordwidth > maxWidth && vloc.X > w.gutterOffset {
+				activeSpan = nil
 				for vloc.X < maxWidth {
 					draw(' ', nil, config.DefStyle, false, false, true)
 				}
@@ -771,20 +974,27 @@ func (w *BufWindow) displayBuffer() {
 				}
 			}
 
-			for _, r := range word {
-				drawrune, drawstyle, preservebg := getRuneStyle(r.r, r.style, 0, linex, false)
-				draw(drawrune, r.combc, drawstyle, true, true, preservebg)
+			for _, g := range word {
+				bloc.X = g.bufCol
+				if g.concealed {
+					sp := g.span
+					activeSpan = &sp
+				} else {
+					activeSpan = nil
+				}
+				drawrune, drawstyle, preservebg := getRuneStyle(g.r, g.style, 0, g.linex, false)
+				draw(drawrune, g.combc, drawstyle, true, true, preservebg)
 
 				// Draw extra characters for tabs or wide runes
-				for i := 1; i < r.width; i++ {
-					if r.r == '\t' {
-						drawrune, drawstyle, preservebg = getRuneStyle('\t', r.style, i, linex+i, false)
+				for i := 1; i < g.width; i++ {
+					if g.r == '\t' {
+						drawrune, drawstyle, preservebg = getRuneStyle('\t', g.style, i, g.linex+i, false)
 					} else {
-						drawrune, drawstyle, preservebg = getRuneStyle(' ', r.style, i, linex+i, true)
+						drawrune, drawstyle, preservebg = getRuneStyle(' ', g.style, i, g.linex+i, true)
 					}
 					draw(drawrune, nil, drawstyle, true, false, preservebg)
 				}
-				bloc.X++
+				bloc.X = g.bufEnd
 			}
 
 			word = word[:0]
@@ -826,6 +1036,10 @@ func (w *BufWindow) displayBuffer() {
 		}
 
 		if vloc.X != maxWidth {
+			if lv != nil {
+				bloc.X = lv.VisualToBuf(len(lv.DisplayText))
+			}
+			activeSpan = nil
 			// Display newline within a selection
 			drawrune, drawstyle, preservebg := getRuneStyle(' ', config.DefStyle, 0, totalwidth, true)
 			draw(drawrune, nil, drawstyle, true, true, preservebg)

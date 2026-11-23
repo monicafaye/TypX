@@ -2,10 +2,41 @@
 
 Below are simple charts of the default hotkeys and their functions. For more
 information about binding custom hotkeys or changing default bindings, please
-run `> help keybindings`
+run `> help keybindings`.
 
 Please remember that *all* keys here are rebindable! If you don't like it, you
 can change it!
+
+### TypX / Typst Authoring (`.typ` buffers)
+
+In non-Typst buffers, these keys automatically fall back to their standard
+editor defaults.
+
+| Key           | Command            | Description of function                                                   |
+|---------------|--------------------|---------------------------------------------------------------------------|
+| Alt-p         | `> preview`        | Toggle `tinymist` live browser preview with cursor sync                   |
+| Alt-o         | `> outline`        | Toggle docked Document Outline sidebar                                    |
+| Alt-c         | `> conceal`        | Toggle live Unicode math/typography concealment                           |
+| Alt-m         | `> math-inline`    | Insert inline math `$|$`, wrap selection, or exit inline math             |
+| Alt-M         | `> math-display`   | Insert multi-line display math block (`Alt-Shift-m`)                      |
+| Alt-i         | `> insert`         | Open LyX-style template insert palette                                    |
+| Alt-b         | `> wrap-bold`      | Wrap selection or insert `*bold*`                                         |
+| Alt-e         | `> wrap-italic`    | Wrap selection or insert `_italic_`                                       |
+| Alt-Left      | `> heading-promote`| Promote heading level (`== ` -> `= `)                                     |
+| Alt-Right     | `> heading-demote` | Demote heading level (`= ` -> `== `)                                      |
+| Ctrl-Space    | `> lsp-complete`   | Trigger `tinymist` LSP completion                                         |
+| Alt-k         | `> hover`          | Show `tinymist` LSP hover documentation                                   |
+
+### Document Outline Sidebar (when focused)
+
+| Key                  | Description of function                                          |
+|----------------------|------------------------------------------------------------------|
+| Up / Down or k / j   | Move selection up / down                                         |
+| Home / End           | Jump to first / last outline entry                               |
+| PgUp / PgDn          | Page up / down through outline entries                           |
+| Enter / Mouse Click  | Jump editor to entry, center viewport, and return focus          |
+| /                    | Filter outline entries (`Esc` clears, `Enter` accepts)           |
+| Esc / Tab            | Return focus to the editor without jumping                       |
 
 ### Power user
 

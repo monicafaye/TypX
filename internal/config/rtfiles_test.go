@@ -30,12 +30,12 @@ func TestAddFile(t *testing.T) {
 }
 
 func TestFindFile(t *testing.T) {
-	f := FindRuntimeFile(RTSyntax, "go")
+	f := FindRuntimeFile(RTSyntax, "typst")
 	assert.NotNil(t, f)
-	assert.Equal(t, "go", f.Name())
+	assert.Equal(t, "typst", f.Name())
 	data, err := f.Data()
 	assert.Nil(t, err)
-	assert.Equal(t, []byte("filetype: go"), data[:12])
+	assert.Equal(t, []byte("filetype: typst"), data[:15])
 
 	e := FindRuntimeFile(RTSyntax, "foobar")
 	assert.Nil(t, e)

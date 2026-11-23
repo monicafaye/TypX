@@ -12,13 +12,13 @@ import (
 
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/micro-editor/tcell/v2"
-	"github.com/zyedidia/micro/v2/internal/buffer"
-	"github.com/zyedidia/micro/v2/internal/clipboard"
-	"github.com/zyedidia/micro/v2/internal/config"
-	"github.com/zyedidia/micro/v2/internal/display"
-	"github.com/zyedidia/micro/v2/internal/screen"
-	"github.com/zyedidia/micro/v2/internal/shell"
-	"github.com/zyedidia/micro/v2/internal/util"
+	"github.com/monicafaye/TypX/internal/buffer"
+	"github.com/monicafaye/TypX/internal/clipboard"
+	"github.com/monicafaye/TypX/internal/config"
+	"github.com/monicafaye/TypX/internal/display"
+	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/shell"
+	"github.com/monicafaye/TypX/internal/util"
 )
 
 // ScrollUp is not an action
@@ -688,6 +688,11 @@ func (h *BufPane) SelectToEnd() bool {
 
 // InsertNewline inserts a newline plus possible some whitespace if autoindent is on
 func (h *BufPane) InsertNewline() bool {
+	if runPreActionHooks("InsertNewline", h) {
+		h.Cursor.StoreVisualX()
+		h.Relocate()
+		return true
+	}
 	// Insert a newline
 	if h.Cursor.HasSelection() {
 		h.Cursor.DeleteSelection()
@@ -721,6 +726,11 @@ func (h *BufPane) InsertNewline() bool {
 
 // Backspace deletes the previous character
 func (h *BufPane) Backspace() bool {
+	if runPreActionHooks("Backspace", h) {
+		h.Cursor.StoreVisualX()
+		h.Relocate()
+		return true
+	}
 	if h.Cursor.HasSelection() {
 		h.Cursor.DeleteSelection()
 		h.Cursor.ResetSelection()
@@ -1899,6 +1909,9 @@ func (h *BufPane) ClearInfo() bool {
 // (no prompt)
 func (h *BufPane) ForceQuit() bool {
 	h.Buf.Close()
+	if h.tab.PrimaryPaneCount() <= 1 {
+		h.tab.CloseAuxiliaryPanes()
+	}
 	if len(h.tab.Panes) > 1 {
 		h.Unsplit()
 	} else if len(Tabs.List) > 1 {
@@ -1960,7 +1973,7 @@ func (h *BufPane) QuitAll() bool {
 	}
 
 	if anyModified {
-		InfoBar.YNPrompt("Quit micro? (all open buffers will be closed without saving)", func(yes, canceled bool) {
+		InfoBar.YNPrompt("Quit TypX? (all open buffers will be closed without saving)", func(yes, canceled bool) {
 			if !canceled && yes {
 				quit()
 			}
@@ -2039,11 +2052,21 @@ func (h *BufPane) HSplitAction() bool {
 func (h *BufPane) Unsplit() bool {
 	tab := h.tab
 	n := tab.GetNode(h.splitID)
+	if n == nil {
+		return false
+	}
 	ok := n.Unsplit()
 	if ok {
 		tab.RemovePane(tab.GetPane(h.splitID))
 		tab.Resize()
-		tab.SetActive(len(tab.Panes) - 1)
+		nextIdx := len(tab.Panes) - 1
+		for i := len(tab.Panes) - 1; i >= 0; i-- {
+			if !IsAuxiliaryPane(tab.Panes[i]) {
+				nextIdx = i
+				break
+			}
+		}
+		tab.SetActive(nextIdx)
 
 		return true
 	}

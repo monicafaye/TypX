@@ -15,8 +15,8 @@ import (
 	"github.com/blang/semver"
 	"github.com/micro-editor/json5"
 	lua "github.com/yuin/gopher-lua"
-	ulua "github.com/zyedidia/micro/v2/internal/lua"
-	"github.com/zyedidia/micro/v2/internal/util"
+	ulua "github.com/monicafaye/TypX/internal/lua"
+	"github.com/monicafaye/TypX/internal/util"
 )
 
 var (

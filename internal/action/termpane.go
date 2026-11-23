@@ -6,11 +6,11 @@ import (
 
 	"github.com/micro-editor/tcell/v2"
 	"github.com/micro-editor/terminal"
-	"github.com/zyedidia/micro/v2/internal/clipboard"
-	"github.com/zyedidia/micro/v2/internal/config"
-	"github.com/zyedidia/micro/v2/internal/display"
-	"github.com/zyedidia/micro/v2/internal/screen"
-	"github.com/zyedidia/micro/v2/internal/shell"
+	"github.com/monicafaye/TypX/internal/clipboard"
+	"github.com/monicafaye/TypX/internal/config"
+	"github.com/monicafaye/TypX/internal/display"
+	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/shell"
 )
 
 type TermKeyAction func(*TermPane)

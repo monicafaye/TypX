@@ -8,12 +8,12 @@ import (
 
 	"github.com/micro-editor/tcell/v2"
 	lua "github.com/yuin/gopher-lua"
-	"github.com/zyedidia/micro/v2/internal/buffer"
-	"github.com/zyedidia/micro/v2/internal/config"
-	"github.com/zyedidia/micro/v2/internal/display"
-	ulua "github.com/zyedidia/micro/v2/internal/lua"
-	"github.com/zyedidia/micro/v2/internal/screen"
-	"github.com/zyedidia/micro/v2/internal/util"
+	"github.com/monicafaye/TypX/internal/buffer"
+	"github.com/monicafaye/TypX/internal/config"
+	"github.com/monicafaye/TypX/internal/display"
+	ulua "github.com/monicafaye/TypX/internal/lua"
+	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/util"
 )
 
 type BufAction any
@@ -462,6 +462,14 @@ func (h *BufPane) HandleEvent(event tcell.Event) {
 		ke := keyEvent(e)
 
 		done := h.DoKeyEvent(ke)
+		if !done {
+			for _, fb := range altShiftFallbackKeyEvents(ke) {
+				if h.DoKeyEvent(fb) {
+					done = true
+					break
+				}
+			}
+		}
 		if !done && e.Key() == tcell.KeyRune {
 			h.DoRuneInsert(e.Rune())
 		}
@@ -619,6 +627,12 @@ func (h *BufPane) DoMouseEvent(e MouseEvent, te *tcell.EventMouse) bool {
 // DoRuneInsert inserts a given rune into the current buffer
 // (possibly multiple times for multiple cursors)
 func (h *BufPane) DoRuneInsert(r rune) {
+	if runRuneHooks(h, r) {
+		if recordingMacro {
+			curmacro = append(curmacro, r)
+		}
+		return
+	}
 	cursors := h.Buf.GetCursors()
 	for _, c := range cursors {
 		// Insert a character

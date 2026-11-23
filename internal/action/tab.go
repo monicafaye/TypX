@@ -4,12 +4,12 @@ import (
 	luar "layeh.com/gopher-luar"
 
 	"github.com/micro-editor/tcell/v2"
-	"github.com/zyedidia/micro/v2/internal/buffer"
-	"github.com/zyedidia/micro/v2/internal/config"
-	"github.com/zyedidia/micro/v2/internal/display"
-	ulua "github.com/zyedidia/micro/v2/internal/lua"
-	"github.com/zyedidia/micro/v2/internal/screen"
-	"github.com/zyedidia/micro/v2/internal/views"
+	"github.com/monicafaye/TypX/internal/buffer"
+	"github.com/monicafaye/TypX/internal/config"
+	"github.com/monicafaye/TypX/internal/display"
+	ulua "github.com/monicafaye/TypX/internal/lua"
+	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/views"
 )
 
 // The TabList is a list of tabs and a window to display the tab bar
@@ -39,12 +39,64 @@ func NewTabList(bufs []*buffer.Buffer) *TabList {
 	return tl
 }
 
+var (
+	preResizeHooks  []func(w, h int)
+	postResizeHooks []func(w, h int)
+	tabSwitchHooks  []func(tab *Tab)
+	paneFocusHooks  []func(tab *Tab, pane Pane)
+)
+
+// RegisterPreResizeHook registers a callback invoked at the start of TabList.Resize
+// before split trees are resized (e.g., to auto-hide sidebars on narrow terminals).
+func RegisterPreResizeHook(fn func(w, h int)) {
+	if fn == nil {
+		panic("action.RegisterPreResizeHook: hook must not be nil")
+	}
+	preResizeHooks = append(preResizeHooks, fn)
+}
+
+// RegisterPostResizeHook registers a callback invoked at the end of TabList.Resize
+// after split trees and panes have been resized.
+func RegisterPostResizeHook(fn func(w, h int)) {
+	if fn == nil {
+		panic("action.RegisterPostResizeHook: hook must not be nil")
+	}
+	postResizeHooks = append(postResizeHooks, fn)
+}
+
+// RegisterTabSwitchHook registers a callback invoked when the active Tab changes.
+func RegisterTabSwitchHook(fn func(tab *Tab)) {
+	if fn == nil {
+		panic("action.RegisterTabSwitchHook: hook must not be nil")
+	}
+	tabSwitchHooks = append(tabSwitchHooks, fn)
+}
+
+// RegisterPaneFocusHook registers a callback invoked when the active Pane within a Tab changes.
+func RegisterPaneFocusHook(fn func(tab *Tab, pane Pane)) {
+	if fn == nil {
+		panic("action.RegisterPaneFocusHook: hook must not be nil")
+	}
+	paneFocusHooks = append(paneFocusHooks, fn)
+}
+
 // UpdateNames makes sure that the list of names the tab window has access to is
 // correct
 func (t *TabList) UpdateNames() {
 	t.Names = t.Names[:0]
 	for _, p := range t.List {
-		t.Names = append(t.Names, p.Panes[p.active].Name())
+		if len(p.Panes) == 0 {
+			t.Names = append(t.Names, "")
+			continue
+		}
+		activePane := p.Panes[p.active]
+		if IsAuxiliaryPane(activePane) {
+			if cp := p.CurPane(); cp != nil {
+				t.Names = append(t.Names, cp.Name())
+				continue
+			}
+		}
+		t.Names = append(t.Names, activePane.Name())
 	}
 }
 
@@ -61,11 +113,18 @@ func (t *TabList) RemoveTab(id uint64) {
 		if len(p.Panes) == 0 {
 			continue
 		}
-		if p.Panes[0].ID() == id {
+		matched := false
+		for _, pane := range p.Panes {
+			if pane != nil && pane.ID() == id {
+				matched = true
+				break
+			}
+		}
+		if matched {
 			copy(t.List[i:], t.List[i+1:])
 			t.List[len(t.List)-1] = nil
 			t.List = t.List[:len(t.List)-1]
-			if t.Active() >= len(t.List) {
+			if len(t.List) > 0 && t.Active() >= len(t.List) {
 				t.SetActive(len(t.List) - 1)
 			}
 			t.Resize()
@@ -81,6 +140,9 @@ func (t *TabList) RemoveTab(id uint64) {
 // that into account
 func (t *TabList) Resize() {
 	w, h := screen.Screen.Size()
+	for _, fn := range preResizeHooks {
+		fn(w, h)
+	}
 	iOffset := config.GetInfoBarOffset()
 	InfoBar.Resize(w, h-1)
 	if len(t.List) > 1 {
@@ -95,6 +157,9 @@ func (t *TabList) Resize() {
 		t.List[0].Resize()
 	}
 	t.TabWindow.Resize(w, h)
+	for _, fn := range postResizeHooks {
+		fn(w, h)
+	}
 }
 
 // HandleEvent checks for a resize event or a mouse event on the tab bar
@@ -150,12 +215,17 @@ func (t *TabList) Display() {
 }
 
 func (t *TabList) SetActive(a int) {
+	if a < 0 || a >= len(t.List) {
+		return
+	}
 	t.TabWindow.SetActive(a)
 
+	var activated *Tab
 	for i, p := range t.List {
 		if i == a {
 			if !p.isActive {
 				p.isActive = true
+				activated = p
 
 				err := config.RunPluginFn("onSetActive", luar.New(ulua.L, p.CurPane()))
 				if err != nil {
@@ -164,6 +234,11 @@ func (t *TabList) SetActive(a int) {
 			}
 		} else {
 			p.isActive = false
+		}
+	}
+	if activated != nil {
+		for _, fn := range tabSwitchHooks {
+			fn(activated)
 		}
 	}
 }
@@ -234,8 +309,9 @@ type Tab struct {
 
 	isActive bool
 
-	Panes  []Pane
-	active int
+	Panes       []Pane
+	active      int
+	lastBufPane *BufPane
 
 	resizing *views.Node // node currently being resized
 	// captures whether the mouse is released
@@ -251,6 +327,7 @@ func NewTabFromBuffer(x, y, width, height int, b *buffer.Buffer) *Tab {
 
 	e := NewBufPaneFromBuf(b, t)
 	e.SetID(t.ID())
+	t.lastBufPane = e
 
 	t.Panes = append(t.Panes, e)
 	return t
@@ -263,6 +340,9 @@ func NewTabFromPane(x, y, width, height int, pane Pane) *Tab {
 	t.release = true
 	pane.SetTab(t)
 	pane.SetID(t.ID())
+	if bp, ok := pane.(*BufPane); ok {
+		t.lastBufPane = bp
+	}
 
 	t.Panes = append(t.Panes, pane)
 	return t
@@ -339,12 +419,78 @@ func (t *Tab) HandleEvent(event tcell.Event) {
 
 // SetActive changes the currently active pane to the specified index
 func (t *Tab) SetActive(i int) {
+	if len(t.Panes) == 0 {
+		t.active = 0
+		return
+	}
+	if i < 0 {
+		i = 0
+	} else if i >= len(t.Panes) {
+		i = len(t.Panes) - 1
+	}
 	t.active = i
 	for j, p := range t.Panes {
 		if j == i {
 			p.SetActive(true)
 		} else {
 			p.SetActive(false)
+		}
+	}
+	if bp, ok := t.Panes[i].(*BufPane); ok {
+		t.lastBufPane = bp
+	}
+	for _, fn := range paneFocusHooks {
+		fn(t, t.Panes[i])
+	}
+}
+
+// ActivePane returns the literally focused pane in this tab (including auxiliary panes).
+func (t *Tab) ActivePane() Pane {
+	if len(t.Panes) == 0 || t.active < 0 || t.active >= len(t.Panes) {
+		return nil
+	}
+	return t.Panes[t.active]
+}
+
+// ActiveIndex returns the index of the currently focused pane in this tab.
+func (t *Tab) ActiveIndex() int {
+	return t.active
+}
+
+// PrimaryPaneCount returns the number of non-auxiliary panes open in this tab.
+func (t *Tab) PrimaryPaneCount() int {
+	count := 0
+	for _, p := range t.Panes {
+		if !IsAuxiliaryPane(p) {
+			count++
+		}
+	}
+	return count
+}
+
+// CloseAuxiliaryPanes closes and unsplits every auxiliary pane in this tab.
+func (t *Tab) CloseAuxiliaryPanes() {
+	changed := false
+	for i := len(t.Panes) - 1; i >= 0; i-- {
+		p := t.Panes[i]
+		if !IsAuxiliaryPane(p) {
+			continue
+		}
+		id := p.ID()
+		p.Close()
+		if n := t.GetNode(id); n != nil {
+			n.Unsplit()
+		}
+		t.RemovePane(i)
+		changed = true
+	}
+	if changed {
+		t.Resize()
+		if len(t.Panes) > 0 {
+			if t.active < 0 || t.active >= len(t.Panes) {
+				t.active = len(t.Panes) - 1
+			}
+			t.SetActive(t.active)
 		}
 	}
 }
@@ -357,6 +503,9 @@ func (t *Tab) AddPane(pane Pane, i int) {
 	}
 	t.Panes = append(t.Panes[:i+1], t.Panes[i:]...)
 	t.Panes[i] = pane
+	if i <= t.active {
+		t.active++
+	}
 }
 
 // GetPane returns the pane with the given split index
@@ -371,15 +520,29 @@ func (t *Tab) GetPane(splitid uint64) int {
 
 // Remove pane removes the pane with the given index
 func (t *Tab) RemovePane(i int) {
+	if i < 0 || i >= len(t.Panes) {
+		return
+	}
+	if bp, ok := t.Panes[i].(*BufPane); ok && bp == t.lastBufPane {
+		t.lastBufPane = nil
+	}
 	copy(t.Panes[i:], t.Panes[i+1:])
 	t.Panes[len(t.Panes)-1] = nil
 	t.Panes = t.Panes[:len(t.Panes)-1]
+	if i < t.active {
+		t.active--
+	} else if t.active >= len(t.Panes) && len(t.Panes) > 0 {
+		t.active = len(t.Panes) - 1
+	}
 }
 
 // Resize resizes all panes according to their corresponding split nodes
 func (t *Tab) Resize() {
 	for _, p := range t.Panes {
 		n := t.GetNode(p.ID())
+		if n == nil {
+			continue
+		}
 		pv := p.GetView()
 		offset := 0
 		if n.X != 0 {
@@ -387,15 +550,39 @@ func (t *Tab) Resize() {
 		}
 		pv.X, pv.Y = n.X+offset, n.Y
 		p.SetView(pv)
-		p.Resize(n.W-offset, n.H)
+		w := n.W - offset
+		if w < 0 {
+			w = 0
+		}
+		p.Resize(w, n.H)
 	}
 }
 
-// CurPane returns the currently active pane
+// CurPane returns the currently active BufPane. When an auxiliary sidebar pane
+// (such as the Document Outline) is focused, CurPane falls back to the tab's
+// last-focused or first BufPane so commands and plugins keep targeting the document.
 func (t *Tab) CurPane() *BufPane {
-	p, ok := t.Panes[t.active].(*BufPane)
-	if !ok {
+	if len(t.Panes) == 0 || t.active < 0 || t.active >= len(t.Panes) {
 		return nil
 	}
-	return p
+	if p, ok := t.Panes[t.active].(*BufPane); ok {
+		return p
+	}
+	if !IsAuxiliaryPane(t.Panes[t.active]) {
+		return nil
+	}
+	if t.lastBufPane != nil {
+		for _, p := range t.Panes {
+			if p == t.lastBufPane {
+				return t.lastBufPane
+			}
+		}
+		t.lastBufPane = nil
+	}
+	for _, p := range t.Panes {
+		if bp, ok := p.(*BufPane); ok {
+			return bp
+		}
+	}
+	return nil
 }

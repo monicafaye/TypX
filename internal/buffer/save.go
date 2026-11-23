@@ -14,9 +14,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/zyedidia/micro/v2/internal/config"
-	"github.com/zyedidia/micro/v2/internal/screen"
-	"github.com/zyedidia/micro/v2/internal/util"
+	"github.com/monicafaye/TypX/internal/config"
+	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/util"
 	"golang.org/x/text/transform"
 )
 
@@ -330,6 +330,7 @@ func (b *Buffer) saveToFile(filename string, withSudo bool, autoSave bool) error
 		}
 	}
 
+	prevAbsPath := b.AbsPath
 	newPath := b.Path != filename
 	if newPath {
 		b.RemoveBackup()
@@ -344,6 +345,12 @@ func (b *Buffer) saveToFile(filename string, withSudo bool, autoSave bool) error
 		// need to update glob-based and filetype-based settings
 		b.ReloadSettings(true)
 	}
+
+	b.flushPendingChange()
+	notifyBufferSave(b, SaveEvent{
+		AutoSave:    autoSave,
+		PrevAbsPath: prevAbsPath,
+	})
 
 	err = b.Serialize()
 	return err

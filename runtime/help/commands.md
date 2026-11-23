@@ -12,9 +12,61 @@ does not look up environment variables.
 
 # Commands
 
-Micro provides the following commands that can be executed at the command-bar
+TypX provides the following commands that can be executed at the command-bar
 by pressing `Ctrl-e` and entering the command. Arguments are placed in single
-quotes here but these are not necessary when entering the command in micro.
+quotes here but these are not necessary when entering the command in TypX.
+
+## TypX / Typst commands
+
+See `> help typst` for a walkthrough of Typst authoring workflows.
+
+* `preview`: toggles `tinymist` live browser preview for the active `.typ`
+   buffer (default key: `Alt-p`) with debounced cursor synchronization.
+
+* `outline ['on'|'off'|'open'|'close'|'toggle']`: toggles or controls the
+   docked Document Outline sidebar (default key: `Alt-o`).
+
+* `conceal ['on'|'off'|'true'|'false']`: toggles or sets live Unicode math and
+   typography concealment for the active `.typ` buffer (default key: `Alt-c`).
+
+* `math-inline`: inserts `$|$`, wraps the active selection in `$...$`, or steps
+   out of inline math (default key: `Alt-m`).
+
+* `math-display`: inserts a multi-line display math block `$\n  |\n$`
+   (default key: `Alt-M` / `Alt-Shift-m`).
+
+* `wrap-bold`: wraps selection or inserts `*...*` (default key: `Alt-b`).
+
+* `wrap-italic`: wraps selection or inserts `_..._` (default key: `Alt-e`).
+
+* `heading-promote`: promotes a Typst heading by one level (`== ` -> `= `,
+   default key: `Alt-Left`).
+
+* `heading-demote`: demotes a Typst heading by one level (`= ` -> `== `,
+   default key: `Alt-Right`).
+
+* `insert ['template']`: opens the LyX-style insert palette (default key:
+   `Alt-i`), or directly expands a built-in template (`figure`, `table`, `frac`,
+   `matrix`, `cases`, `code`, `callout`, `vec`, `hat`, `bar`). Each template
+   is also available directly as `insert-<template>` (e.g., `insert-figure`,
+   `insert-table`, `insert-frac`, `insert-matrix`, `insert-cases`,
+   `insert-code`).
+
+* `lsp-complete`: triggers `tinymist` LSP autocompletion at the cursor
+   (default key: `Ctrl-Space`).
+
+* `hover`: requests `tinymist` LSP hover documentation at the cursor
+   (default key: `Alt-k`).
+
+* `diagnostics`: displays current `tinymist` diagnostics for the active `.typ`
+   buffer.
+
+* `tinymist-status`: reports `tinymist` binary discovery path, LSP connection
+   state, live preview URL, install hints (if missing), and recent stderr logs.
+
+* `tinymist-restart`: restarts the `tinymist` LSP server subprocess.
+
+## General editor commands
 
 * `bind 'key' 'action'`: creates a keybinding from key to action. See the
    `keybindings` documentation for more information about binding keys.

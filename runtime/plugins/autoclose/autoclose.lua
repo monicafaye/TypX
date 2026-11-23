@@ -10,7 +10,14 @@ function charAt(str, i)
     return uutil.RuneAt(str, i-1)
 end
 
+local function isTypstSmartPairs(bp)
+    return bp ~= nil and bp.Buf ~= nil and bp.Buf.Settings["filetype"] == "typst" and bp.Buf.Settings["typst.smartPairs"] == true
+end
+
 function onRune(bp, r)
+    if isTypstSmartPairs(bp) then
+        return true
+    end
     for i = 1, #autoclosePairs do
         if r == charAt(autoclosePairs[i], 2) then
             local curLine = bp.Buf:Line(bp.Cursor.Y)
@@ -42,6 +49,9 @@ function onRune(bp, r)
 end
 
 function preInsertNewline(bp)
+    if isTypstSmartPairs(bp) then
+        return true
+    end
     local curLine = bp.Buf:Line(bp.Cursor.Y)
     local curRune = charAt(curLine, bp.Cursor.X)
     local nextRune = charAt(curLine, bp.Cursor.X+1)
@@ -64,6 +74,9 @@ function preInsertNewline(bp)
 end
 
 function preBackspace(bp)
+    if isTypstSmartPairs(bp) then
+        return true
+    end
     for i = 1, #autoclosePairs do
         local curLine = bp.Buf:Line(bp.Cursor.Y)
         if charAt(curLine, bp.Cursor.X+1) == charAt(autoclosePairs[i], 2) and charAt(curLine, bp.Cursor.X) == charAt(autoclosePairs[i], 1) then

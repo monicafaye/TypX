@@ -2,8 +2,9 @@ package display
 
 import (
 	runewidth "github.com/mattn/go-runewidth"
-	"github.com/zyedidia/micro/v2/internal/buffer"
-	"github.com/zyedidia/micro/v2/internal/util"
+	"github.com/monicafaye/TypX/internal/buffer"
+	"github.com/monicafaye/TypX/internal/typst/conceal"
+	"github.com/monicafaye/TypX/internal/util"
 )
 
 // SLoc represents a vertical scrolling location, i.e. a location of a visual line
@@ -67,6 +68,71 @@ type SoftWrap interface {
 	LocFromVLoc(vloc VLoc) buffer.Loc
 }
 
+func (w *BufWindow) getVLocFromLocConcealed(lv *conceal.LineView, loc buffer.Loc) VLoc {
+	vloc := VLoc{SLoc: SLoc{loc.Y, 0}, VisualX: 0}
+	if loc.X <= 0 || w.bufWidth <= 0 {
+		return vloc
+	}
+
+	wordwrap := w.Buf.Settings["wordwrap"].(bool)
+	tabsize := util.IntOpt(w.Buf.Settings["tabsize"])
+	targetVisIdx := lv.BufToVisual(loc.X)
+
+	cur := 0
+	totalwidth := 0
+	wordwidth := 0
+	wordoffset := 0
+
+	for cur < len(lv.DisplayText) {
+		r, _, nextIdx := decodeDisplayChar(lv.DisplayText, cur)
+
+		width := 0
+		switch r {
+		case '\t':
+			ts := tabsize - (totalwidth % tabsize)
+			width = util.Min(ts, w.bufWidth-vloc.VisualX)
+			totalwidth += ts
+		default:
+			width = runewidth.RuneWidth(r)
+			totalwidth += width
+		}
+
+		wordwidth += width
+
+		if wordwrap {
+			if !util.IsWhitespace(r) && nextIdx < len(lv.DisplayText) && wordwidth < w.bufWidth {
+				if cur < targetVisIdx {
+					wordoffset += width
+				}
+				cur = nextIdx
+				continue
+			}
+		}
+
+		if vloc.VisualX+wordwidth > w.bufWidth && vloc.VisualX > 0 {
+			vloc.Row++
+			vloc.VisualX = 0
+		}
+
+		if targetVisIdx < nextIdx {
+			vloc.VisualX += wordoffset
+			return vloc
+		}
+		cur = nextIdx
+
+		vloc.VisualX += wordwidth
+
+		wordwidth = 0
+		wordoffset = 0
+
+		if vloc.VisualX >= w.bufWidth {
+			vloc.Row++
+			vloc.VisualX = 0
+		}
+	}
+	return vloc
+}
+
 func (w *BufWindow) getVLocFromLoc(loc buffer.Loc) VLoc {
 	vloc := VLoc{SLoc: SLoc{loc.Y, 0}, VisualX: 0}
 
@@ -76,6 +142,10 @@ func (w *BufWindow) getVLocFromLoc(loc buffer.Loc) VLoc {
 
 	if w.bufWidth <= 0 {
 		return vloc
+	}
+
+	if lv := w.lineConcealView(loc.Y); lv != nil {
+		return w.getVLocFromLocConcealed(lv, loc)
 	}
 
 	wordwrap := w.Buf.Settings["wordwrap"].(bool)
@@ -142,11 +212,97 @@ func (w *BufWindow) getVLocFromLoc(loc buffer.Loc) VLoc {
 	return vloc
 }
 
+func (w *BufWindow) getLocFromVLocConcealed(lv *conceal.LineView, svloc VLoc) buffer.Loc {
+	if w.bufWidth <= 0 {
+		return buffer.Loc{X: 0, Y: svloc.Line}
+	}
+
+	wordwrap := w.Buf.Settings["wordwrap"].(bool)
+	tabsize := util.IntOpt(w.Buf.Settings["tabsize"])
+
+	type wrapChar struct {
+		width      int
+		visIdx     int
+		nextVisIdx int
+	}
+
+	var chars []wrapChar
+	if wordwrap {
+		chars = make([]wrapChar, 0, w.bufWidth)
+	} else {
+		chars = make([]wrapChar, 0, 1)
+	}
+
+	vloc := VLoc{SLoc: SLoc{svloc.Line, 0}, VisualX: 0}
+	totalwidth := 0
+	wordwidth := 0
+	prevVisIdx := -1
+	committedNextVisIdx := 0
+
+	for cur := 0; cur < len(lv.DisplayText); {
+		r, _, nextIdx := decodeDisplayChar(lv.DisplayText, cur)
+
+		width := 0
+		switch r {
+		case '\t':
+			ts := tabsize - (totalwidth % tabsize)
+			width = util.Min(ts, w.bufWidth-vloc.VisualX)
+			totalwidth += ts
+		default:
+			width = runewidth.RuneWidth(r)
+			totalwidth += width
+		}
+
+		chars = append(chars, wrapChar{width: width, visIdx: cur, nextVisIdx: nextIdx})
+		wordwidth += width
+		cur = nextIdx
+
+		if wordwrap {
+			if !util.IsWhitespace(r) && cur < len(lv.DisplayText) && wordwidth < w.bufWidth {
+				continue
+			}
+		}
+
+		if vloc.VisualX+wordwidth > w.bufWidth && vloc.VisualX > 0 {
+			if vloc.Row == svloc.Row {
+				if wordwrap && prevVisIdx >= 0 {
+					return buffer.Loc{X: lv.VisualToBuf(prevVisIdx), Y: svloc.Line}
+				}
+				return buffer.Loc{X: lv.VisualToBuf(committedNextVisIdx), Y: svloc.Line}
+			}
+			vloc.Row++
+			vloc.VisualX = 0
+		}
+
+		for _, ch := range chars {
+			vloc.VisualX += ch.width
+			if vloc.Row == svloc.Row && vloc.VisualX > svloc.VisualX {
+				return buffer.Loc{X: lv.VisualToBuf(ch.visIdx), Y: svloc.Line}
+			}
+			prevVisIdx = ch.visIdx
+			committedNextVisIdx = ch.nextVisIdx
+		}
+
+		chars = chars[:0]
+		wordwidth = 0
+
+		if vloc.VisualX >= w.bufWidth {
+			vloc.Row++
+			vloc.VisualX = 0
+		}
+	}
+	return buffer.Loc{X: lv.VisualToBuf(len(lv.DisplayText)), Y: svloc.Line}
+}
+
 func (w *BufWindow) getLocFromVLoc(svloc VLoc) buffer.Loc {
 	loc := buffer.Loc{X: 0, Y: svloc.Line}
 
 	if w.bufWidth <= 0 {
 		return loc
+	}
+
+	if lv := w.lineConcealView(svloc.Line); lv != nil {
+		return w.getLocFromVLocConcealed(lv, svloc)
 	}
 
 	wordwrap := w.Buf.Settings["wordwrap"].(bool)
@@ -322,6 +478,21 @@ func (w *BufWindow) SLocFromLoc(loc buffer.Loc) SLoc {
 func (w *BufWindow) VLocFromLoc(loc buffer.Loc) VLoc {
 	if !w.Buf.Settings["softwrap"].(bool) {
 		tabsize := util.IntOpt(w.Buf.Settings["tabsize"])
+		if lv := w.lineConcealView(loc.Y); lv != nil {
+			targetVisIdx := lv.BufToVisual(loc.X)
+			visualx := 0
+			for i := 0; i < targetVisIdx && i < len(lv.DisplayText); {
+				r, _, nextIdx := decodeDisplayChar(lv.DisplayText, i)
+				switch r {
+				case '\t':
+					visualx += tabsize - (visualx % tabsize)
+				default:
+					visualx += runewidth.RuneWidth(r)
+				}
+				i = nextIdx
+			}
+			return VLoc{SLoc{loc.Y, 0}, visualx}
+		}
 
 		visualx := util.StringWidth(w.Buf.LineBytes(loc.Y), loc.X, tabsize)
 		return VLoc{SLoc{loc.Y, 0}, visualx}
@@ -334,6 +505,30 @@ func (w *BufWindow) VLocFromLoc(loc buffer.Loc) VLoc {
 func (w *BufWindow) LocFromVLoc(vloc VLoc) buffer.Loc {
 	if !w.Buf.Settings["softwrap"].(bool) {
 		tabsize := util.IntOpt(w.Buf.Settings["tabsize"])
+		if lv := w.lineConcealView(vloc.Line); lv != nil {
+			if vloc.VisualX <= 0 {
+				return buffer.Loc{X: 0, Y: vloc.Line}
+			}
+			visIdx := 0
+			width := 0
+			for visIdx < len(lv.DisplayText) {
+				r, _, nextIdx := decodeDisplayChar(lv.DisplayText, visIdx)
+				switch r {
+				case '\t':
+					width += tabsize - (width % tabsize)
+				default:
+					width += runewidth.RuneWidth(r)
+				}
+				if width >= vloc.VisualX {
+					if width == vloc.VisualX {
+						visIdx = nextIdx
+					}
+					break
+				}
+				visIdx = nextIdx
+			}
+			return buffer.Loc{X: lv.VisualToBuf(visIdx), Y: vloc.Line}
+		}
 
 		x := util.GetCharPosInLine(w.Buf.LineBytes(vloc.Line), vloc.VisualX, tabsize)
 		return buffer.Loc{x, vloc.Line}

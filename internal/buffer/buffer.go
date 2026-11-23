@@ -13,16 +13,17 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	luar "layeh.com/gopher-luar"
 
 	dmp "github.com/sergi/go-diff/diffmatchpatch"
-	"github.com/zyedidia/micro/v2/internal/config"
-	ulua "github.com/zyedidia/micro/v2/internal/lua"
-	"github.com/zyedidia/micro/v2/internal/screen"
-	"github.com/zyedidia/micro/v2/internal/util"
-	"github.com/zyedidia/micro/v2/pkg/highlight"
+	"github.com/monicafaye/TypX/internal/config"
+	ulua "github.com/monicafaye/TypX/internal/lua"
+	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/util"
+	"github.com/monicafaye/TypX/pkg/highlight"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/htmlindex"
 	"golang.org/x/text/encoding/unicode"
@@ -121,6 +122,9 @@ type SharedBuffer struct {
 
 	// Hash of the original buffer -- empty if fastdirty is on
 	origHash [md5.Size]byte
+
+	// version is incremented atomically on every text mutation
+	version atomic.Uint64
 }
 
 func (b *SharedBuffer) insert(pos Loc, value []byte) {
@@ -199,6 +203,8 @@ func (b *SharedBuffer) MarkModified(start, end int) {
 	for i := start; i <= end; i++ {
 		b.LineArray.invalidateSearchMatches(i)
 	}
+
+	b.recordChange(start)
 }
 
 // DisableReload disables future reloads of this sharedbuffer
@@ -266,6 +272,13 @@ type Buffer struct {
 	// Insert key by default) i.e. that typing a character shall replace the
 	// character under the cursor instead of inserting a character before it.
 	OverwriteMode bool
+
+	// Observer lifecycle tracking (main goroutine only)
+	hasPendingChange  bool
+	pendingStartLine  int
+	lastCursor        Loc
+	cursorInitialized bool
+	closed            bool
 }
 
 // NewBufferFromFileWithCommand opens a new buffer with a given command
@@ -495,27 +508,35 @@ func NewBuffer(r io.Reader, size int64, path string, btype BufType, cmd Command)
 	}
 
 	OpenBuffers = append(OpenBuffers, b)
+	b.initObserverState()
+	notifyBufferOpen(b)
 
 	return b
 }
 
 // CloseOpenBuffers removes all open buffers
 func CloseOpenBuffers() {
-	for i, buf := range OpenBuffers {
-		buf.Fini()
-		OpenBuffers[i] = nil
+	bufs := make([]*Buffer, len(OpenBuffers))
+	copy(bufs, OpenBuffers)
+	for _, buf := range bufs {
+		buf.Close()
 	}
-	OpenBuffers = OpenBuffers[:0]
 }
 
 // Close removes this buffer from the list of open buffers
 func (b *Buffer) Close() {
+	if b.closed {
+		return
+	}
 	for i, buf := range OpenBuffers {
 		if b == buf {
+			b.flushPendingChange()
+			b.closed = true
 			b.Fini()
 			copy(OpenBuffers[i:], OpenBuffers[i+1:])
 			OpenBuffers[len(OpenBuffers)-1] = nil
 			OpenBuffers = OpenBuffers[:len(OpenBuffers)-1]
+			notifyBufferClose(b)
 			return
 		}
 	}
@@ -902,15 +923,30 @@ func (b *Buffer) UpdateRules() {
 	}
 
 	if !foundDef {
-		// search for the syntax file in the built-in syntax files
-		for _, f := range config.ListRuntimeFiles(config.RTSyntaxHeader) {
+		// search for the syntax file in the built-in syntax files.
+		// Prefer pre-generated .hdr files when available; fall back to parsing
+		// headers directly from embedded .yaml files so plain `go build` / `go test`
+		// work without requiring `go generate ./runtime`.
+		headerFiles := config.ListRuntimeFiles(config.RTSyntaxHeader)
+		useYamlFallback := len(headerFiles) == 0
+		if useYamlFallback {
+			headerFiles = config.ListRuntimeFiles(config.RTSyntax)
+		}
+		for _, f := range headerFiles {
+			if useYamlFallback && f.Name() == "default" {
+				continue
+			}
 			data, err := f.Data()
 			if err != nil {
 				screen.TermMessage("Error loading syntax header file " + f.Name() + ": " + err.Error())
 				continue
 			}
 
-			header, err = highlight.MakeHeader(data)
+			if useYamlFallback {
+				header, err = highlight.MakeHeaderYaml(data)
+			} else {
+				header, err = highlight.MakeHeader(data)
+			}
 			if err != nil {
 				screen.TermMessage("Error reading syntax header file", f.Name(), err)
 				continue

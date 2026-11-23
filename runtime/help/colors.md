@@ -55,6 +55,14 @@ color support comes in three flavors.
 
 Here is the list of colorschemes:
 
+### TypX Themes (256-color & true color)
+
+Designed specifically for Typst authoring with clear visual hierarchy for
+headings, concealed math glyphs, inline raw spans, and `tinymist` diagnostics:
+
+* `typx-dark`: TypX dark theme
+* `typx-light`: TypX light theme
+
 ### 256 color
 
 These should work and look nice in most terminals. I recommend these

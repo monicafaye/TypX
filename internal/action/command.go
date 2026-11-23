@@ -13,12 +13,12 @@ import (
 	"strings"
 
 	shellquote "github.com/kballard/go-shellquote"
-	"github.com/zyedidia/micro/v2/internal/buffer"
-	"github.com/zyedidia/micro/v2/internal/clipboard"
-	"github.com/zyedidia/micro/v2/internal/config"
-	"github.com/zyedidia/micro/v2/internal/screen"
-	"github.com/zyedidia/micro/v2/internal/shell"
-	"github.com/zyedidia/micro/v2/internal/util"
+	"github.com/monicafaye/TypX/internal/buffer"
+	"github.com/monicafaye/TypX/internal/clipboard"
+	"github.com/monicafaye/TypX/internal/config"
+	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/shell"
+	"github.com/monicafaye/TypX/internal/util"
 )
 
 // A Command contains information about how to execute a command
@@ -68,6 +68,7 @@ func InitCommands() {
 		"raw":         {(*BufPane).RawCmd, nil},
 		"textfilter":  {(*BufPane).TextFilterCmd, nil},
 	}
+	mergeExtCommands()
 }
 
 // MakeCommand is a function to easily create new commands
@@ -203,8 +204,7 @@ func (h *BufPane) TabMoveCmd(args []string) {
 	idxTo = util.Clamp(idxTo, 0, len(Tabs.List)-1)
 
 	activeTab := Tabs.List[idxFrom]
-	Tabs.RemoveTab(activeTab.Panes[0].ID())
-	Tabs.List = append(Tabs.List, nil)
+	copy(Tabs.List[idxFrom:], Tabs.List[idxFrom+1:])
 	copy(Tabs.List[idxTo+1:], Tabs.List[idxTo:])
 	Tabs.List[idxTo] = activeTab
 	Tabs.Resize()

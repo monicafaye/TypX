@@ -23,9 +23,9 @@ func main() {
 	<plist version="1.0">
 	<dict>
 		<key>CFBundleIdentifier</key>
-		<string>io.github.micro-editor</string>
+		<string>io.github.monicafaye.typx</string>
 		<key>CFBundleName</key>
-		<string>micro</string>
+		<string>TypX</string>
 		<key>CFBundleInfoDictionaryVersion</key>
 		<string>6.0</string>
 		<key>CFBundlePackageType</key>
@@ -36,9 +36,9 @@ func main() {
 	</plist>
 	`
 
-	err := os.WriteFile("/tmp/micro-info.plist", []byte(rawInfoPlist), 0666)
+	err := os.WriteFile("/tmp/typx-info.plist", []byte(rawInfoPlist), 0666)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("-linkmode external -extldflags -Wl,-sectcreate,__TEXT,__info_plist,/tmp/micro-info.plist")
+	fmt.Println("-linkmode external -extldflags -Wl,-sectcreate,__TEXT,__info_plist,/tmp/typx-info.plist")
 }

@@ -2,8 +2,9 @@
 
 ## Specifications
 
-<!-- You can use `micro -version` to get the commit hash. -->
+<!-- Run `typx --version` and `typx --check` to gather environment details. -->
 
-Commit hash:
-OS:
-Terminal:
+- **TypX version / commit hash**:
+- **OS**:
+- **Terminal**:
+- **`tinymist` version** (if applicable):

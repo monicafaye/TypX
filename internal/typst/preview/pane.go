@@ -1,0 +1,1543 @@
+package preview
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/mattn/go-runewidth"
+	"github.com/micro-editor/tcell/v2"
+
+	"github.com/monicafaye/TypX/internal/action"
+	"github.com/monicafaye/TypX/internal/buffer"
+	"github.com/monicafaye/TypX/internal/config"
+	"github.com/monicafaye/TypX/internal/display"
+	"github.com/monicafaye/TypX/internal/screen"
+)
+
+const (
+	// MinTerminalWidth is the minimum terminal width required to dock the inline preview.
+	MinTerminalWidth = 60
+
+	// MinPreviewWidth is the narrowest usable preview width in columns.
+	MinPreviewWidth = 24
+
+	// MinEditorWidth guarantees the editor keeps usable columns beside the preview.
+	MinEditorWidth = 24
+
+	// DefaultPreviewWidthPct is the default right-pane width percentage.
+	DefaultPreviewWidthPct = 48
+
+	// scrollStepPx is the default continuous scroll step in pixels per key/wheel notch.
+	scrollStepPx = 140
+
+	// minEditDebounceMs prevents rapid typing from spawning overlapping compiles.
+	minEditDebounceMs = 300
+)
+
+var spinnerFrames = [...]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// EffectiveWidth computes the initial docked preview width in columns given
+// termWidth and configuredPct (20..80). Returns 0 when termWidth < MinTerminalWidth.
+func EffectiveWidth(termWidth, configuredPct int) int {
+	if termWidth < MinTerminalWidth {
+		return 0
+	}
+	pct := configuredPct
+	if pct < 20 {
+		pct = DefaultPreviewWidthPct
+	}
+	if pct > 80 {
+		pct = 80
+	}
+	w := (termWidth * pct) / 100
+	maxW := termWidth - MinEditorWidth
+	if w > maxW {
+		w = maxW
+	}
+	if w < MinPreviewWidth {
+		w = MinPreviewWidth
+	}
+	if w >= termWidth {
+		return 0
+	}
+	return w
+}
+
+// PreviewPane implements action.Pane, action.AuxiliaryPane, and display.Window
+// as a docked right-hand continuous Sixel live preview pane.
+type PreviewPane struct {
+	view   *display.View
+	id     uint64
+	tab    *action.Tab
+	target *action.BufPane
+	mgr    *Manager
+
+	active bool
+
+	deck        *DocumentDeck
+	viewport    *ViewportRender
+	scrollY     int
+	zoomPct     int
+	invert      bool
+	trimMargins bool
+
+	compiling     bool
+	compileStart  time.Time
+	lastErr       string
+	lastVersion   uint64
+	lastShared    *buffer.SharedBuffer
+	lastPath      string
+	spinTick      atomic.Int32
+	spinStop      chan struct{}
+	hadOverlayTxt bool
+
+	// Sixel emission tracking (main UI goroutine only).
+	sixelDirty   bool
+	clearPending bool
+	lastEmitX    int
+	lastEmitY    int
+	lastEmitW    int
+	lastEmitH    int
+
+	mu            sync.Mutex
+	closed        bool
+	gen           uint64
+	debounceTimer *time.Timer
+	compileCancel context.CancelFunc
+}
+
+var (
+	_ action.Pane          = (*PreviewPane)(nil)
+	_ action.AuxiliaryPane = (*PreviewPane)(nil)
+	_ display.Window       = (*PreviewPane)(nil)
+)
+
+func newPreviewPane(tab *action.Tab, target *action.BufPane, mgr *Manager) *PreviewPane {
+	return &PreviewPane{
+		view:        &display.View{},
+		tab:         tab,
+		target:      target,
+		mgr:         mgr,
+		zoomPct:     100,
+		invert:      readGlobalBool("typst.previewInvert", false),
+		trimMargins: readGlobalBool("typst.previewTrimMargins", false),
+		lastEmitX:   -1,
+		lastEmitY:   -1,
+	}
+}
+
+func (pp *PreviewPane) ID() uint64            { return pp.id }
+func (pp *PreviewPane) SetID(i uint64)        { pp.id = i }
+func (pp *PreviewPane) Name() string          { return "Preview" }
+func (pp *PreviewPane) SetTab(t *action.Tab)  { pp.tab = t }
+func (pp *PreviewPane) Tab() *action.Tab      { return pp.tab }
+func (pp *PreviewPane) IsAuxiliary() bool     { return true }
+func (pp *PreviewPane) GetView() *display.View { return pp.view }
+func (pp *PreviewPane) SetView(v *display.View) {
+	if v != nil {
+		pp.view = v
+	}
+}
+func (pp *PreviewPane) LocFromVisual(vloc buffer.Loc) buffer.Loc { return vloc }
+func (pp *PreviewPane) Relocate() bool                           { return true }
+func (pp *PreviewPane) IsActive() bool                           { return pp.active }
+
+func (pp *PreviewPane) SetActive(b bool) {
+	pp.active = b
+}
+
+func (pp *PreviewPane) Resize(w, h int) {
+	if w < 0 {
+		w = 0
+	}
+	if h < 0 {
+		h = 0
+	}
+	changed := pp.view.Width != w || pp.view.Height != h
+	pp.view.Width = w
+	pp.view.Height = h
+	if changed && pp.deck != nil {
+		pp.preserveRatioRebuild()
+	}
+}
+
+func (pp *PreviewPane) Clear() {
+	if screen.Screen == nil || pp.view.Width <= 0 || pp.view.Height <= 0 {
+		return
+	}
+	for y := 0; y < pp.view.Height; y++ {
+		for x := 0; x < pp.view.Width; x++ {
+			screen.SetContent(pp.view.X+x, pp.view.Y+y, ' ', nil, config.DefStyle)
+		}
+	}
+}
+
+// Close cancels pending compiles/timers, cleans up temporary PNG decks, and detaches.
+func (pp *PreviewPane) Close() {
+	pp.mu.Lock()
+	already := pp.closed
+	pp.closed = true
+	pp.gen++
+	if pp.debounceTimer != nil {
+		pp.debounceTimer.Stop()
+		pp.debounceTimer = nil
+	}
+	if pp.compileCancel != nil {
+		pp.compileCancel()
+		pp.compileCancel = nil
+	}
+	pp.mu.Unlock()
+
+	pp.stopSpinner()
+	if pp.deck != nil {
+		pp.deck.Close()
+		pp.deck = nil
+	}
+	pp.viewport = nil
+	pp.sixelDirty = false
+
+	if !already && pp.mgr != nil && pp.tab != nil {
+		if cur := pp.mgr.panes[pp.tab]; cur == pp {
+			delete(pp.mgr.panes, pp.tab)
+		}
+	}
+}
+
+// ScrollY returns the current continuous vertical scroll offset in pixels.
+func (pp *PreviewPane) ScrollY() int { return pp.scrollY }
+
+// MaxScrollY returns the current maximum scroll offset in pixels.
+func (pp *PreviewPane) MaxScrollY() int {
+	if pp.viewport == nil {
+		return 0
+	}
+	return pp.viewport.MaxScrollY
+}
+
+// PageRange returns the currently visible 1-based page range and total page count.
+func (pp *PreviewPane) PageRange() (first, last, total int) {
+	if pp.viewport == nil {
+		if pp.deck != nil {
+			return 1, 1, pp.deck.PageCount()
+		}
+		return 0, 0, 0
+	}
+	return pp.viewport.FirstPage, pp.viewport.LastPage, pp.viewport.PageCount
+}
+
+// IsCompiling reports whether an async compilation is currently in flight.
+func (pp *PreviewPane) IsCompiling() bool { return pp.compiling }
+
+// LastError returns the most recent compile error message, if any.
+func (pp *PreviewPane) LastError() string { return pp.lastErr }
+
+// Invert reports whether dark-theme tone inversion is enabled.
+func (pp *PreviewPane) Invert() bool { return pp.invert }
+
+// TrimMargins reports whether outer page whitespace trimming is enabled.
+func (pp *PreviewPane) TrimMargins() bool { return pp.trimMargins }
+
+// ToggleInvert switches dark/light color inversion and re-renders immediately.
+func (pp *PreviewPane) ToggleInvert() {
+	pp.invert = !pp.invert
+	if pp.deck != nil {
+		pp.rebuildViewport(false)
+	}
+	screen.Redraw()
+}
+
+// ToggleTrimMargins switches outer whitespace margin trimming and re-renders immediately.
+func (pp *PreviewPane) ToggleTrimMargins() {
+	pp.trimMargins = !pp.trimMargins
+	if pp.deck != nil {
+		pp.preserveRatioRebuild()
+	}
+	screen.Redraw()
+}
+
+func (pp *PreviewPane) hasFooter() bool {
+	return pp.view.Height >= 3 && readGlobalBool("statusline", true)
+}
+
+func (pp *PreviewPane) imageRows() int {
+	rows := pp.view.Height
+	if pp.hasFooter() {
+		rows--
+	}
+	if rows < 1 {
+		return 0
+	}
+	return rows
+}
+
+func (pp *PreviewPane) targetPixelSize() (dstW, viewH int) {
+	c := Caps()
+	cellW, cellH := c.CellW, c.CellH
+	if cellW <= 0 {
+		cellW = defaultCellW
+	}
+	if cellH <= 0 {
+		cellH = defaultCellH
+	}
+	rows := pp.imageRows()
+	if pp.view.Width <= 0 || rows <= 0 {
+		return 0, 0
+	}
+	availW := pp.view.Width * cellW
+	availH := rows*cellH - 2 // stay 2px shy of footer so terminal never scrolls
+	if availH < 32 {
+		availH = 32
+	}
+	dstW = (availW * pp.zoomPct) / 100
+	if dstW < 64 {
+		dstW = 64
+	}
+	if dstW > availW {
+		dstW = availW
+	}
+	return dstW, availH
+}
+
+func (pp *PreviewPane) preserveRatioRebuild() {
+	if pp.deck == nil {
+		return
+	}
+	var ratio float64
+	if pp.viewport != nil && pp.viewport.MaxScrollY > 0 {
+		ratio = float64(pp.scrollY) / float64(pp.viewport.MaxScrollY)
+	}
+	dstW, viewH := pp.targetPixelSize()
+	if dstW <= 0 || viewH <= 0 {
+		return
+	}
+	pp.deck.ComputeLayout(dstW, pp.trimMargins)
+	newMax := pp.deck.TotalHeight() - viewH
+	if newMax < 0 {
+		newMax = 0
+	}
+	pp.scrollY = int(ratio * float64(newMax))
+	pp.rebuildViewport(true)
+}
+
+func (pp *PreviewPane) rebuildViewport(clearRight bool) bool {
+	if pp.deck == nil {
+		return false
+	}
+	dstW, viewH := pp.targetPixelSize()
+	if dstW <= 0 || viewH <= 0 {
+		return false
+	}
+	vp, err := pp.deck.RenderViewport(dstW, viewH, pp.scrollY, pp.invert, pp.trimMargins)
+	if err != nil {
+		pp.lastErr = err.Error()
+		return false
+	}
+	pp.scrollY = vp.ScrollY // strictly clamped to [0, MaxScrollY]
+	prev := pp.viewport
+	pp.viewport = vp
+	pp.sixelDirty = true
+	if clearRight || prev == nil || prev.DstW != vp.DstW || prev.DstH != vp.DstH || pp.hadOverlayTxt {
+		pp.clearPending = true
+	}
+	return true
+}
+
+// ScrollBy shifts the continuous scroll offset by delta pixels, strictly clamped
+// to [0, MaxScrollY] with zero overscroll debt. Returns true if the viewport moved.
+func (pp *PreviewPane) ScrollBy(delta int) bool {
+	if pp.viewport == nil || pp.deck == nil {
+		return false
+	}
+	nextY := pp.scrollY + delta
+	if nextY < 0 {
+		nextY = 0
+	}
+	if nextY > pp.viewport.MaxScrollY {
+		nextY = pp.viewport.MaxScrollY
+	}
+	if nextY == pp.scrollY {
+		return false
+	}
+	pp.scrollY = nextY
+	return pp.rebuildViewport(false)
+}
+
+// JumpPageDelta jumps directly to the top of the next/previous page.
+func (pp *PreviewPane) JumpPageDelta(delta int) bool {
+	if pp.viewport == nil || pp.deck == nil || pp.deck.PageCount() == 0 {
+		return false
+	}
+	curIdx := pp.viewport.FirstPage - 1
+	if curIdx < 0 {
+		curIdx = 0
+	}
+	targetIdx := curIdx + delta
+	if targetIdx < 0 {
+		targetIdx = 0
+	}
+	if targetIdx >= pp.deck.PageCount() {
+		targetIdx = pp.deck.PageCount() - 1
+	}
+	nextY := pp.deck.PageTop(targetIdx)
+	if nextY > pp.viewport.MaxScrollY {
+		nextY = pp.viewport.MaxScrollY
+	}
+	if nextY == pp.scrollY {
+		return false
+	}
+	pp.scrollY = nextY
+	return pp.rebuildViewport(false)
+}
+
+func (pp *PreviewPane) resolveTarget() *action.BufPane {
+	if pp.tab == nil {
+		return nil
+	}
+	if pp.target != nil {
+		for _, p := range pp.tab.Panes {
+			if p == pp.target {
+				return pp.target
+			}
+		}
+		pp.target = nil
+	}
+	for _, p := range pp.tab.Panes {
+		if bp, ok := p.(*action.BufPane); ok && bp.Buf != nil && bp.Buf.IsTypst() {
+			pp.target = bp
+			return bp
+		}
+	}
+	return nil
+}
+
+func (pp *PreviewPane) returnFocus() {
+	if pp.tab == nil {
+		return
+	}
+	target := pp.resolveTarget()
+	if target != nil {
+		for i, p := range pp.tab.Panes {
+			if p == target {
+				pp.tab.SetActive(i)
+				return
+			}
+		}
+	}
+	for i, p := range pp.tab.Panes {
+		if !action.IsAuxiliaryPane(p) {
+			pp.tab.SetActive(i)
+			return
+		}
+	}
+}
+
+func (pp *PreviewPane) startSpinner() {
+	if pp.spinStop != nil {
+		return
+	}
+	stop := make(chan struct{})
+	pp.spinStop = stop
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				pp.spinTick.Add(1)
+				screen.Redraw()
+			}
+		}
+	}()
+}
+
+func (pp *PreviewPane) stopSpinner() {
+	if pp.spinStop != nil {
+		close(pp.spinStop)
+		pp.spinStop = nil
+	}
+}
+
+// ScheduleCompile schedules a debounced background compile of the target Typst buffer.
+func (pp *PreviewPane) ScheduleCompile(immediate bool) {
+	pp.mu.Lock()
+	if pp.closed {
+		pp.mu.Unlock()
+		return
+	}
+	if pp.debounceTimer != nil {
+		pp.debounceTimer.Stop()
+		pp.debounceTimer = nil
+	}
+	if immediate {
+		pp.mu.Unlock()
+		pp.startCompileNow()
+		return
+	}
+	delayMs := readGlobalInt("typst.debounceMs", 150)
+	if delayMs < minEditDebounceMs {
+		delayMs = minEditDebounceMs
+	}
+	gen := pp.gen
+	pp.debounceTimer = time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
+		action.EnqueueUI(func() {
+			pp.mu.Lock()
+			stale := pp.closed || pp.gen != gen
+			pp.debounceTimer = nil
+			pp.mu.Unlock()
+			if !stale {
+				pp.startCompileNow()
+			}
+		})
+	})
+	pp.mu.Unlock()
+}
+
+func (pp *PreviewPane) startCompileNow() {
+	target := pp.resolveTarget()
+	if target == nil || target.Buf == nil || !target.Buf.IsTypst() {
+		return
+	}
+
+	b := target.Buf
+	absPath := b.AbsPath
+	if absPath == "" && b.Path != "" {
+		if a, err := filepath.Abs(b.Path); err == nil {
+			absPath = a
+		}
+	}
+	modified := b.Modified() || absPath == ""
+	var content []byte
+	if modified {
+		raw := b.Bytes()
+		content = make([]byte, len(raw))
+		copy(content, raw)
+	}
+
+	rootDir := ""
+	if pp.mgr != nil && absPath != "" {
+		if fn := pp.mgr.getRootResolver(); fn != nil {
+			rootDir = fn(absPath)
+		}
+	}
+	if rootDir == "" && absPath != "" {
+		rootDir = filepath.Dir(absPath)
+	}
+
+	ppi := readGlobalInt("typst.previewPPI", 144)
+	if ppi < 72 {
+		ppi = 144
+	}
+	if ppi > 300 {
+		ppi = 300
+	}
+
+	req := CompileRequest{
+		FilePath: absPath,
+		RootDir:  rootDir,
+		Content:  content,
+		Modified: modified,
+		PPI:      ppi,
+	}
+
+	compiler := pp.mgr.getCompiler()
+	if compiler == nil {
+		pp.lastErr = "preview compiler unavailable"
+		screen.Redraw()
+		return
+	}
+
+	pp.mu.Lock()
+	if pp.closed {
+		pp.mu.Unlock()
+		return
+	}
+	if pp.compileCancel != nil {
+		pp.compileCancel()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	pp.compileCancel = cancel
+	pp.gen++
+	gen := pp.gen
+	pp.mu.Unlock()
+
+	pp.lastVersion = b.Version()
+	pp.lastShared = b.SharedBuffer
+	pp.lastPath = absPath
+	pp.compiling = true
+	pp.compileStart = time.Now()
+	pp.startSpinner()
+	screen.Redraw()
+
+	go func() {
+		deck, err := compiler.CompilePages(ctx, req)
+		canceled := ctx.Err() == context.Canceled
+		cancel()
+
+		action.EnqueueUI(func() {
+			pp.mu.Lock()
+			stale := pp.closed || pp.gen != gen
+			pp.mu.Unlock()
+			if stale {
+				if deck != nil {
+					deck.Close()
+				}
+				return
+			}
+
+			pp.compiling = false
+			pp.stopSpinner()
+
+			if err != nil {
+				if deck != nil {
+					deck.Close()
+				}
+				if canceled {
+					return
+				}
+				pp.lastErr = firstUsefulErrorLine(err.Error())
+				screen.Redraw()
+				return
+			}
+
+			oldDeck := pp.deck
+			pp.deck = deck
+			pp.lastErr = ""
+			if oldDeck != nil {
+				oldDeck.Close()
+			}
+			// Re-render viewport at current scrollY (clamped safely to new doc height).
+			pp.rebuildViewport(false)
+			screen.Redraw()
+		})
+	}()
+}
+
+func firstUsefulErrorLine(raw string) string {
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return "compile failed"
+}
+
+// Display draws the preview pane's statusline (and loading/error text when no
+// Sixel image is displayed yet). When a Sixel image is active, the image area
+// cells are deliberately left untouched so tcell does not overwrite the bitmap.
+func (pp *PreviewPane) Display() {
+	if screen.Screen == nil || pp.view.Width <= 0 || pp.view.Height <= 0 {
+		return
+	}
+
+	// Detect layout shift (resize, tab bar appear/disappear, divider drag).
+	if pp.lastEmitX != pp.view.X || pp.lastEmitY != pp.view.Y ||
+		pp.lastEmitW != pp.view.Width || pp.lastEmitH != pp.view.Height {
+		if pp.deck != nil {
+			pp.preserveRatioRebuild()
+		}
+		pp.sixelDirty = true
+		pp.clearPending = true
+	}
+
+	imgRows := pp.imageRows()
+
+	// Only write cell text into the image area when we have NO rendered Sixel yet.
+	if pp.viewport == nil && imgRows > 0 {
+		pp.hadOverlayTxt = true
+		pp.drawPlaceholder(imgRows)
+	} else if pp.hadOverlayTxt && pp.viewport != nil {
+		// Previous frame had placeholder text; screen.Fill already cleared it to spaces.
+		// Mark clearPending so postShow cleanly emits the Sixel over the blank cells.
+		pp.hadOverlayTxt = false
+		pp.sixelDirty = true
+		pp.clearPending = true
+	}
+
+	if pp.hasFooter() {
+		pp.drawFooter(pp.view.Y + pp.view.Height - 1)
+	}
+}
+
+func (pp *PreviewPane) drawPlaceholder(imgRows int) {
+	w := pp.view.Width
+	centerY := pp.view.Y + imgRows/2
+
+	var msg string
+	var sub string
+	if pp.compiling {
+		spin := spinnerFrames[int(pp.spinTick.Load())%len(spinnerFrames)]
+		elapsed := ""
+		if d := time.Since(pp.compileStart); d >= 200*time.Millisecond {
+			elapsed = fmt.Sprintf(" (%.1fs)", d.Seconds())
+		}
+		msg = fmt.Sprintf("%s Rendering preview%s...", spin, elapsed)
+	} else if pp.lastErr != "" {
+		msg = "Preview compile error:"
+		sub = pp.lastErr
+	} else {
+		msg = "Waiting for Typst document..."
+	}
+
+	drawCentered := func(y int, text string, st tcell.Style) {
+		if y < pp.view.Y || y >= pp.view.Y+imgRows {
+			return
+		}
+		rw := runewidth.StringWidth(text)
+		startX := pp.view.X
+		if rw < w {
+			startX += (w - rw) / 2
+		}
+		col := startX
+		maxX := pp.view.X + w
+		for _, r := range text {
+			cw := runewidth.RuneWidth(r)
+			if cw <= 0 {
+				cw = 1
+			}
+			if col+cw > maxX {
+				break
+			}
+			screen.SetContent(col, y, r, nil, st)
+			col += cw
+		}
+	}
+
+	stMain := config.GetColor("statusline")
+	if stMain == config.DefStyle {
+		stMain = config.DefStyle.Bold(true)
+	} else {
+		stMain = config.DefStyle.Bold(true)
+	}
+	drawCentered(centerY, msg, stMain)
+	if sub != "" {
+		errStyle := config.GetColor("gutter-error")
+		if errStyle == config.DefStyle {
+			errStyle = config.DefStyle.Foreground(tcell.ColorRed)
+		}
+		drawCentered(centerY+2, sub, errStyle)
+	}
+}
+
+func (pp *PreviewPane) drawFooter(y int) {
+	style := config.GetColor("statusline")
+	if !pp.active {
+		if inactive := config.GetColor("statusline.inactive"); inactive != config.DefStyle {
+			style = inactive
+		}
+	} else {
+		style = style.Bold(true)
+	}
+
+	var left string
+	prefix := "Preview"
+	if pp.active {
+		prefix = "*Preview"
+	}
+
+	switch {
+	case pp.compiling:
+		spin := spinnerFrames[int(pp.spinTick.Load())%len(spinnerFrames)]
+		if pp.viewport != nil {
+			left = fmt.Sprintf(" %s | %s compiling... | %s", prefix, spin, pp.pageLabel())
+		} else {
+			left = fmt.Sprintf(" %s | %s compiling...", prefix, spin)
+		}
+	case pp.lastErr != "":
+		if pp.viewport != nil {
+			left = fmt.Sprintf(" %s | ERR (stale) | %s", prefix, pp.pageLabel())
+		} else {
+			left = fmt.Sprintf(" %s | ERR: %s", prefix, pp.lastErr)
+		}
+	case pp.viewport != nil:
+		pct := 0
+		if pp.viewport.MaxScrollY > 0 {
+			pct = (pp.viewport.ScrollY * 100) / pp.viewport.MaxScrollY
+		}
+		flags := ""
+		if pp.invert {
+			flags += " dark"
+		}
+		if pp.trimMargins {
+			flags += " trim"
+		}
+		left = fmt.Sprintf(" %s | %s (%d%%)%s | [Wheel/w/s] scroll [t] dark [m] trim [q] close",
+			prefix, pp.pageLabel(), pct, flags)
+	default:
+		left = fmt.Sprintf(" %s", prefix)
+	}
+
+	col := pp.view.X
+	maxX := pp.view.X + pp.view.Width
+	for _, r := range left {
+		cw := runewidth.RuneWidth(r)
+		if cw <= 0 {
+			cw = 1
+		}
+		if col+cw > maxX {
+			break
+		}
+		screen.SetContent(col, y, r, nil, style)
+		col += cw
+	}
+	for col < maxX {
+		screen.SetContent(col, y, ' ', nil, style)
+		col++
+	}
+}
+
+func (pp *PreviewPane) pageLabel() string {
+	if pp.viewport == nil {
+		return ""
+	}
+	if pp.viewport.LastPage != pp.viewport.FirstPage {
+		return fmt.Sprintf("p.%d-%d/%d", pp.viewport.FirstPage, pp.viewport.LastPage, pp.viewport.PageCount)
+	}
+	return fmt.Sprintf("p.%d/%d", pp.viewport.FirstPage, pp.viewport.PageCount)
+}
+
+// emitSixelIfDirty writes the synchronized Sixel sequence after screen.Show().
+func (pp *PreviewPane) emitSixelIfDirty(out io.Writer) {
+	if !pp.sixelDirty || pp.viewport == nil || len(pp.viewport.Sixel) == 0 {
+		return
+	}
+	if pp.view.Width <= 0 || pp.imageRows() <= 0 {
+		return
+	}
+
+	pp.sixelDirty = false
+	clearRight := pp.clearPending
+	pp.clearPending = false
+	pp.lastEmitX = pp.view.X
+	pp.lastEmitY = pp.view.Y
+	pp.lastEmitW = pp.view.Width
+	pp.lastEmitH = pp.view.Height
+
+	if out == nil {
+		return
+	}
+
+	topRow := pp.view.Y + 1  // 1-based ANSI row
+	leftCol := pp.view.X + 1 // 1-based ANSI column
+	imgRows := pp.imageRows()
+
+	var buf bytes.Buffer
+	buf.Grow(len(pp.viewport.Sixel) + 256)
+	buf.WriteString("\x1b[?2026h") // begin synchronized update
+	buf.WriteString("\x1b7")      // DECSC: save editor cursor & SGR state
+	buf.WriteString("\x1b[?25l")  // hide cursor during sixel draw
+	buf.WriteString("\x1b[0m")    // reset SGR so clearing spaces use default bg
+	if clearRight {
+		blank := strings.Repeat(" ", pp.view.Width)
+		for r := 0; r < imgRows; r++ {
+			fmt.Fprintf(&buf, "\x1b[%d;%dH%s", topRow+r, leftCol, blank)
+		}
+	}
+	fmt.Fprintf(&buf, "\x1b[%d;%dH", topRow, leftCol)
+	buf.Write(pp.viewport.Sixel)
+	buf.WriteString("\x1b8") // DECRC: restore cursor to editor position
+	if !pp.active && !screen.UseFake() {
+		buf.WriteString("\x1b[?25h")
+	}
+	buf.WriteString("\x1b[?2026l") // end synchronized update
+
+	EnableVTOutput()
+	_, _ = out.Write(buf.Bytes())
+}
+
+// HandleCommand executes Ex-style commands while PreviewPane is focused.
+func (pp *PreviewPane) HandleCommand(text string) {
+	if target := pp.resolveTarget(); target != nil {
+		target.HandleCommand(text)
+	}
+}
+
+// HandleEvent processes mouse wheel scrolling and keyboard navigation on PreviewPane.
+func (pp *PreviewPane) HandleEvent(event tcell.Event) {
+	switch e := event.(type) {
+	case *tcell.EventMouse:
+		btns := e.Buttons()
+		if btns&tcell.WheelDown != 0 {
+			if pp.ScrollBy(scrollStepPx) {
+				screen.Redraw()
+			}
+			return
+		}
+		if btns&tcell.WheelUp != 0 {
+			if pp.ScrollBy(-scrollStepPx) {
+				screen.Redraw()
+			}
+			return
+		}
+
+	case *tcell.EventKey:
+		// Alt+P closes the preview even while focused.
+		if e.Key() == tcell.KeyRune && (e.Rune() == 'p' || e.Rune() == 'P') && e.Modifiers()&tcell.ModAlt != 0 {
+			if pp.mgr != nil && pp.tab != nil {
+				pp.mgr.CloseForTab(pp.tab)
+			}
+			return
+		}
+
+		switch e.Key() {
+		case tcell.KeyEscape, tcell.KeyEnter:
+			pp.returnFocus()
+			return
+		case tcell.KeyCtrlW, tcell.KeyTab:
+			pp.returnFocus()
+			return
+		case tcell.KeyCtrlE:
+			if action.InfoBar != nil {
+				action.InfoBar.Prompt("> ", "", "Command", nil, func(resp string, canceled bool) {
+					if !canceled {
+						pp.HandleCommand(resp)
+					}
+				})
+			}
+			return
+		case tcell.KeyDown:
+			pp.ScrollBy(scrollStepPx)
+			return
+		case tcell.KeyUp:
+			pp.ScrollBy(-scrollStepPx)
+			return
+		case tcell.KeyPgDn, tcell.KeyCtrlD:
+			_, viewH := pp.targetPixelSize()
+			step := (viewH * 3) / 4
+			if step < scrollStepPx {
+				step = scrollStepPx
+			}
+			pp.ScrollBy(step)
+			return
+		case tcell.KeyPgUp, tcell.KeyCtrlU:
+			_, viewH := pp.targetPixelSize()
+			step := (viewH * 3) / 4
+			if step < scrollStepPx {
+				step = scrollStepPx
+			}
+			pp.ScrollBy(-step)
+			return
+		case tcell.KeyHome:
+			if pp.scrollY != 0 {
+				pp.scrollY = 0
+				pp.rebuildViewport(false)
+			}
+			return
+		case tcell.KeyEnd:
+			if pp.viewport != nil && pp.scrollY != pp.viewport.MaxScrollY {
+				pp.scrollY = pp.viewport.MaxScrollY
+				pp.rebuildViewport(false)
+			}
+			return
+		case tcell.KeyRight:
+			pp.JumpPageDelta(1)
+			return
+		case tcell.KeyLeft:
+			pp.JumpPageDelta(-1)
+			return
+		case tcell.KeyRune:
+			switch e.Rune() {
+			case 'q', 'Q':
+				if pp.mgr != nil && pp.tab != nil {
+					pp.mgr.CloseForTab(pp.tab)
+				}
+			case 'j', 's', 'S':
+				pp.ScrollBy(scrollStepPx)
+			case 'k', 'w', 'W':
+				pp.ScrollBy(-scrollStepPx)
+			case ' ':
+				_, viewH := pp.targetPixelSize()
+				step := (viewH * 3) / 4
+				if step < scrollStepPx {
+					step = scrollStepPx
+				}
+				pp.ScrollBy(step)
+			case 'g':
+				if pp.scrollY != 0 {
+					pp.scrollY = 0
+					pp.rebuildViewport(false)
+				}
+			case 'G':
+				if pp.viewport != nil && pp.scrollY != pp.viewport.MaxScrollY {
+					pp.scrollY = pp.viewport.MaxScrollY
+					pp.rebuildViewport(false)
+				}
+			case ']':
+				pp.JumpPageDelta(1)
+			case '[':
+				pp.JumpPageDelta(-1)
+			case '+', '=':
+				if pp.zoomPct < 100 {
+					pp.zoomPct += 15
+					if pp.zoomPct > 100 {
+						pp.zoomPct = 100
+					}
+					pp.preserveRatioRebuild()
+				}
+			case '-', '_':
+				if pp.zoomPct > 40 {
+					pp.zoomPct -= 15
+					pp.preserveRatioRebuild()
+				}
+			case 't', 'T':
+				pp.ToggleInvert()
+			case 'm', 'M':
+				pp.ToggleTrimMargins()
+			case 'r', 'R':
+				pp.sixelDirty = true
+				pp.clearPending = true
+				pp.ScheduleCompile(true)
+			}
+		}
+	}
+}
+
+// Manager coordinates per-tab docked PreviewPanes, compiler wiring, buffer
+// observers, resize handling, and post-show Sixel emission.
+type Manager struct {
+	buffer.NopObserver
+
+	panes       map[*action.Tab]*PreviewPane
+	autoHidden  map[*action.Tab]bool
+	pendingSync bool
+
+	cfgMu        sync.RWMutex
+	compiler     Compiler
+	rootResolver RootResolverFunc
+	output       io.Writer // nil = auto (os.Stdout when not SimulationScreen)
+}
+
+var (
+	defaultManager = newManager()
+	initOnce       sync.Once
+)
+
+func newManager() *Manager {
+	return &Manager{
+		panes:      make(map[*action.Tab]*PreviewPane),
+		autoHidden: make(map[*action.Tab]bool),
+		compiler:   &TinymistCompiler{},
+	}
+}
+
+// Init registers buffer observers, tab/resize hooks, and the post-show Sixel emitter.
+// Safe to call multiple times (idempotent).
+func Init() {
+	initOnce.Do(func() {
+		buffer.RegisterObserver(defaultManager)
+		action.RegisterPreResizeHook(defaultManager.onPreResize)
+		action.RegisterPostResizeHook(defaultManager.onPostResize)
+		action.RegisterTabSwitchHook(defaultManager.onTabSwitch)
+		action.RegisterPaneFocusHook(defaultManager.onPaneFocus)
+		screen.RegisterPostShowHook(defaultManager.postShow)
+	})
+}
+
+// Shutdown closes all open inline preview panes and cleans up temporary files.
+func Shutdown() {
+	defaultManager.Shutdown()
+}
+
+// SetCompiler overrides the compiler used to produce page PNGs.
+func SetCompiler(c Compiler) {
+	defaultManager.setCompiler(c)
+}
+
+// SetRootResolver configures how project roots are resolved for .typ files.
+func SetRootResolver(fn RootResolverFunc) {
+	defaultManager.setRootResolver(fn)
+}
+
+// SetOutput overrides the raw Sixel output writer (intended for tests; nil restores default).
+func SetOutput(w io.Writer) {
+	defaultManager.setOutput(w)
+}
+
+// PaneForTab returns the currently open PreviewPane on tab, or nil.
+func PaneForTab(tab *action.Tab) *PreviewPane {
+	return defaultManager.paneForTab(tab)
+}
+
+// Open opens (or focuses/refreshes) the inline preview pane on bp's tab.
+func Open(bp *action.BufPane, focus bool) (*PreviewPane, bool) {
+	return defaultManager.Open(bp, focus)
+}
+
+// Toggle toggles the inline preview pane on bp's tab.
+func Toggle(bp *action.BufPane) bool {
+	return defaultManager.Toggle(bp)
+}
+
+// CloseForTab closes the inline preview pane on tab if open.
+func CloseForTab(tab *action.Tab) bool {
+	return defaultManager.CloseForTab(tab)
+}
+
+func (m *Manager) setCompiler(c Compiler) {
+	m.cfgMu.Lock()
+	m.compiler = c
+	m.cfgMu.Unlock()
+}
+
+func (m *Manager) getCompiler() Compiler {
+	m.cfgMu.RLock()
+	c := m.compiler
+	m.cfgMu.RUnlock()
+	return c
+}
+
+func (m *Manager) setRootResolver(fn RootResolverFunc) {
+	m.cfgMu.Lock()
+	m.rootResolver = fn
+	m.cfgMu.Unlock()
+}
+
+func (m *Manager) getRootResolver() RootResolverFunc {
+	m.cfgMu.RLock()
+	fn := m.rootResolver
+	m.cfgMu.RUnlock()
+	return fn
+}
+
+func (m *Manager) setOutput(w io.Writer) {
+	m.cfgMu.Lock()
+	m.output = w
+	m.cfgMu.Unlock()
+}
+
+func (m *Manager) resolveOutput() io.Writer {
+	m.cfgMu.RLock()
+	w := m.output
+	m.cfgMu.RUnlock()
+	if w != nil {
+		return w
+	}
+	if screen.Screen == nil {
+		return nil
+	}
+	if _, isSim := screen.Screen.(tcell.SimulationScreen); isSim {
+		return nil
+	}
+	return os.Stdout
+}
+
+// Shutdown closes every tracked preview pane and removes temp PNG directories.
+func (m *Manager) Shutdown() {
+	for tab, pp := range m.panes {
+		pp.Close()
+		delete(m.panes, tab)
+	}
+	for tab := range m.autoHidden {
+		delete(m.autoHidden, tab)
+	}
+}
+
+func (m *Manager) paneForTab(tab *action.Tab) *PreviewPane {
+	if tab == nil {
+		return nil
+	}
+	pp := m.panes[tab]
+	if pp == nil {
+		return nil
+	}
+	for _, p := range tab.Panes {
+		if p == pp {
+			return pp
+		}
+	}
+	pp.Close()
+	delete(m.panes, tab)
+	return nil
+}
+
+// Toggle opens or closes the inline preview pane for bp's tab.
+func (m *Manager) Toggle(bp *action.BufPane) bool {
+	if bp == nil || bp.Tab() == nil {
+		return false
+	}
+	tab := bp.Tab()
+	if m.paneForTab(tab) != nil {
+		return m.CloseForTab(tab)
+	}
+	_, ok := m.Open(bp, false)
+	return ok
+}
+
+// Open docks the continuous Sixel PreviewPane on the right edge of bp's tab.
+func (m *Manager) Open(bp *action.BufPane, focus bool) (*PreviewPane, bool) {
+	if bp == nil || bp.Buf == nil || bp.Tab() == nil {
+		return nil, false
+	}
+	m.pruneStaleTabs()
+	tab := bp.Tab()
+
+	if existing := m.paneForTab(tab); existing != nil {
+		existing.target = bp
+		existing.sixelDirty = true
+		existing.clearPending = true
+		existing.ScheduleCompile(true)
+		if focus {
+			for i, p := range tab.Panes {
+				if p == existing {
+					tab.SetActive(i)
+					break
+				}
+			}
+		}
+		return existing, true
+	}
+
+	if !bp.Buf.IsTypst() {
+		notifyError("Preview is only available for .typ buffers")
+		return nil, false
+	}
+
+	termW := tabTerminalWidth(tab)
+	if termW < MinTerminalWidth {
+		delete(m.autoHidden, tab)
+		notifyError(fmt.Sprintf("Inline preview requires terminal width >= %d columns (current: %d)", MinTerminalWidth, termW))
+		return nil, false
+	}
+
+	cfgPct := readGlobalInt("typst.previewWidth", DefaultPreviewWidthPct)
+	effW := EffectiveWidth(termW, cfgPct)
+	if effW <= 0 {
+		notifyError(fmt.Sprintf("Inline preview requires terminal width >= %d columns", MinTerminalWidth))
+		return nil, false
+	}
+
+	dockID := tab.Node.DockRight(effW)
+	if dockID == 0 {
+		notifyError("Unable to dock inline preview in current split layout")
+		return nil, false
+	}
+
+	delete(m.autoHidden, tab)
+	pp := newPreviewPane(tab, bp, m)
+	pp.SetID(dockID)
+	m.panes[tab] = pp
+
+	idx := len(tab.Panes)
+	tab.AddPane(pp, idx)
+	tab.Resize()
+	pp.ScheduleCompile(true)
+
+	if focus {
+		tab.SetActive(idx)
+	}
+	return pp, true
+}
+
+// CloseForTab closes and unsplits the inline preview pane on tab if open.
+func (m *Manager) CloseForTab(tab *action.Tab) bool {
+	if tab == nil {
+		return false
+	}
+	delete(m.autoHidden, tab)
+	return m.detachFromTab(tab)
+}
+
+func (m *Manager) detachFromTab(tab *action.Tab) bool {
+	pp := m.paneForTab(tab)
+	if pp == nil {
+		return false
+	}
+	wasFocused := tab.ActivePane() == pp
+	target := pp.resolveTarget()
+	id := pp.ID()
+
+	pp.Close()
+	if n := tab.GetNode(id); n != nil {
+		n.Unsplit()
+	}
+	for i, p := range tab.Panes {
+		if p == pp {
+			tab.RemovePane(i)
+			break
+		}
+	}
+	tab.Resize()
+
+	if len(tab.Panes) > 0 {
+		if wasFocused && target != nil {
+			focused := false
+			for i, p := range tab.Panes {
+				if p == target {
+					tab.SetActive(i)
+					focused = true
+					break
+				}
+			}
+			if !focused {
+				tab.SetActive(tab.ActiveIndex())
+			}
+		} else {
+			tab.SetActive(tab.ActiveIndex())
+		}
+	}
+
+	// Schedule a full screen sync after the next frame draws so no stale Sixel
+	// pixels can linger over unchanged blank cells in the expanded editor.
+	m.pendingSync = true
+	screen.Redraw()
+	return true
+}
+
+func (m *Manager) postShow() {
+	if m.pendingSync {
+		m.pendingSync = false
+		if screen.Screen != nil {
+			screen.Screen.Sync()
+		}
+	}
+	if action.Tabs == nil || len(action.Tabs.List) == 0 {
+		return
+	}
+	tab := action.MainTab()
+	if tab == nil {
+		return
+	}
+	pp := m.paneForTab(tab)
+	if pp == nil {
+		return
+	}
+	pp.emitSixelIfDirty(m.resolveOutput())
+}
+
+func (m *Manager) pruneStaleTabs() {
+	if action.Tabs == nil {
+		return
+	}
+	live := make(map[*action.Tab]bool, len(action.Tabs.List))
+	for _, t := range action.Tabs.List {
+		live[t] = true
+	}
+	for t, pp := range m.panes {
+		if !live[t] {
+			pp.Close()
+			delete(m.panes, t)
+		}
+	}
+	for t := range m.autoHidden {
+		if !live[t] {
+			delete(m.autoHidden, t)
+		}
+	}
+}
+
+func (m *Manager) onPreResize(w, h int) {
+	m.pruneStaleTabs()
+	if w >= MinTerminalWidth {
+		return
+	}
+	var toHide []*action.Tab
+	for t := range m.panes {
+		toHide = append(toHide, t)
+	}
+	for _, t := range toHide {
+		if m.paneForTab(t) != nil {
+			m.autoHidden[t] = true
+			m.detachFromTab(t)
+		}
+	}
+}
+
+func (m *Manager) onPostResize(w, h int) {
+	m.pruneStaleTabs()
+	if w < MinTerminalWidth {
+		return
+	}
+	if len(m.autoHidden) > 0 {
+		var toRestore []*action.Tab
+		for t := range m.autoHidden {
+			toRestore = append(toRestore, t)
+		}
+		for _, t := range toRestore {
+			delete(m.autoHidden, t)
+			if m.paneForTab(t) != nil {
+				continue
+			}
+			if bp := findTypstPaneInTab(t); bp != nil {
+				m.Open(bp, false)
+			}
+		}
+	}
+	for t, pp := range m.panes {
+		if m.paneForTab(t) == nil {
+			continue
+		}
+		pp.sixelDirty = true
+		pp.clearPending = true
+	}
+}
+
+func (m *Manager) onTabSwitch(tab *action.Tab) {
+	m.pruneStaleTabs()
+	// Switching tabs invalidates any Sixel bitmap from the previous tab.
+	if len(m.panes) > 0 {
+		m.pendingSync = true
+	}
+	pp := m.paneForTab(tab)
+	if pp == nil {
+		return
+	}
+	target := pp.resolveTarget()
+	if target == nil || target.Buf == nil || !target.Buf.IsTypst() {
+		m.CloseForTab(tab)
+		return
+	}
+	pp.sixelDirty = true
+	pp.clearPending = true
+	if pp.lastShared != target.Buf.SharedBuffer || pp.lastVersion != target.Buf.Version() {
+		pp.ScheduleCompile(true)
+	}
+}
+
+func (m *Manager) onPaneFocus(tab *action.Tab, pane action.Pane) {
+	pp := m.paneForTab(tab)
+	if pp == nil || pane == nil || pane == pp {
+		return
+	}
+	bp, ok := pane.(*action.BufPane)
+	if !ok || bp.Buf == nil || !bp.Buf.IsTypst() {
+		return
+	}
+	if pp.target != bp {
+		pp.target = bp
+		pp.scrollY = 0
+		pp.ScheduleCompile(true)
+	}
+}
+
+// OnBufferChange schedules a debounced live recompile for open preview panes.
+func (m *Manager) OnBufferChange(b *buffer.Buffer, ev buffer.ChangeEvent) {
+	if b == nil || !b.IsTypst() {
+		return
+	}
+	for tab, pp := range m.panes {
+		if m.paneForTab(tab) == nil {
+			continue
+		}
+		target := pp.resolveTarget()
+		if target != nil && target.Buf != nil && target.Buf.SharedBuffer == b.SharedBuffer {
+			pp.ScheduleCompile(false)
+		}
+	}
+}
+
+// OnBufferSave triggers an immediate recompile for open preview panes.
+func (m *Manager) OnBufferSave(b *buffer.Buffer, ev buffer.SaveEvent) {
+	if b == nil || !b.IsTypst() {
+		return
+	}
+	for tab, pp := range m.panes {
+		if m.paneForTab(tab) == nil {
+			continue
+		}
+		target := pp.resolveTarget()
+		if target != nil && target.Buf != nil && target.Buf.SharedBuffer == b.SharedBuffer {
+			pp.ScheduleCompile(true)
+		}
+	}
+}
+
+// OnBufferClose retargets or cleanly closes any open PreviewPane whose buffer closed.
+func (m *Manager) OnBufferClose(b *buffer.Buffer) {
+	if b == nil {
+		return
+	}
+	var affected []*action.Tab
+	for tab, pp := range m.panes {
+		if pp.target != nil && pp.target.Buf == b {
+			affected = append(affected, tab)
+		}
+	}
+	for _, tab := range affected {
+		pp := m.paneForTab(tab)
+		if pp == nil {
+			continue
+		}
+		var replacement *action.BufPane
+		for _, p := range tab.Panes {
+			bp, ok := p.(*action.BufPane)
+			if !ok || bp.Buf == nil || bp.Buf == b {
+				continue
+			}
+			if bp.Buf.IsTypst() {
+				replacement = bp
+				break
+			}
+		}
+		if replacement != nil {
+			pp.target = replacement
+			pp.scrollY = 0
+			pp.ScheduleCompile(true)
+		} else {
+			m.CloseForTab(tab)
+		}
+	}
+}
+
+func findTypstPaneInTab(tab *action.Tab) *action.BufPane {
+	if tab == nil {
+		return nil
+	}
+	if cp := tab.CurPane(); cp != nil && cp.Buf != nil && cp.Buf.IsTypst() {
+		return cp
+	}
+	for _, p := range tab.Panes {
+		if bp, ok := p.(*action.BufPane); ok && bp.Buf != nil && bp.Buf.IsTypst() {
+			return bp
+		}
+	}
+	return nil
+}
+
+func tabTerminalWidth(tab *action.Tab) int {
+	if screen.Screen != nil {
+		w, _ := screen.Screen.Size()
+		if w > 0 {
+			return w
+		}
+	}
+	if tab != nil && tab.Node != nil {
+		return tab.Node.W
+	}
+	return 0
+}
+
+func readGlobalBool(key string, fallback bool) bool {
+	v := config.GetGlobalOption(key)
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return fallback
+}
+
+func readGlobalInt(key string, fallback int) int {
+	v := config.GetGlobalOption(key)
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	default:
+		return fallback
+	}
+}
+
+func notifyError(msg string) {
+	if action.InfoBar != nil {
+		action.InfoBar.Error(msg)
+	}
+}

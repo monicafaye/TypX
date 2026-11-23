@@ -1,15 +1,76 @@
 # Options
 
-Micro stores all of the user configuration in its configuration directory.
+TypX stores all of the user configuration in its configuration directory.
 
-Micro uses `$MICRO_CONFIG_HOME` as the configuration directory. If this
-environment variable is not set, it uses `$XDG_CONFIG_HOME/micro` instead. If
-that environment variable is not set, it uses `~/.config/micro` as the
-configuration directory. In the documentation, we use `~/.config/micro` to
-refer to the configuration directory (even if it may in fact be somewhere else
-if you have set either of the above environment variables).
+TypX resolves its configuration directory in this order:
+1. `$TYPX_CONFIG_HOME` (if set)
+2. `<os.UserConfigDir()>/typx` (e.g. `%APPDATA%\typx` on Windows,
+   `~/Library/Application Support/typx` on macOS, `$XDG_CONFIG_HOME/typx` or
+   `~/.config/typx` on Linux)
+3. Fallback: `~/.config/typx`
 
-Here are the available options:
+In the documentation, we refer to this directory as the TypX config directory
+(e.g. `~/.config/typx`).
+
+## TypX / Typst options (`typst.*`)
+
+In `.typ` buffers, TypX also applies built-in filetype defaults (`softwrap: true`,
+`wordwrap: true`, `tabstospaces: true`, `tabsize: 2`, `autoindent: true`,
+`ruler: true`, plus a Typst-aware `statusformatl`) unless explicitly overridden
+globally, via CLI flag, or in an `"ft:typst"` block in `settings.json`.
+
+* `typst.conceal`: enable cursor-aware live Unicode math and markup typography
+   concealment in `.typ` buffers. Toggle live with `Alt-c` or `> conceal`.
+
+    default value: `true`
+
+* `typst.concealMode`: controls how concealment unconceals around the cursor:
+   * `line`: unconceal the entire active cursor line (recommended).
+   * `token`: unconceal only the token containing the cursor.
+
+    default value: `"line"`
+
+* `typst.smartPairs`: enable Typst-aware smart pairing, skip-over, and
+   pair-backspace for `$`, `[`, `(`, `{`, and `"`.
+
+    default value: `true`
+
+* `typst.lspEnabled`: `global only`. Enable `tinymist` LSP integration. Set to
+   `false` (or launch with `--no-lsp`) for offline editing.
+
+    default value: `true`
+
+* `typst.tinymistPath`: `global only`. Explicit path to the `tinymist` (or
+   `tinymist.exe`) binary. When empty, TypX searches `PATH` and standard OS
+   installation directories (Cargo, WinGet, Scoop, Homebrew, VS Code extension).
+
+    default value: `""` (empty string)
+
+* `typst.debounceMs`: `global only`. Debounce delay in milliseconds before
+   sending `textDocument/didChange` updates to `tinymist`.
+
+    default value: `150`
+
+* `typst.previewOpenBrowser`: `global only`. Automatically open the local
+   `tinymist` preview URL in the OS default browser when `:preview` (`Alt-p`)
+   starts.
+
+    default value: `true`
+
+* `typst.outlineWidth`: `global only`. Preferred width in columns for the
+   docked Document Outline sidebar (`Alt-o` / `:outline`). Automatically hides
+   when terminal width is below 50 columns.
+
+    default value: `30`
+
+* `typst.outlineShowLabels`: `global only`. Include standalone `<label>`
+   anchors in the Document Outline sidebar alongside headings and figures.
+
+    default value: `false`
+
+## General editor options
+
+Here are the available editor options:
 
 * `autoindent`: when creating a new line, use the same indentation as the
    previous line.
@@ -538,17 +599,15 @@ or disable them:
    directory, the diff gutter will show changes with respect to the most
    recent Git commit rather than the diff since opening the file.
 
-Any option you set in the editor will be saved to the file
-`~/.config/micro/settings.json` so, in effect, your configuration file will be
-created for you. If you'd like to take your configuration with you to another
-machine, simply copy the `settings.json` to the other machine.
+Any option you set in the editor will be saved to `settings.json` inside your
+TypX config directory (e.g. `~/.config/typx/settings.json`), so your
+configuration file is created automatically.
 
 ## Settings.json file
 
-The `settings.json` file should go in your configuration directory (by default
-at `~/.config/micro`), and should contain only options which have been modified
-from their default setting. Here is the full list of options in json format,
-so that you can see what the formatting should look like.
+The `settings.json` file lives in your TypX configuration directory and should
+contain only options modified from their default setting. Here is the list of
+options in JSON format:
 
 ```json
 {
@@ -631,6 +690,16 @@ so that you can see what the formatting should look like.
     "tabreverse": false,
     "tabsize": 4,
     "tabstospaces": false,
+    "truecolor": "auto",
+    "typst.conceal": true,
+    "typst.concealMode": "line",
+    "typst.debounceMs": 150,
+    "typst.lspEnabled": true,
+    "typst.outlineShowLabels": false,
+    "typst.outlineWidth": 30,
+    "typst.previewOpenBrowser": true,
+    "typst.smartPairs": true,
+    "typst.tinymistPath": "",
     "useprimary": true,
     "wordwrap": false,
     "xterm": false

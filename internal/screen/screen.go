@@ -7,8 +7,8 @@ import (
 	"sync"
 
 	"github.com/micro-editor/tcell/v2"
-	"github.com/zyedidia/micro/v2/internal/config"
-	"github.com/zyedidia/micro/v2/internal/util"
+	"github.com/monicafaye/TypX/internal/config"
+	"github.com/monicafaye/TypX/internal/util"
 )
 
 // Screen is the tcell screen we use to draw to the terminal
@@ -38,6 +38,35 @@ var drawChan chan bool
 // them in tcell every time we reinitialize the screen, so we need to remember
 // them in a list
 var rawSeq = make([]string, 0)
+
+var (
+	postShowMu    sync.RWMutex
+	postShowHooks []func()
+)
+
+// RegisterPostShowHook registers a callback executed on the main UI goroutine
+// immediately after screen.Screen.Show() flushes cell updates (used by inline
+// terminal graphics panes such as Sixel preview).
+func RegisterPostShowHook(fn func()) {
+	if fn == nil {
+		return
+	}
+	postShowMu.Lock()
+	postShowHooks = append(postShowHooks, fn)
+	postShowMu.Unlock()
+}
+
+// RunPostShowHooks invokes all registered post-show hooks in registration order.
+func RunPostShowHooks() {
+	postShowMu.RLock()
+	hooks := make([]func(), len(postShowHooks))
+	copy(hooks, postShowHooks)
+	postShowMu.RUnlock()
+
+	for _, fn := range hooks {
+		fn()
+	}
+}
 
 // Lock locks the screen lock
 func Lock() {

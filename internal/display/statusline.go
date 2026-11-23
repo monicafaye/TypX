@@ -11,11 +11,11 @@ import (
 
 	runewidth "github.com/mattn/go-runewidth"
 	lua "github.com/yuin/gopher-lua"
-	"github.com/zyedidia/micro/v2/internal/buffer"
-	"github.com/zyedidia/micro/v2/internal/config"
-	ulua "github.com/zyedidia/micro/v2/internal/lua"
-	"github.com/zyedidia/micro/v2/internal/screen"
-	"github.com/zyedidia/micro/v2/internal/util"
+	"github.com/monicafaye/TypX/internal/buffer"
+	"github.com/monicafaye/TypX/internal/config"
+	ulua "github.com/monicafaye/TypX/internal/lua"
+	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/util"
 )
 
 // StatusLine represents the information line at the bottom
@@ -59,6 +59,21 @@ var statusInfo = map[string]func(*buffer.Buffer) string{
 	"percentage": func(b *buffer.Buffer) string {
 		return strconv.Itoa((b.GetActiveCursor().Y + 1) * 100 / b.LinesNum())
 	},
+}
+
+// SetStatusInfoFn registers a Go statusline provider for $(name) in
+// statusformatl / statusformatr. Passing nil removes the provider.
+// Convention: return "" when not applicable, otherwise "LABEL | ".
+// Call during initialization (on the main goroutine).
+func SetStatusInfoFn(name string, fn func(*buffer.Buffer) string) {
+	if name == "" {
+		return
+	}
+	if fn == nil {
+		delete(statusInfo, name)
+		return
+	}
+	statusInfo[name] = fn
 }
 
 func SetStatusInfoFnLua(fn string) {

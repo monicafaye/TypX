@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/micro-editor/tcell/v2"
 )
@@ -53,6 +54,25 @@ func keyEvent(e *tcell.EventKey) KeyEvent {
 		ke.r = e.Rune()
 	}
 	return ke
+}
+
+// altShiftFallbackKeyEvents returns normalized KeyEvent fallbacks for terminals
+// (notably Windows ConPTY / Win32 Console and Kitty/modifyOtherKeys) that
+// report ModShift alongside ModAlt on shifted runes (e.g. Alt+Shift+M arrives
+// as Shift+Alt+Rune['M'], while bindings like "Alt-M", "Alt-F", "Alt-{" are
+// registered with ModAlt only).
+func altShiftFallbackKeyEvents(ke KeyEvent) []KeyEvent {
+	if ke.code != tcell.KeyRune || ke.mod&tcell.ModAlt == 0 || ke.mod&tcell.ModShift == 0 {
+		return nil
+	}
+	noShift := ke
+	noShift.mod &^= tcell.ModShift
+	if unicode.IsLower(ke.r) {
+		upper := noShift
+		upper.r = unicode.ToUpper(ke.r)
+		return []KeyEvent{upper, noShift}
+	}
+	return []KeyEvent{noShift}
 }
 
 func (k KeyEvent) Name() string {
