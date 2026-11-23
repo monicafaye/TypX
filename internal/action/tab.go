@@ -457,6 +457,11 @@ func (t *Tab) ActiveIndex() int {
 	return t.active
 }
 
+// IsResizing reports whether the user is currently dragging a split border.
+func (t *Tab) IsResizing() bool {
+	return t.resizing != nil
+}
+
 // PrimaryPaneCount returns the number of non-auxiliary panes open in this tab.
 func (t *Tab) PrimaryPaneCount() int {
 	count := 0

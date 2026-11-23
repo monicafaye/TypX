@@ -10,6 +10,7 @@ import (
 	luar "layeh.com/gopher-luar"
 
 	runewidth "github.com/mattn/go-runewidth"
+	"github.com/micro-editor/tcell/v2"
 	lua "github.com/yuin/gopher-lua"
 	"github.com/monicafaye/TypX/internal/buffer"
 	"github.com/monicafaye/TypX/internal/config"
@@ -202,38 +203,268 @@ func (s *StatusLine) Display() {
 		}
 	}
 
+	// Fill the full statusline row with the base style first.
+	for x := 0; x < s.win.Width; x++ {
+		screen.SetContent(winX+x, y, ' ', nil, statusLineStyle)
+	}
+	if s.win.Width <= 0 {
+		return
+	}
+
+	leftStr := string(leftText)
+	rightStr := string(rightText)
 	leftLen := util.StringWidth(leftText, util.CharacterCount(leftText), 1)
 	rightLen := util.StringWidth(rightText, util.CharacterCount(rightText), 1)
 
-	for x := 0; x < s.win.Width; x++ {
-		if x < leftLen {
-			r, combc, size := util.DecodeCharacter(leftText)
-			leftText = leftText[size:]
-			rw := runewidth.RuneWidth(r)
-			for j := 0; j < rw; j++ {
-				c := r
-				if j > 0 {
-					c = ' '
-					combc = nil
-					x++
+	var leftSpans, rightSpans []statusSpan
+	if s.win.IsActive() {
+		palette := resolveStatusLinePalette(statusLineStyle)
+		leftSpans = styleStatusSegments(leftStr, true, palette)
+		rightSpans = styleStatusSegments(rightStr, false, palette)
+	} else {
+		leftSpans = []statusSpan{{text: leftStr, style: statusLineStyle}}
+		rightSpans = []statusSpan{{text: rightStr, style: statusLineStyle}}
+	}
+
+	// Render left spans, cleanly ellipsizing if wider than the pane.
+	ellipsis := leftLen > s.win.Width && s.win.Width >= 2
+	leftMax := s.win.Width
+	if ellipsis {
+		leftMax = s.win.Width - 1
+	}
+	drawStatusSpans(winX, y, leftMax, leftSpans)
+	if ellipsis {
+		dimStyle := statusLineStyle
+		if s.win.IsActive() {
+			dimStyle = resolveStatusLinePalette(statusLineStyle).dim
+		}
+		screen.SetContent(winX+s.win.Width-1, y, '…', nil, dimStyle)
+	}
+
+	// Render right spans only when there is clean breathing room (never colliding with left text).
+	if rightLen > 0 && leftLen+2+rightLen <= s.win.Width {
+		drawStatusSpans(winX+s.win.Width-rightLen, y, s.win.Width-(s.win.Width-rightLen), rightSpans)
+	}
+}
+
+type statusSpan struct {
+	text  string
+	style tcell.Style
+}
+
+type statusLinePalette struct {
+	base   tcell.Style
+	bold   tcell.Style
+	dim    tcell.Style
+	ok     tcell.Style
+	warn   tcell.Style
+	err    tcell.Style
+	accent tcell.Style
+	markup tcell.Style
+	math   tcell.Style
+	code   tcell.Style
+	raw    tcell.Style
+}
+
+func resolveStatusLinePalette(base tcell.Style) statusLinePalette {
+	_, baseBg, baseAttr := base.Decompose()
+	isReversed := baseAttr&tcell.AttrReverse != 0
+
+	pick := func(explicit string, fgCandidates []string, bold bool) tcell.Style {
+		if s, ok := config.Colorscheme[explicit]; ok {
+			return s
+		}
+		st := base
+		if bold {
+			st = st.Bold(true)
+		}
+		if isReversed {
+			return st
+		}
+		for _, grp := range fgCandidates {
+			if s, ok := config.Colorscheme[grp]; ok {
+				fg, _, _ := s.Decompose()
+				if isReadableContrast(fg, baseBg, 3.0) {
+					res := base.Foreground(fg)
+					if bold {
+						res = res.Bold(true)
+					}
+					return res
 				}
-				screen.SetContent(winX+x, y, c, combc, statusLineStyle)
 			}
-		} else if x >= s.win.Width-rightLen && x < rightLen+s.win.Width-rightLen {
-			r, combc, size := util.DecodeCharacter(rightText)
-			rightText = rightText[size:]
-			rw := runewidth.RuneWidth(r)
-			for j := 0; j < rw; j++ {
-				c := r
-				if j > 0 {
-					c = ' '
-					combc = nil
-					x++
+		}
+		return st
+	}
+
+	dim := base
+	if s, ok := config.Colorscheme["statusline.dim"]; ok {
+		dim = s
+	} else if !isReversed {
+		for _, grp := range []string{"comment", "divider", "statusline.inactive"} {
+			if s, ok := config.Colorscheme[grp]; ok {
+				fg, _, _ := s.Decompose()
+				if isReadableContrast(fg, baseBg, 2.0) {
+					dim = base.Foreground(fg)
+					break
 				}
-				screen.SetContent(winX+x, y, c, combc, statusLineStyle)
 			}
+		}
+	}
+
+	errStyle := pick("statusline.err", []string{"error", "gutter-error"}, true)
+	if _, ok := config.Colorscheme["statusline.err"]; !ok {
+		if s, ok := config.Colorscheme["error-message"]; ok {
+			errStyle = s.Bold(true)
+		}
+	}
+
+	return statusLinePalette{
+		base:   base,
+		bold:   base.Bold(true),
+		dim:    dim,
+		ok:     pick("statusline.ok", []string{"constant.bool.true", "diff-added", "special"}, true),
+		warn:   pick("statusline.warn", []string{"gutter-warning", "diff-modified", "special"}, true),
+		err:    errStyle,
+		accent: pick("statusline.accent", []string{"conceal", "symbol", "type"}, true),
+		markup: pick("statusline.mode.markup", []string{"identifier", "type"}, true),
+		math:   pick("statusline.mode.math", []string{"symbol.math", "conceal", "identifier"}, true),
+		code:   pick("statusline.mode.code", []string{"statement", "identifier.macro"}, true),
+		raw:    pick("statusline.mode.raw", []string{"constant.string.raw", "constant", "special"}, true),
+	}
+}
+
+func styleStatusSegments(text string, isLeft bool, p statusLinePalette) []statusSpan {
+	if text == "" {
+		return nil
+	}
+	parts := strings.Split(text, "|")
+	spans := make([]statusSpan, 0, len(parts)*2)
+	for idx, part := range parts {
+		if idx > 0 {
+			spans = append(spans, statusSpan{text: "|", style: p.dim})
+		}
+		if part == "" {
+			continue
+		}
+		if isLeft && idx == 0 {
+			spans = append(spans, styleLeadingSegment(part, p)...)
+			continue
+		}
+		if !isLeft {
+			spans = append(spans, statusSpan{text: part, style: p.dim})
+			continue
+		}
+		spans = append(spans, statusSpan{text: part, style: classifyStatusSegment(part, p)})
+	}
+	return spans
+}
+
+// styleLeadingSegment highlights the filename in bold and flags (+, [ro],
+// [ovwr], [PASTE]) in warning accent while leaving cursor coordinates calm.
+func styleLeadingSegment(seg string, p statusLinePalette) []statusSpan {
+	// Split before the cursor "(line,col)" suffix if present.
+	coordIdx := strings.Index(seg, "(")
+	head := seg
+	tail := ""
+	if coordIdx > 0 {
+		head = seg[:coordIdx]
+		tail = seg[coordIdx:]
+	}
+
+	var spans []statusSpan
+	// Separate trailing status flags ("+ ", "[ro] ", "[ovwr] ") from filename.
+	trimmedHead := strings.TrimRight(head, " ")
+	trailSpaces := head[len(trimmedHead):]
+
+	flagStart := -1
+	for _, flag := range []string{" +", " [ro]", " [ovwr]"} {
+		if idx := strings.Index(trimmedHead, flag); idx >= 0 && (flagStart < 0 || idx < flagStart) {
+			flagStart = idx
+		}
+	}
+	if flagStart >= 0 {
+		spans = append(spans, statusSpan{text: trimmedHead[:flagStart], style: p.bold})
+		spans = append(spans, statusSpan{text: trimmedHead[flagStart:] + trailSpaces, style: p.warn})
+	} else {
+		spans = append(spans, statusSpan{text: head, style: p.bold})
+	}
+
+	if tail != "" {
+		if pasteIdx := strings.Index(tail, "PASTE"); pasteIdx >= 0 {
+			spans = append(spans, statusSpan{text: tail[:pasteIdx], style: p.base})
+			spans = append(spans, statusSpan{text: tail[pasteIdx:], style: p.warn})
 		} else {
-			screen.SetContent(winX+x, y, ' ', nil, statusLineStyle)
+			spans = append(spans, statusSpan{text: tail, style: p.base})
+		}
+	}
+	return spans
+}
+
+func classifyStatusSegment(seg string, p statusLinePalette) tcell.Style {
+	trimmed := strings.TrimSpace(seg)
+	switch trimmed {
+	case "MARKUP":
+		return p.markup
+	case "MATH":
+		return p.math
+	case "CODE":
+		return p.code
+	case "RAW":
+		return p.raw
+	case "PREVIEW: ON":
+		return p.accent
+	case "LSP: ready":
+		return p.ok
+	case "LSP: off", "LSP: missing":
+		return p.dim
+	case "LSP: error":
+		return p.err
+	case "LSP: starting":
+		return p.warn
+	case "ERR":
+		return p.err
+	}
+	switch {
+	case strings.HasPrefix(trimmed, "ERR:"):
+		return p.err
+	case strings.Contains(trimmed, "compiling") || strings.Contains(trimmed, "starting"):
+		return p.warn
+	case strings.HasPrefix(trimmed, "ft:"):
+		return p.dim
+	case strings.HasSuffix(trimmed, "p") && len(trimmed) >= 2 && trimmed[0] >= '0' && trimmed[0] <= '9':
+		return p.accent
+	default:
+		return p.base
+	}
+}
+
+func drawStatusSpans(startX, y, maxWidth int, spans []statusSpan) {
+	x := 0
+	for _, sp := range spans {
+		b := []byte(sp.text)
+		for len(b) > 0 && x < maxWidth {
+			r, combc, size := util.DecodeCharacter(b)
+			if size <= 0 {
+				break
+			}
+			b = b[size:]
+			rw := runewidth.RuneWidth(r)
+			if rw < 1 {
+				rw = 1
+			}
+			if x+rw > maxWidth {
+				return
+			}
+			for j := 0; j < rw; j++ {
+				c := r
+				cb := combc
+				if j > 0 {
+					c = ' '
+					cb = nil
+				}
+				screen.SetContent(startX+x+j, y, c, cb, sp.style)
+			}
+			x += rw
 		}
 	}
 }

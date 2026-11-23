@@ -134,6 +134,7 @@ See `> help options` for the full list of editor options. TypX-specific keys:
 - `typst.conceal` (default `true`): Enable Unicode math/typography concealment.
 - `typst.concealMode` (default `"line"`): `"line"` or `"token"`.
 - `typst.smartPairs` (default `true`): Typst-aware delimiter auto-pairing.
+- `typst.keyHints` (default `true`): Show clickable context-aware shortcut hints on the bottom bar.
 - `typst.lspEnabled` (default `true`): Enable `tinymist` LSP integration.
 - `typst.tinymistPath` (default `""`): Custom path to `tinymist` binary.
 - `typst.debounceMs` (default `150`): Debounce delay (ms) for LSP edits.

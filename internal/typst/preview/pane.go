@@ -149,6 +149,8 @@ func (pp *PreviewPane) SetView(v *display.View) {
 func (pp *PreviewPane) LocFromVisual(vloc buffer.Loc) buffer.Loc { return vloc }
 func (pp *PreviewPane) Relocate() bool                           { return true }
 func (pp *PreviewPane) IsActive() bool                           { return pp.active }
+func (pp *PreviewPane) IsInverted() bool                         { return pp.invert }
+func (pp *PreviewPane) IsTrimMargins() bool                      { return pp.trimMargins }
 
 func (pp *PreviewPane) SetActive(b bool) {
 	pp.active = b

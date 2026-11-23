@@ -351,6 +351,11 @@ func StatusLineInfo() func(*buffer.Buffer) string {
 	}
 }
 
+// IsPreviewActive reports whether the browser companion preview is currently running.
+func IsPreviewActive() bool {
+	return defaultManager.atomicPreview.Load()
+}
+
 // RequestDocumentSymbols asynchronously requests LSP textDocument/documentSymbol
 // for the given Typst buffer if tinymist is ready. Returns false immediately if
 // LSP is offline or the buffer is not trackable. When symbols arrive, cb runs on

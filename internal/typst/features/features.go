@@ -83,9 +83,10 @@ func Init() {
 		action.RegisterPreActionHook("Backspace", shortcuts.HandleTypstBackspace)
 		action.RegisterPreActionHook("InsertNewline", shortcuts.HandleTypstNewline)
 
-		// 5. Register Phase 2 statusline providers and cache eviction observer.
+		// 5. Register Phase 2 statusline providers, bottom bar provider, and cache eviction observer.
 		display.SetStatusInfoFn("typst.mode", modeStatusInfo)
 		display.SetStatusInfoFn("typst.words", wordCountStatusInfo)
+		display.SetBottomBarProvider(buildBottomBarContext)
 		buffer.RegisterObserver(cacheEvictObserver{})
 
 		// 6. Wire Phase 4 Document Outline sidebar with optional tinymist documentSymbol enrichment.
@@ -275,9 +276,19 @@ func modeStatusInfo(b *buffer.Buffer) string {
 	if b == nil || !b.IsTypst() {
 		return ""
 	}
+	if b.GetActiveCursor() == nil {
+		return ""
+	}
+	return detectBufferMode(b).String() + " | "
+}
+
+func detectBufferMode(b *buffer.Buffer) typst.Mode {
+	if b == nil || !b.IsTypst() {
+		return typst.ModeMarkup
+	}
 	c := b.GetActiveCursor()
 	if c == nil {
-		return ""
+		return typst.ModeMarkup
 	}
 	ver := b.Version()
 	var states []typst.LineState
@@ -286,7 +297,7 @@ func modeStatusInfo(b *buffer.Buffer) string {
 		if entry, ok := modeCache[b.SharedBuffer]; ok && entry.version == ver {
 			if entry.line == c.Y && entry.col == c.X {
 				statusCacheMu.Unlock()
-				return entry.mode.String() + " | "
+				return entry.mode
 			}
 			states = entry.states
 		}
@@ -322,7 +333,7 @@ func modeStatusInfo(b *buffer.Buffer) string {
 		}
 		statusCacheMu.Unlock()
 	}
-	return m.String() + " | "
+	return m
 }
 
 func wordCountStatusInfo(b *buffer.Buffer) string {

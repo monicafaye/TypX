@@ -1,6 +1,8 @@
 package display
 
 import (
+	"strings"
+
 	runewidth "github.com/mattn/go-runewidth"
 	"github.com/micro-editor/tcell/v2"
 	"github.com/monicafaye/TypX/internal/buffer"
@@ -15,6 +17,7 @@ type InfoWindow struct {
 	*View
 
 	hscroll int
+	hits    []BottomBarHit
 }
 
 func (i *InfoWindow) errStyle() tcell.Style {
@@ -95,7 +98,7 @@ func (i *InfoWindow) Clear() {
 	}
 }
 
-func (i *InfoWindow) displayBuffer() {
+func (i *InfoWindow) displayBuffer() int {
 	b := i.Buffer
 	line := b.LineBytes(0)
 	activeC := b.GetActiveCursor()
@@ -161,22 +164,11 @@ func (i *InfoWindow) displayBuffer() {
 	if activeC.X == blocX {
 		screen.ShowCursor(vlocX, i.Y)
 	}
+	return vlocX
 }
 
-var keydisplay = []string{"^Q Quit, ^S Save, ^O Open, ^G Help, ^E Command Bar, ^K Cut Line", "^F Find, ^Z Undo, ^Y Redo, ^A Select All, ^D Duplicate Line, ^T New Tab"}
-
 func (i *InfoWindow) displayKeyMenu() {
-	// TODO: maybe make this based on the actual keybindings
-
-	for y := 0; y < len(keydisplay); y++ {
-		for x := 0; x < i.Width; x++ {
-			if x < len(keydisplay[y]) {
-				screen.SetContent(x, i.Y-len(keydisplay)+y, rune(keydisplay[y][x]), nil, i.defStyle())
-			} else {
-				screen.SetContent(x, i.Y-len(keydisplay)+y, ' ', nil, i.defStyle())
-			}
-		}
-	}
+	i.drawExpandedKeyMenu(currentBottomBarContext())
 }
 
 func (i *InfoWindow) totalSize() int {
@@ -210,31 +202,57 @@ func (i *InfoWindow) scrollToSuggestion() {
 }
 
 func (i *InfoWindow) Display() {
+	i.hits = i.hits[:0]
+
 	if i.HasPrompt || config.GlobalSettings["infobar"].(bool) {
-		i.Clear()
-		x := 0
-		if config.GetGlobalOption("keymenu").(bool) {
-			i.displayKeyMenu()
+		keyMenuOpen := config.GetGlobalOption("keymenu").(bool)
+		var ctx BottomBarContext
+		ctxLoaded := false
+		getCtx := func() BottomBarContext {
+			if !ctxLoaded {
+				ctx = currentBottomBarContext()
+				ctxLoaded = true
+			}
+			return ctx
 		}
 
-		if !i.HasPrompt && !i.HasMessage && !i.HasError {
+		if keyMenuOpen {
+			i.drawExpandedKeyMenu(getCtx())
+		}
+
+		hasVisibleMsg := i.HasMessage && strings.TrimSpace(i.Msg) != ""
+		if !i.HasPrompt && !hasVisibleMsg && !i.HasError {
+			if keyHintsEnabled() {
+				i.drawIdleBottomBar(getCtx(), keyMenuOpen)
+			} else {
+				i.Clear()
+			}
 			return
 		}
-		i.Clear()
-		style := i.defStyle()
 
+		theme := resolveBottomBarTheme()
 		if i.HasError {
-			style = i.errStyle()
-		}
-
-		display := i.Msg
-		for _, c := range display {
-			screen.SetContent(x, i.Y, c, nil, style)
-			x += runewidth.RuneWidth(c)
-		}
-
-		if i.HasPrompt {
-			i.displayBuffer()
+			style := i.errStyle()
+			i.fillRow(i.Y, style)
+			x := drawStyledText(0, i.Y, i.Width, i.Msg, style)
+			if keyHintsEnabled() {
+				i.drawRightHint(x+3, "Esc", "dismiss", style)
+			}
+		} else if i.HasPrompt {
+			i.Clear()
+			drawStyledText(0, i.Y, i.Width, i.Msg, theme.prompt)
+			endX := i.displayBuffer()
+			i.drawPromptHelperHints(endX)
+		} else {
+			i.Clear()
+			x := 0
+			if i.HasGutter {
+				x = drawStyledText(x, i.Y, i.Width, "● ", theme.gutterMark)
+			}
+			x = drawStyledText(x, i.Y, i.Width, i.Msg, i.defStyle())
+			if keyHintsEnabled() {
+				i.drawRightHint(x+3, "Esc dismiss", "dismiss", theme.dim)
+			}
 		}
 	}
 
@@ -252,7 +270,7 @@ func (i *InfoWindow) Display() {
 		}
 		keymenuOffset := 0
 		if config.GetGlobalOption("keymenu").(bool) {
-			keymenuOffset = len(keydisplay)
+			keymenuOffset = keyMenuRowCount
 		}
 
 		draw := func(r rune, s tcell.Style) {

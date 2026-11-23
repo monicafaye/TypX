@@ -341,6 +341,8 @@ func (e *SimEditor) Step() bool {
 				action.Tabs.HandleEvent(ev)
 			} else if action.InfoBar.HasPrompt {
 				action.InfoBar.HandleEvent(ev)
+			} else if action.HandleBottomBarEvent(ev) {
+				// Consumed by the bottom bar or expanded key menu.
 			} else {
 				action.Tabs.HandleEvent(ev)
 			}

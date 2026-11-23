@@ -143,6 +143,7 @@ var DefaultGlobalOnlySettings = map[string]any{
 	"tabhighlight":             false,
 	"tabreverse":               true,
 	"typst.debounceMs":         float64(150),
+	"typst.keyHints":           true,
 	"typst.lspEnabled":         true,
 	"typst.outlineShowLabels":  false,
 	"typst.outlineWidth":       float64(30),
@@ -354,7 +355,8 @@ var defaultFileTypeSettings = map[string]map[string]any{
 		"autoindent":   true,
 		"ruler":        true,
 		"statusformatl": "$(filename) $(modified)$(overwrite)($(line),$(col)) $(status.paste)| " +
-			"$(typst.mode)$(typst.words)$(typst.lsp)ft:$(opt:filetype) | $(opt:encoding)",
+			"$(typst.mode)$(typst.words)$(typst.lsp)ft:$(opt:filetype)",
+		"statusformatr": "$(percentage)% | $(opt:encoding)",
 	},
 }
 

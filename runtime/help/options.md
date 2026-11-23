@@ -35,6 +35,12 @@ globally, via CLI flag, or in an `"ft:typst"` block in `settings.json`.
 
     default value: `true`
 
+* `typst.keyHints`: `global only`. Show the context-aware, mouse-clickable
+   shortcut hint bar on the bottom row when no prompt or message is active,
+   plus right-aligned prompt helper hints.
+
+    default value: `true`
+
 * `typst.lspEnabled`: `global only`. Enable `tinymist` LSP integration. Set to
    `false` (or launch with `--no-lsp`) for offline editing.
 

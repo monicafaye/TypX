@@ -577,6 +577,8 @@ func DoEvent() {
 			action.Tabs.HandleEvent(event)
 		} else if action.InfoBar.HasPrompt {
 			action.InfoBar.HandleEvent(event)
+		} else if action.HandleBottomBarEvent(event) {
+			// Consumed by the bottom bar or expanded key menu.
 		} else {
 			action.Tabs.HandleEvent(event)
 		}
