@@ -779,29 +779,54 @@ func (pp *PreviewPane) drawFooter(y int) {
 		if pp.trimMargins {
 			flags += " trim"
 		}
-		left = fmt.Sprintf(" %s | %s (%d%%)%s | [Wheel/w/s] scroll [t] dark [m] trim [q] close",
-			prefix, pp.pageLabel(), pct, flags)
+		base := fmt.Sprintf(" %s | %s (%d%%)%s", prefix, pp.pageLabel(), pct, flags)
+		left = fitPreviewFooter(base, pp.view.Width)
 	default:
 		left = fmt.Sprintf(" %s", prefix)
 	}
 
+	w := pp.view.Width
 	col := pp.view.X
-	maxX := pp.view.X + pp.view.Width
+	maxX := pp.view.X + w
+	truncated := runewidth.StringWidth(left) > w && w >= 2
+	limitX := maxX
+	if truncated {
+		limitX = maxX - 1
+	}
 	for _, r := range left {
 		cw := runewidth.RuneWidth(r)
 		if cw <= 0 {
 			cw = 1
 		}
-		if col+cw > maxX {
+		if col+cw > limitX {
 			break
 		}
 		screen.SetContent(col, y, r, nil, style)
 		col += cw
 	}
+	if truncated && col < maxX {
+		screen.SetContent(col, y, '…', nil, style)
+		col++
+	}
 	for col < maxX {
 		screen.SetContent(col, y, ' ', nil, style)
 		col++
 	}
+}
+
+func fitPreviewFooter(base string, width int) string {
+	candidates := []string{
+		base + " | [Wheel/w/s] scroll [t] dark [m] trim [q] close",
+		base + " | [t] dark [m] trim [q] close",
+		base + " | [t/m/q]",
+		base,
+	}
+	for _, c := range candidates {
+		if runewidth.StringWidth(c) <= width {
+			return c
+		}
+	}
+	return base
 }
 
 func (pp *PreviewPane) pageLabel() string {

@@ -428,6 +428,42 @@ func TestPreviewGeometryShiftTriggersFullScreenSync(t *testing.T) {
 	}
 }
 
+func TestPreviewFooterResponsiveAndEllipsis(t *testing.T) {
+	base := " *Preview | p.1/10 (0%)"
+
+	if got := fitPreviewFooter(base, 80); !strings.Contains(got, "[Wheel/w/s]") {
+		t.Fatalf("wide footer should include full hints, got %q", got)
+	}
+	if got := fitPreviewFooter(base, 55); got != base+" | [t] dark [m] trim [q] close" {
+		t.Fatalf("medium footer should pick compact hints without mid-word clipping, got %q", got)
+	}
+	if got := fitPreviewFooter(base, 36); got != base+" | [t/m/q]" {
+		t.Fatalf("narrow footer should pick minimal hints, got %q", got)
+	}
+	if got := fitPreviewFooter(base, 24); got != base {
+		t.Fatalf("tight footer should show base only, got %q", got)
+	}
+
+	sim, bp := initPreviewTestEnv(t)
+	pp := newPreviewPane(action.MainTab(), bp, defaultManager)
+	pp.SetActive(true)
+	pp.view.X, pp.view.Y, pp.view.Width, pp.view.Height = 0, 0, 16, 10
+	pp.viewport = &ViewportRender{FirstPage: 1, LastPage: 10, PageCount: 10, ScrollY: 0, MaxScrollY: 100}
+
+	sim.Clear()
+	pp.drawFooter(9)
+	sim.Show()
+
+	var row strings.Builder
+	for x := 0; x < 16; x++ {
+		r, _, _, _ := sim.GetContent(x, 9)
+		row.WriteRune(r)
+	}
+	if !strings.HasSuffix(row.String(), "…") {
+		t.Fatalf("expected ultra-narrow footer to end with ellipsis, got %q", row.String())
+	}
+}
+
 func minInt(a, b int) int {
 	if a < b {
 		return a
