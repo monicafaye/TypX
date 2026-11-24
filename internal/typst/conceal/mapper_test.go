@@ -64,7 +64,8 @@ func TestWordBoundariesAndLongestMatch(t *testing.T) {
 		{"dot_prefix_suffix", "$foo.in + dots.foo + alpha.$", "$foo.in + dots.foo + α.$"},
 		{"concealed_words", "$alpha + in + sum + dot + dots + plus.minus$", "$α + ∈ + ∑ + · + … + ±$"},
 		{"longest_arrows", "$<--> <==> <-> <=> --> <-- ==> <== -> <- =>$", "$⟷ ⟺ ↔ ⇔ ⟶ ⟵ ⟹ ⟸ → ← ⇒$"},
-		{"longest_relations", "$<= >= != ~= notin in subseteq subset integral.double integral dots.c$", "$≤ ≥ ≠ ≅ ∉ ∈ ⊆ ⊂ ∬ ∫ ⋯$"},
+		{"longest_relations", "$<= >= != ~= notin in in.not in.rev in.rev.not subseteq subset.eq.not subset.neq subset.not subset integral.double integral dots.c$", "$≤ ≥ ≠ ≅ ∉ ∈ ∉ ∋ ∌ ⊆ ⊈ ⊊ ⊄ ⊂ ∬ ∫ ⋯$"},
+		{"dotted_negations", "$a in.not A, x eq.not y, p equiv.not q, u approx.not v, exists.not n$", "$a ∉ A, x ≠ y, p ≢ q, u ≉ v, ∄ n$"},
 		{"greek_alt", "$epsilon + epsilon.alt + phi + phi.alt + theta.alt$", "$ε + ϵ + φ + ϕ + ϑ$"},
 		{"blackboard_bold", "$NN subset ZZ subset QQ subset RR subset CC$", "$ℕ ⊂ ℤ ⊂ ℚ ⊂ ℝ ⊂ ℂ$"},
 	}
