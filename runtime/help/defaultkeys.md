@@ -16,6 +16,7 @@ editor defaults.
 |---------------|--------------------|---------------------------------------------------------------------------|
 | Alt-p         | `> preview`        | Toggle `tinymist` live browser preview with cursor sync                   |
 | Alt-o         | `> outline`        | Toggle docked Document Outline sidebar                                    |
+| Alt-t         | `> tree`           | Toggle built-in File Manager sidebar (see `> help filemanager`)           |
 | Alt-c         | `> conceal`        | Toggle live Unicode math/typography concealment                           |
 | Alt-m         | `> math-inline`    | Insert inline math `$|$`, wrap selection, or exit inline math             |
 | Alt-M         | `> math-display`   | Insert multi-line display math block (`Alt-Shift-m`)                      |

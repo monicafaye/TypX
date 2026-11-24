@@ -25,6 +25,7 @@ TypX delivers an out-of-the-box Typst authoring workflow in a single fast Go bin
 - **Cursor-aware live Unicode math concealment**: renders Greek letters, arrows, relations, set/logic operators, big operators, simple super/subscripts, and typographic dashes (`---`, `--`, `...`) cleanly on non-cursor lines while unconcealing the active line for exact editing—without ever mutating the underlying `.typ` source.
 - **Structural & math shortcuts**: quick inline/display math (`Alt+M` / `Alt+Shift+M`), bold/italic wrappers (`Alt+B` / `Alt+E`), heading promote/demote (`Alt+Left` / `Alt+Right`), indentation-aware snippet templates (`:insert` / `Alt+I`), and Typst-aware smart pairing.
 - **Document Outline sidebar**: toggleable docked sidebar (`Alt+O` / `:outline`) powered by a fast incremental pure-Go parser (with optional `tinymist` `textDocument/documentSymbol` enrichment), live cursor tracking, keyboard/mouse jump, and `/` filtering.
+- **Integrated File Manager sidebar**: built-in `filemanager` plugin (`Alt+T` / `:tree`) for browsing directories, expanding/collapsing folders inline, opening files in splits, and creating/renaming/deleting files (`:touch`, `:mkdir`, `:rename`, `:rm`).
 - **Dual Live Preview (In-Terminal Sixel + Browser)**: native right-docked continuous Sixel preview directly inside Sixel-capable terminals (`Alt+P` / `:preview inline`) with zoom, dark-mode inversion, and margin trimming, plus an auto-reloading companion browser preview (`:preview browser`) with cursor synchronization and compile-progress feedback.
 - **`tinymist` LSP & Multi-File Project Support**: automatic project root resolution (`typst.toml`, root-relative `/...` imports, `.git`, `../` imports), gutter diagnostics and `:diagnostics`, completion (`Ctrl+Space`), hover docs (`Alt+K` / `:hover`), and graceful offline operation (`--no-lsp`) when `tinymist` is absent.
 
@@ -158,6 +159,7 @@ Press **`Ctrl+E`** to open the command bar (`>` prompt). All TypX keybindings ap
 |---|---|---|---|
 | Live Preview | `:preview [inline\|browser\|focus\|invert\|trim\|stop]` | `Alt+P` | Toggle live preview (`auto` chooses in-terminal Sixel when supported, otherwise browser preview). |
 | Document Outline | `:outline` | `Alt+O` | Toggle the docked Document Outline sidebar. |
+| File Manager | `:tree` | `Alt+T` | Toggle the built-in file tree sidebar (`:touch`, `:mkdir`, `:rename`, `:rm`). |
 | Math Concealment | `:conceal [on\|off]` | `Alt+C` | Toggle live Unicode math/symbol concealment in the active buffer. |
 | Inline Math | `:math-inline` | `Alt+M` | Insert `$|$`, wrap selection in `$...$`, or exit inline math. |
 | Display Math | `:math-display` | `Alt+Shift+M` | Insert a multi-line display math block `$\n  |\n$`. |
@@ -282,6 +284,7 @@ Try TypX's dedicated themes via `Ctrl+E`:
 Inside TypX, press `Ctrl+E` and run `help` or open a specific topic:
 
 - `> help typst` — TypX authoring guide (`tinymist`, `:preview`, `:outline`, `:conceal`, shortcuts, options)
+- `> help filemanager` — Built-in file tree sidebar commands, keybindings, and options
 - `> help defaultkeys` — Default TypX and editor keybindings
 - `> help commands` — All command-bar commands
 - `> help options` — All global, local, and `typst.*` configuration options

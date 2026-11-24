@@ -1,0 +1,8 @@
+filetype: filemanager
+
+detect:
+    filename: "^filemanager$"
+
+rules:
+    # The "..", expanded/collapsed directories
+    - special: "^\\.\\.$|\\-\\s.*|\\+\\s.*"

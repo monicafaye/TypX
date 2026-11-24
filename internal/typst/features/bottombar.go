@@ -14,11 +14,11 @@ import (
 
 func buildBottomBarContext() display.BottomBarContext {
 	if action.Tabs == nil || len(action.Tabs.List) == 0 {
-		return genericBottomBarContext(false)
+		return genericBottomBarContext(nil, false)
 	}
 	tab := action.MainTab()
 	if tab == nil {
-		return genericBottomBarContext(false)
+		return genericBottomBarContext(nil, false)
 	}
 
 	// 1. Focused auxiliary panes get dedicated navigation hints.
@@ -33,18 +33,44 @@ func buildBottomBarContext() display.BottomBarContext {
 
 	bp := tab.CurPane()
 	if bp == nil || bp.Buf == nil {
-		return genericBottomBarContext(false)
+		return genericBottomBarContext(tab, false)
 	}
 
 	if bp.Buf.Type.Kind == buffer.BTHelp.Kind {
 		return helpBottomBarContext()
 	}
 
+	if isFileManagerBuffer(bp.Buf) {
+		return fileManagerBottomBarContext(tab)
+	}
+
 	if bp.Buf.IsTypst() {
 		return typstBottomBarContext(tab, bp)
 	}
 
-	return genericBottomBarContext(bp.Buf.Modified())
+	return genericBottomBarContext(tab, bp.Buf.Modified())
+}
+
+func isFileManagerBuffer(b *buffer.Buffer) bool {
+	if b == nil {
+		return false
+	}
+	if ft, ok := b.Settings["filetype"].(string); ok && ft == "filemanager" {
+		return true
+	}
+	return b.Path == "filemanager" && b.Type.Scratch && b.Type.Readonly
+}
+
+func hasFileManagerPane(tab *action.Tab) bool {
+	if tab == nil {
+		return false
+	}
+	for _, p := range tab.Panes {
+		if bp, ok := p.(*action.BufPane); ok && bp != nil && isFileManagerBuffer(bp.Buf) {
+			return true
+		}
+	}
+	return false
 }
 
 func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBarContext {
@@ -53,10 +79,11 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 
 	previewOn := preview.PaneForTab(tab) != nil || lsp.IsPreviewActive()
 	outlineOn := outline.PaneForTab(tab) != nil
+	treeOn := hasFileManagerPane(tab)
 	concealOn, _ := b.Settings["typst.conceal"].(bool)
 
 	errCount, warnCount := countDiagnostics(b)
-	menuRows := typstKeyMenuRows(previewOn, outlineOn, concealOn)
+	menuRows := typstKeyMenuRows(previewOn, outlineOn, concealOn, treeOn)
 	menuTip := "Click any shortcut or press Alt+G to hide · ^E commands (:help typst)"
 
 	var diagItem *display.BottomBarItem
@@ -100,6 +127,7 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 			display.BottomBarItem{Key: "Alt+C", Label: "Conceal", Action: "ToggleConceal", Priority: 2, Active: concealOn},
 			display.BottomBarItem{Key: "Alt+P", Label: "Preview", Action: "TogglePreview", Priority: 2, Active: previewOn},
 			display.BottomBarItem{Key: "Alt+O", Label: "Outline", Action: "ToggleOutline", Priority: 3, Active: outlineOn},
+			display.BottomBarItem{Key: "Alt+T", Label: "Files", Action: "command:tree", Priority: 4, Active: treeOn},
 			display.BottomBarItem{Key: "^S", Label: "Save", Action: "Save", Priority: 3},
 			display.BottomBarItem{Key: "^E", Label: "Cmd", Action: "CommandMode", Priority: 4},
 			display.BottomBarItem{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 0, AlignRight: true},
@@ -118,6 +146,7 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 			display.BottomBarItem{Key: "Alt+I", Label: "Insert", Action: "InsertPalette", Priority: 2},
 			display.BottomBarItem{Key: "Alt+P", Label: "Preview", Action: "TogglePreview", Priority: 1, Active: previewOn},
 			display.BottomBarItem{Key: "Alt+O", Label: "Outline", Action: "ToggleOutline", Priority: 2, Active: outlineOn},
+			display.BottomBarItem{Key: "Alt+T", Label: "Files", Action: "command:tree", Priority: 3, Active: treeOn},
 			display.BottomBarItem{Key: "^S", Label: "Save", Action: "Save", Priority: 2},
 			display.BottomBarItem{Key: "^E", Label: "Cmd", Action: "CommandMode", Priority: 3},
 			display.BottomBarItem{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 0, AlignRight: true},
@@ -138,6 +167,7 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 			display.BottomBarItem{Key: "^E", Label: "Cmd", Action: "CommandMode", Priority: 1},
 			display.BottomBarItem{Key: "Alt+P", Label: "Preview", Action: "TogglePreview", Priority: 0, Active: previewOn},
 			display.BottomBarItem{Key: "Alt+O", Label: "Outline", Action: "ToggleOutline", Priority: 1, Active: outlineOn},
+			display.BottomBarItem{Key: "Alt+T", Label: "Files", Action: "command:tree", Priority: 1, Active: treeOn},
 			display.BottomBarItem{Key: "Alt+C", Label: "Conceal", Action: "ToggleConceal", Priority: 2, Active: concealOn},
 			display.BottomBarItem{Key: "Alt+M", Label: "Math", Action: "MathInline", Priority: 2},
 			display.BottomBarItem{Key: "Alt+I", Label: "Insert", Action: "InsertPalette", Priority: 3},
@@ -157,13 +187,14 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 	}
 }
 
-func typstKeyMenuRows(previewOn, outlineOn, concealOn bool) []display.BottomBarMenuRow {
+func typstKeyMenuRows(previewOn, outlineOn, concealOn, treeOn bool) []display.BottomBarMenuRow {
 	return []display.BottomBarMenuRow{
 		{
 			Title: "Editor",
 			Items: []display.BottomBarItem{
 				{Key: "^S", Label: "Save", Action: "Save", Priority: 0},
 				{Key: "^O", Label: "Open", Action: "OpenFile", Priority: 1},
+				{Key: "Alt+T", Label: "Files", Action: "command:tree", Priority: 1, Active: treeOn},
 				{Key: "^F", Label: "Find", Action: "Find", Priority: 1},
 				{Key: "^Z", Label: "Undo", Action: "Undo", Priority: 2},
 				{Key: "^Y", Label: "Redo", Action: "Redo", Priority: 3},
@@ -190,6 +221,26 @@ func typstKeyMenuRows(previewOn, outlineOn, concealOn bool) []display.BottomBarM
 	}
 }
 
+func fileManagerBottomBarContext(tab *action.Tab) display.BottomBarContext {
+	previewOn := preview.PaneForTab(tab) != nil || lsp.IsPreviewActive()
+	outlineOn := outline.PaneForTab(tab) != nil
+	return display.BottomBarContext{
+		Badge: "FILES",
+		Hints: []display.BottomBarItem{
+			{Key: "↑/↓", Label: "Navigate", Priority: 1},
+			{Key: "Enter", Label: "Open", Action: "InsertNewline", Priority: 0},
+			{Key: "→/←", Label: "Expand/Fold", Priority: 1},
+			{Key: "^W", Label: "Editor", Action: "NextSplit", Priority: 0},
+			{Key: "^E", Label: "Cmd", Action: "CommandMode", Priority: 2},
+			{Key: "Alt+T", Label: "Close", Action: "command:tree", Priority: 0},
+			{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 2, AlignRight: true},
+			{Key: "^Q", Label: "Quit", Action: "Quit", Priority: 1, AlignRight: true},
+		},
+		MenuRows: typstKeyMenuRows(previewOn, outlineOn, true, true),
+		MenuTip:  "File tree focused · Enter/Tab/Click open · →/← expand/collapse · ^E touch/mkdir/rename/rm",
+	}
+}
+
 func outlineBottomBarContext(op *outline.OutlinePane) display.BottomBarContext {
 	var hints []display.BottomBarItem
 	if op.IsFiltering() {
@@ -213,7 +264,7 @@ func outlineBottomBarContext(op *outline.OutlinePane) display.BottomBarContext {
 	return display.BottomBarContext{
 		Badge:    "OUTLINE",
 		Hints:    hints,
-		MenuRows: typstKeyMenuRows(false, true, true),
+		MenuRows: typstKeyMenuRows(false, true, true, false),
 		MenuTip:  "Outline focused · Enter to jump · / to filter · Esc returns to editor",
 	}
 }
@@ -234,7 +285,7 @@ func previewBottomBarContext(pp *preview.PreviewPane) display.BottomBarContext {
 		Badge:       "PREVIEW",
 		BadgeAccent: "math",
 		Hints:       hints,
-		MenuRows:    typstKeyMenuRows(true, false, true),
+		MenuRows:    typstKeyMenuRows(true, false, true, false),
 		MenuTip:     "Preview focused · Wheel/j/k scroll · t invert · m trim · Esc returns to editor",
 	}
 }
@@ -253,14 +304,16 @@ func helpBottomBarContext() display.BottomBarContext {
 	}
 }
 
-func genericBottomBarContext(modified bool) display.BottomBarContext {
+func genericBottomBarContext(tab *action.Tab, modified bool) display.BottomBarContext {
 	saveLabel := "Save"
 	if modified {
 		saveLabel = "Save*"
 	}
+	treeOn := hasFileManagerPane(tab)
 	return display.BottomBarContext{
 		Hints: []display.BottomBarItem{
 			{Key: "^S", Label: saveLabel, Action: "Save", Priority: 0},
+			{Key: "Alt+T", Label: "Files", Action: "command:tree", Priority: 2, Active: treeOn},
 			{Key: "^O", Label: "Open", Action: "OpenFile", Priority: 3},
 			{Key: "^F", Label: "Find", Action: "Find", Priority: 1},
 			{Key: "^E", Label: "Cmd", Action: "CommandMode", Priority: 0},
