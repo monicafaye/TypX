@@ -1108,9 +1108,9 @@ func (pp *PreviewPane) HandleEvent(event tcell.Event) {
 				pp.sixelDirty = true
 				pp.clearPending = true
 				pp.ScheduleCompile(true)
-			case '>':
-				pp.ResizePaneBy(resizeStepCols)
 			case '<':
+				pp.ResizePaneBy(resizeStepCols)
+			case '>':
 				pp.ResizePaneBy(-resizeStepCols)
 			}
 		}

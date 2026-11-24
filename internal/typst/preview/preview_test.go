@@ -558,11 +558,11 @@ func TestPreviewKeyboardResizeShortcuts(t *testing.T) {
 	outlineBefore := tab.GetNode(outlineID).W
 	w0 := pp.GetView().Width
 
-	// '>' widens the preview pane by resizeStepCols without touching the fixed left sidebar.
+	// '<' moves the divider left (widening the right-docked preview) without touching the fixed left sidebar.
 	outBuf.Reset()
-	pp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, '>', 0, ""))
+	pp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, '<', 0, ""))
 	if got := pp.GetView().Width; got != w0+resizeStepCols {
-		t.Fatalf("expected '>' to widen preview from %d to %d, got %d", w0, w0+resizeStepCols, got)
+		t.Fatalf("expected '<' to widen preview from %d to %d, got %d", w0, w0+resizeStepCols, got)
 	}
 	if got := tab.GetNode(outlineID).W; got != outlineBefore {
 		t.Fatalf("expected fixed left sidebar width %d unchanged, got %d", outlineBefore, got)
@@ -571,18 +571,18 @@ func TestPreviewKeyboardResizeShortcuts(t *testing.T) {
 	sim.Show()
 	screen.RunPostShowHooks()
 	if !strings.Contains(outBuf.String(), "\x1b[2J") || !strings.Contains(outBuf.String(), "\x1bP0;1;0q") {
-		t.Fatal("expected '>' resize to trigger synchronized ED 2 clear + Sixel re-emit")
+		t.Fatal("expected '<' resize to trigger synchronized ED 2 clear + Sixel re-emit")
 	}
 
-	// '<' narrows back to w0.
-	pp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, '<', 0, ""))
+	// '>' moves the divider right (narrowing preview back to w0).
+	pp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, '>', 0, ""))
 	if got := pp.GetView().Width; got != w0 {
-		t.Fatalf("expected '<' to narrow preview back to %d, got %d", w0, got)
+		t.Fatalf("expected '>' to narrow preview back to %d, got %d", w0, got)
 	}
 
-	// Repeated '<' clamps cleanly at MinPreviewWidth.
+	// Repeated '>' clamps cleanly at MinPreviewWidth.
 	for i := 0; i < 20; i++ {
-		pp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, '<', 0, ""))
+		pp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, '>', 0, ""))
 	}
 	if got := pp.GetView().Width; got != MinPreviewWidth {
 		t.Fatalf("expected preview width to clamp at MinPreviewWidth=%d, got %d", MinPreviewWidth, got)
