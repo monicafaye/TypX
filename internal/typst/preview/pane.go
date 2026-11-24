@@ -642,9 +642,15 @@ func (pp *PreviewPane) Display() {
 		return
 	}
 
-	// Detect layout shift (resize, tab bar appear/disappear, divider drag).
+	// Detect layout shift (resize, tab bar appear/disappear, divider drag, sidebar dock).
 	if pp.lastEmitX != pp.view.X || pp.lastEmitY != pp.view.Y ||
 		pp.lastEmitW != pp.view.Width || pp.lastEmitH != pp.view.Height {
+		if pp.lastEmitX >= 0 && pp.mgr != nil {
+			// Force a full screen sync so tcell redraws unchanged blank cells in
+			// any newly exposed area (e.g. trailing whitespace in the editor after
+			// docking Outline) and wipes stale Sixel pixels before re-emitting.
+			pp.mgr.pendingSync = true
+		}
 		if pp.deck != nil {
 			pp.preserveRatioRebuild()
 		}
@@ -1296,10 +1302,12 @@ func (m *Manager) detachFromTab(tab *action.Tab) bool {
 }
 
 func (m *Manager) postShow() {
+	synced := false
 	if m.pendingSync {
 		m.pendingSync = false
 		if screen.Screen != nil {
 			screen.Screen.Sync()
+			synced = true
 		}
 	}
 	if action.Tabs == nil || len(action.Tabs.List) == 0 {
@@ -1312,6 +1320,10 @@ func (m *Manager) postShow() {
 	pp := m.paneForTab(tab)
 	if pp == nil {
 		return
+	}
+	if synced {
+		pp.sixelDirty = true
+		pp.clearPending = true
 	}
 	pp.emitSixelIfDirty(m.resolveOutput())
 }

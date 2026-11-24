@@ -358,6 +358,76 @@ func TestPreviewPaneSurfacesCompileError(t *testing.T) {
 	}
 }
 
+func TestPreviewGeometryShiftTriggersFullScreenSync(t *testing.T) {
+	sim, bp := initPreviewTestEnv(t)
+	SetCapsForTest(TerminalCaps{Sixel: true, CellW: 10, CellH: 20, Source: "test", Probed: true})
+
+	SetCompiler(&fakeCompiler{pages: 2})
+	var outBuf bytes.Buffer
+	SetOutput(&outBuf)
+	Init()
+
+	pp, ok := Open(bp, false)
+	if !ok || pp == nil {
+		t.Fatal("preview.Open failed")
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !pp.IsCompiling() && pp.viewport != nil
+	})
+
+	// Initial emit should not need a full screen sync because no prior Sixel was drawn.
+	defaultManager.pendingSync = false
+	pp.Display()
+	if defaultManager.pendingSync {
+		t.Fatal("initial preview Display should not set pendingSync before first emit")
+	}
+	sim.Show()
+	screen.RunPostShowHooks()
+	if outBuf.Len() == 0 {
+		t.Fatal("expected initial Sixel emission")
+	}
+	origX := pp.GetView().X
+	origW := pp.GetView().Width
+
+	// Dock a left sidebar (like Outline) so Preview shifts right and narrows.
+	tab := action.MainTab()
+	if tab.Node.DockLeft(28) == 0 {
+		t.Fatal("DockLeft failed")
+	}
+	tab.Resize()
+	if pp.GetView().X <= origX || pp.GetView().Width >= origW {
+		t.Fatalf("expected preview to shift right and narrow: before=(X=%d,W=%d) after=(X=%d,W=%d)",
+			origX, origW, pp.GetView().X, pp.GetView().Width)
+	}
+
+	outBuf.Reset()
+	pp.Display()
+	if !defaultManager.pendingSync {
+		t.Fatal("expected pendingSync=true when previously emitted preview shifts geometry")
+	}
+	sim.Show()
+	screen.RunPostShowHooks()
+	if defaultManager.pendingSync {
+		t.Fatal("expected postShow to consume pendingSync")
+	}
+	if outBuf.Len() == 0 {
+		t.Fatal("expected Sixel re-emission after geometry shift sync")
+	}
+
+	// Subsequent idle frame must not trigger another sync or Sixel write.
+	outBuf.Reset()
+	pp.Display()
+	if defaultManager.pendingSync {
+		t.Fatal("idle frame after geometry shift should not re-trigger pendingSync")
+	}
+	sim.Show()
+	screen.RunPostShowHooks()
+	if outBuf.Len() != 0 {
+		t.Fatalf("expected zero bytes on idle frame after shift, got %d", outBuf.Len())
+	}
+}
+
 func minInt(a, b int) int {
 	if a < b {
 		return a
