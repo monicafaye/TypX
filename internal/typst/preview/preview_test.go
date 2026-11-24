@@ -414,6 +414,12 @@ func TestPreviewGeometryShiftTriggersFullScreenSync(t *testing.T) {
 	if outBuf.Len() == 0 {
 		t.Fatal("expected Sixel re-emission after geometry shift sync")
 	}
+	emitted := outBuf.String()
+	if !strings.Contains(emitted, "\x1b[?2026h\x1b[?25l\x1b[0m\x1b[2J") ||
+		!strings.Contains(emitted, "\x1bP0;1;0q") ||
+		!strings.HasSuffix(emitted, "\x1b[?2026l") {
+		t.Fatalf("expected synchronized ED 2 + Sixel re-emission, got prefix=%q", emitted[:minInt(len(emitted), 60)])
+	}
 
 	// Subsequent idle frame must not trigger another sync or Sixel write.
 	outBuf.Reset()
@@ -425,6 +431,97 @@ func TestPreviewGeometryShiftTriggersFullScreenSync(t *testing.T) {
 	screen.RunPostShowHooks()
 	if outBuf.Len() != 0 {
 		t.Fatalf("expected zero bytes on idle frame after shift, got %d", outBuf.Len())
+	}
+}
+
+func TestPreviewMouseDragDefersSixelAndClearsCleanly(t *testing.T) {
+	sim, bp := initPreviewTestEnv(t)
+	SetCapsForTest(TerminalCaps{Sixel: true, CellW: 10, CellH: 20, Source: "test", Probed: true})
+
+	SetCompiler(&fakeCompiler{pages: 2})
+	var outBuf bytes.Buffer
+	SetOutput(&outBuf)
+	Init()
+
+	pp, ok := Open(bp, false)
+	if !ok || pp == nil {
+		t.Fatal("preview.Open failed")
+	}
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !pp.IsCompiling() && pp.viewport != nil
+	})
+
+	// Initial Sixel emission.
+	pp.Display()
+	sim.Show()
+	screen.RunPostShowHooks()
+	if outBuf.Len() == 0 {
+		t.Fatal("expected initial Sixel emission")
+	}
+
+	tab := action.MainTab()
+	dividerX := pp.GetView().X - 1
+	dividerY := pp.GetView().Y + 2
+
+	// Press Button1 on the vertical divider to start dragging.
+	outBuf.Reset()
+	tab.HandleEvent(tcell.NewEventMouse(dividerX, dividerY, tcell.Button1, 0, ""))
+	if !tab.IsResizing() {
+		t.Fatalf("expected tab.IsResizing()=true after clicking divider at x=%d", dividerX)
+	}
+	sim.Clear()
+	pp.Display()
+	sim.Show()
+	screen.RunPostShowHooks()
+
+	// First drag frame must clear Sixel with synchronized ED 2 and NOT emit a Sixel bitmap.
+	dragStartOut := outBuf.String()
+	if !strings.Contains(dragStartOut, "\x1b[2J") {
+		t.Fatalf("expected ED 2 screen clear at drag start, got %q", dragStartOut)
+	}
+	if strings.Contains(dragStartOut, "\x1bP0;1;0q") {
+		t.Fatal("must not emit Sixel bitmap while actively dragging divider")
+	}
+
+	// Dragging right across several columns must emit zero Sixel bytes and show placeholder text.
+	outBuf.Reset()
+	tab.HandleEvent(tcell.NewEventMouse(dividerX+12, dividerY, tcell.Button1, 0, ""))
+	sim.Clear()
+	pp.Display()
+	sim.Show()
+	screen.RunPostShowHooks()
+	if outBuf.Len() != 0 {
+		t.Fatalf("expected zero raw output on intermediate drag frame, got %d bytes", outBuf.Len())
+	}
+
+	var placeholder strings.Builder
+	v := pp.GetView()
+	for y := v.Y; y < v.Y+v.Height; y++ {
+		for x := v.X; x < v.X+v.Width; x++ {
+			r, _, _, _ := sim.GetContent(x, y)
+			placeholder.WriteRune(r)
+		}
+	}
+	if !strings.Contains(placeholder.String(), "Resizing preview...") {
+		t.Fatalf("expected resize placeholder during drag, got %q", placeholder.String())
+	}
+
+	// Releasing mouse button ends drag and emits a single fresh Sixel frame at the new width.
+	outBuf.Reset()
+	tab.HandleEvent(tcell.NewEventMouse(dividerX+12, dividerY, tcell.ButtonNone, 0, ""))
+	if tab.IsResizing() {
+		t.Fatal("expected tab.IsResizing()=false after mouse release")
+	}
+	sim.Clear()
+	pp.Display()
+	sim.Show()
+	screen.RunPostShowHooks()
+	releaseOut := outBuf.String()
+	if !strings.Contains(releaseOut, "\x1bP0;1;0q") {
+		t.Fatalf("expected fresh Sixel emission after drag release, got len=%d", len(releaseOut))
+	}
+	if pp.GetView().X != dividerX+13 {
+		t.Fatalf("expected preview X=%d after dragging divider right by 12, got %d", dividerX+13, pp.GetView().X)
 	}
 }
 

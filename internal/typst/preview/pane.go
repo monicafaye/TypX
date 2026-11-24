@@ -106,6 +106,8 @@ type PreviewPane struct {
 	lastEmitY    int
 	lastEmitW    int
 	lastEmitH    int
+	vpTargetW    int
+	vpTargetH    int
 
 	mu            sync.Mutex
 	closed        bool
@@ -156,6 +158,10 @@ func (pp *PreviewPane) SetActive(b bool) {
 	pp.active = b
 }
 
+func (pp *PreviewPane) isTabResizing() bool {
+	return pp.tab != nil && pp.tab.IsResizing()
+}
+
 func (pp *PreviewPane) Resize(w, h int) {
 	if w < 0 {
 		w = 0
@@ -166,7 +172,7 @@ func (pp *PreviewPane) Resize(w, h int) {
 	changed := pp.view.Width != w || pp.view.Height != h
 	pp.view.Width = w
 	pp.view.Height = h
-	if changed && pp.deck != nil {
+	if changed && pp.deck != nil && !pp.isTabResizing() {
 		pp.preserveRatioRebuild()
 	}
 }
@@ -345,6 +351,8 @@ func (pp *PreviewPane) rebuildViewport(clearRight bool) bool {
 	pp.scrollY = vp.ScrollY // strictly clamped to [0, MaxScrollY]
 	prev := pp.viewport
 	pp.viewport = vp
+	pp.vpTargetW = dstW
+	pp.vpTargetH = viewH
 	pp.sixelDirty = true
 	if clearRight || prev == nil || prev.DstW != vp.DstW || prev.DstH != vp.DstH || pp.hadOverlayTxt {
 		pp.clearPending = true
@@ -642,23 +650,47 @@ func (pp *PreviewPane) Display() {
 		return
 	}
 
-	// Detect layout shift (resize, tab bar appear/disappear, divider drag, sidebar dock).
+	imgRows := pp.imageRows()
+
+	// While the user drags a split border, clear any visible Sixel once and show
+	// a lightweight placeholder so resizing is lag-free and never ghosts Sixel.
+	if pp.isTabResizing() {
+		if pp.lastEmitX >= 0 {
+			if pp.mgr != nil {
+				pp.mgr.pendingSync = true
+			}
+			pp.lastEmitX = -1
+			pp.lastEmitY = -1
+		}
+		pp.sixelDirty = false
+		if imgRows > 0 {
+			pp.hadOverlayTxt = true
+			pp.drawResizePlaceholder(imgRows)
+		}
+		if pp.hasFooter() {
+			pp.drawFooter(pp.view.Y + pp.view.Height - 1)
+		}
+		return
+	}
+
+	// Detect layout shift (resize, tab bar appear/disappear, divider drag end, sidebar dock).
 	if pp.lastEmitX != pp.view.X || pp.lastEmitY != pp.view.Y ||
 		pp.lastEmitW != pp.view.Width || pp.lastEmitH != pp.view.Height {
 		if pp.lastEmitX >= 0 && pp.mgr != nil {
-			// Force a full screen sync so tcell redraws unchanged blank cells in
-			// any newly exposed area (e.g. trailing whitespace in the editor after
-			// docking Outline) and wipes stale Sixel pixels before re-emitting.
+			// Force a synchronized full-screen erase + tcell sync so ConPTY /
+			// terminals wipe stale Sixel pixels in any newly exposed area before
+			// re-emitting the relocated preview.
 			pp.mgr.pendingSync = true
 		}
 		if pp.deck != nil {
-			pp.preserveRatioRebuild()
+			dstW, viewH := pp.targetPixelSize()
+			if pp.viewport == nil || pp.vpTargetW != dstW || pp.vpTargetH != viewH {
+				pp.preserveRatioRebuild()
+			}
 		}
 		pp.sixelDirty = true
 		pp.clearPending = true
 	}
-
-	imgRows := pp.imageRows()
 
 	// Only write cell text into the image area when we have NO rendered Sixel yet.
 	if pp.viewport == nil && imgRows > 0 {
@@ -735,6 +767,42 @@ func (pp *PreviewPane) drawPlaceholder(imgRows int) {
 		}
 		drawCentered(centerY+2, sub, errStyle)
 	}
+}
+
+func (pp *PreviewPane) drawResizePlaceholder(imgRows int) {
+	w := pp.view.Width
+	centerY := pp.view.Y + imgRows/2
+
+	drawCentered := func(y int, text string, st tcell.Style) {
+		if y < pp.view.Y || y >= pp.view.Y+imgRows {
+			return
+		}
+		rw := runewidth.StringWidth(text)
+		startX := pp.view.X
+		if rw < w {
+			startX += (w - rw) / 2
+		}
+		col := startX
+		maxX := pp.view.X + w
+		for _, r := range text {
+			cw := runewidth.RuneWidth(r)
+			if cw <= 0 {
+				cw = 1
+			}
+			if col+cw > maxX {
+				break
+			}
+			screen.SetContent(col, y, r, nil, st)
+			col += cw
+		}
+	}
+
+	drawCentered(centerY, "Resizing preview...", config.DefStyle.Bold(true))
+	dimStyle := config.GetColor("comment")
+	if dimStyle == config.DefStyle {
+		dimStyle = config.DefStyle
+	}
+	drawCentered(centerY+1, fmt.Sprintf("%d cols", w), dimStyle)
 }
 
 func (pp *PreviewPane) drawFooter(y int) {
@@ -839,8 +907,10 @@ func (pp *PreviewPane) pageLabel() string {
 	return fmt.Sprintf("p.%d/%d", pp.viewport.FirstPage, pp.viewport.PageCount)
 }
 
-// emitSixelIfDirty writes the synchronized Sixel sequence after screen.Show().
-func (pp *PreviewPane) emitSixelIfDirty(out io.Writer) {
+// emitSixelIfDirty writes the Sixel sequence after screen.Show().
+// When wrapSync is true, the sequence is wrapped in DEC Mode 2026 synchronized
+// output markers; callers already inside a synchronized frame pass false.
+func (pp *PreviewPane) emitSixelIfDirty(out io.Writer, wrapSync bool) {
 	if !pp.sixelDirty || pp.viewport == nil || len(pp.viewport.Sixel) == 0 {
 		return
 	}
@@ -866,10 +936,12 @@ func (pp *PreviewPane) emitSixelIfDirty(out io.Writer) {
 
 	var buf bytes.Buffer
 	buf.Grow(len(pp.viewport.Sixel) + 256)
-	buf.WriteString("\x1b[?2026h") // begin synchronized update
-	buf.WriteString("\x1b7")      // DECSC: save editor cursor & SGR state
-	buf.WriteString("\x1b[?25l")  // hide cursor during sixel draw
-	buf.WriteString("\x1b[0m")    // reset SGR so clearing spaces use default bg
+	if wrapSync {
+		buf.WriteString("\x1b[?2026h") // begin synchronized update
+	}
+	buf.WriteString("\x1b7")     // DECSC: save editor cursor & SGR state
+	buf.WriteString("\x1b[?25l") // hide cursor during sixel draw
+	buf.WriteString("\x1b[0m")   // reset SGR so clearing spaces use default bg
 	if clearRight {
 		blank := strings.Repeat(" ", pp.view.Width)
 		for r := 0; r < imgRows; r++ {
@@ -882,7 +954,9 @@ func (pp *PreviewPane) emitSixelIfDirty(out io.Writer) {
 	if !pp.active && !screen.UseFake() {
 		buf.WriteString("\x1b[?25h")
 	}
-	buf.WriteString("\x1b[?2026l") // end synchronized update
+	if wrapSync {
+		buf.WriteString("\x1b[?2026l") // end synchronized update
+	}
 
 	EnableVTOutput()
 	_, _ = out.Write(buf.Bytes())
@@ -1327,30 +1401,42 @@ func (m *Manager) detachFromTab(tab *action.Tab) bool {
 }
 
 func (m *Manager) postShow() {
-	synced := false
-	if m.pendingSync {
-		m.pendingSync = false
-		if screen.Screen != nil {
-			screen.Screen.Sync()
-			synced = true
+	out := m.resolveOutput()
+	var pp *PreviewPane
+	if action.Tabs != nil && len(action.Tabs.List) > 0 {
+		if tab := action.MainTab(); tab != nil {
+			pp = m.paneForTab(tab)
 		}
 	}
-	if action.Tabs == nil || len(action.Tabs.List) == 0 {
+
+	if m.pendingSync {
+		m.pendingSync = false
+		// Wrap ED 2 + tcell Sync + Sixel re-emit in one synchronized update so
+		// Windows Terminal / ConPTY (where tcell's cScreen.Sync does not issue
+		// ED 2 and ConPTY skips unchanged blank cells) reliably wipes every
+		// stale Sixel bitmap with zero flicker.
+		if out != nil {
+			EnableVTOutput()
+			_, _ = io.WriteString(out, "\x1b[?2026h\x1b[?25l\x1b[0m\x1b[2J")
+		}
+		if screen.Screen != nil {
+			screen.Screen.Sync()
+		}
+		if pp != nil && !pp.isTabResizing() {
+			pp.sixelDirty = true
+			pp.clearPending = false // ED 2 just cleared the entire viewport
+			pp.emitSixelIfDirty(out, false)
+		}
+		if out != nil {
+			_, _ = io.WriteString(out, "\x1b[?2026l")
+		}
 		return
 	}
-	tab := action.MainTab()
-	if tab == nil {
+
+	if pp == nil || pp.isTabResizing() {
 		return
 	}
-	pp := m.paneForTab(tab)
-	if pp == nil {
-		return
-	}
-	if synced {
-		pp.sixelDirty = true
-		pp.clearPending = true
-	}
-	pp.emitSixelIfDirty(m.resolveOutput())
+	pp.emitSixelIfDirty(out, true)
 }
 
 func (m *Manager) pruneStaleTabs() {
