@@ -967,28 +967,35 @@ func (op *OutlinePane) itemStyle(it Item, isSelected, isCurrent bool) tcell.Styl
 	if isSelected {
 		return lookupStyle("selection", config.DefStyle.Reverse(true))
 	}
-	if isCurrent {
-		if st, ok := config.Colorscheme["cursor-line"]; ok {
-			return st.Bold(true)
-		}
-		return config.DefStyle.Bold(true)
-	}
+
+	var base tcell.Style
 	switch it.Kind {
 	case KindHeading:
 		if it.Level == 1 {
-			return lookupStyle("identifier.class", config.DefStyle.Bold(true))
+			base = lookupStyle("identifier.class", config.DefStyle.Bold(true))
+		} else if it.Level == 2 {
+			base = lookupStyle("identifier", config.DefStyle)
+		} else {
+			base = config.DefStyle
 		}
-		if it.Level == 2 {
-			return lookupStyle("identifier", config.DefStyle)
-		}
-		return config.DefStyle
 	case KindFigure:
-		return lookupStyle("type", config.DefStyle)
+		base = lookupStyle("type", config.DefStyle)
 	case KindLabel:
-		return lookupStyle("symbol.tag", lookupStyle("comment", config.DefStyle))
+		base = lookupStyle("symbol.tag", lookupStyle("comment", config.DefStyle))
 	default:
-		return config.DefStyle
+		base = config.DefStyle
 	}
+
+	if isCurrent {
+		// In micro/TypX colorschemes, cursor-line is a single-color link storing
+		// the highlight background in its foreground slot (matching BufWindow).
+		if st, ok := config.Colorscheme["cursor-line"]; ok {
+			fg, _, _ := st.Decompose()
+			return base.Background(fg).Bold(true)
+		}
+		return base.Bold(true)
+	}
+	return base
 }
 
 func lookupStyle(name string, fallback tcell.Style) tcell.Style {

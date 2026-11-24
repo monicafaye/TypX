@@ -757,3 +757,47 @@ func TestOutlineLSPEnrichmentAndStaleVersionSafety(t *testing.T) {
 		t.Fatalf("expected '= Added After' present after stale LSP callback ignored: %#v", op.Items())
 	}
 }
+
+func TestOutlineCurrentItemUsesCursorLineAsBackground(t *testing.T) {
+	origScheme := config.Colorscheme
+	origDef := config.DefStyle
+	t.Cleanup(func() {
+		config.Colorscheme = origScheme
+		config.DefStyle = origDef
+	})
+
+	for _, schemeName := range []string{"typx-dark", "typx-light"} {
+		t.Run(schemeName, func(t *testing.T) {
+			var parsed []string
+			cs, err := config.LoadColorscheme(schemeName, &parsed)
+			if err != nil {
+				t.Fatalf("LoadColorscheme(%q): %v", schemeName, err)
+			}
+			config.Colorscheme = cs
+
+			clStyle, ok := config.Colorscheme["cursor-line"]
+			if !ok {
+				t.Fatalf("%s missing cursor-line link", schemeName)
+			}
+			wantBG, _, _ := clStyle.Decompose()
+			wantH1FG, _, _ := config.Colorscheme["identifier.class"].Decompose()
+
+			op := &OutlinePane{}
+			got := op.itemStyle(Item{Kind: KindHeading, Level: 1, Title: "Foundations"}, false, true)
+			gotFG, gotBG, gotAttr := got.Decompose()
+
+			if gotBG != wantBG {
+				t.Fatalf("%s: expected cursor-line color %v as background, got %v", schemeName, wantBG, gotBG)
+			}
+			if gotFG == wantBG {
+				t.Fatalf("%s: foreground must not equal cursor-line background (%v)", schemeName, wantBG)
+			}
+			if gotFG != wantH1FG {
+				t.Fatalf("%s: expected level-1 heading fg %v preserved on active item, got %v", schemeName, wantH1FG, gotFG)
+			}
+			if gotAttr&tcell.AttrBold == 0 {
+				t.Fatalf("%s: expected active item to be bold", schemeName)
+			}
+		})
+	}
+}
