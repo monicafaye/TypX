@@ -20,6 +20,7 @@ import (
 	"github.com/monicafaye/TypX/internal/config"
 	"github.com/monicafaye/TypX/internal/display"
 	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/views"
 )
 
 const (
@@ -37,6 +38,9 @@ const (
 
 	// scrollStepPx is the default continuous scroll step in pixels per key/wheel notch.
 	scrollStepPx = 140
+
+	// resizeStepCols is the column delta per keyboard preview resize ('<' / '>').
+	resizeStepCols = 6
 
 	// minEditDebounceMs prevents rapid typing from spawning overlapping compiles.
 	minEditDebounceMs = 300
@@ -1104,9 +1108,70 @@ func (pp *PreviewPane) HandleEvent(event tcell.Event) {
 				pp.sixelDirty = true
 				pp.clearPending = true
 				pp.ScheduleCompile(true)
+			case '>':
+				pp.ResizePaneBy(resizeStepCols)
+			case '<':
+				pp.ResizePaneBy(-resizeStepCols)
 			}
 		}
 	}
+}
+
+// ResizePaneBy adjusts the docked preview pane's width by delta columns
+// (positive widens preview, negative narrows preview), clamping so both the
+// preview and its adjacent editor split retain usable widths.
+func (pp *PreviewPane) ResizePaneBy(delta int) bool {
+	if delta == 0 || pp.tab == nil || pp.tab.Node == nil {
+		return false
+	}
+	parent, idx := findNodeParent(pp.tab.Node, pp.ID())
+	if parent == nil || parent.Kind != views.STHoriz || idx <= 0 {
+		return false
+	}
+	children := parent.Children()
+	left := children[idx-1]
+	cur := children[idx]
+	totW := left.W + cur.W
+
+	minPrev := MinPreviewWidth + 1 // +1 column reserved for the vertical split divider
+	minLeft := MinEditorWidth
+	if left.X > 0 {
+		minLeft++
+	}
+	if totW < minPrev+minLeft {
+		return false
+	}
+
+	nextPrevW := cur.W + delta
+	if nextPrevW < minPrev {
+		nextPrevW = minPrev
+	}
+	if nextPrevW > totW-minLeft {
+		nextPrevW = totW - minLeft
+	}
+	if nextPrevW == cur.W {
+		return false
+	}
+	if !left.ResizeSplit(totW - nextPrevW) {
+		return false
+	}
+	pp.tab.Resize()
+	return true
+}
+
+func findNodeParent(n *views.Node, id uint64) (*views.Node, int) {
+	if n == nil || id == 0 {
+		return nil, -1
+	}
+	for i, c := range n.Children() {
+		if c.IsLeaf() && c.ID() == id {
+			return n, i
+		}
+		if p, idx := findNodeParent(c, id); p != nil {
+			return p, idx
+		}
+	}
+	return nil, -1
 }
 
 // Manager coordinates per-tab docked PreviewPanes, compiler wiring, buffer

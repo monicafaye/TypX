@@ -273,10 +273,11 @@ func previewBottomBarContext(pp *preview.PreviewPane) display.BottomBarContext {
 	hints := []display.BottomBarItem{
 		{Key: "↑/↓", Label: "Scroll", Priority: 1},
 		{Key: "[/]", Label: "Page", Priority: 2},
-		{Key: "+/-", Label: "Zoom", Priority: 2},
+		{Key: "</>", Label: "Width", Priority: 2},
+		{Key: "+/-", Label: "Zoom", Priority: 3},
 		{Key: "t", Label: "Dark", Action: "pane:t", Priority: 0, Active: pp.IsInverted()},
 		{Key: "m", Label: "Trim", Action: "pane:m", Priority: 1, Active: pp.IsTrimMargins()},
-		{Key: "r", Label: "Reload", Action: "pane:r", Priority: 2},
+		{Key: "r", Label: "Reload", Action: "pane:r", Priority: 3},
 		{Key: "Esc", Label: "Editor", Action: "pane:Esc", Priority: 0},
 		{Key: "q", Label: "Close", Action: "pane:q", Priority: 0, AlignRight: true},
 		{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 3, AlignRight: true},
@@ -286,7 +287,7 @@ func previewBottomBarContext(pp *preview.PreviewPane) display.BottomBarContext {
 		BadgeAccent: "math",
 		Hints:       hints,
 		MenuRows:    typstKeyMenuRows(true, false, true, false),
-		MenuTip:     "Preview focused · Wheel/j/k scroll · t invert · m trim · Esc returns to editor",
+		MenuTip:     "Preview focused · Wheel/j/k scroll · </> width · t invert · m trim · Esc returns to editor",
 	}
 }
 

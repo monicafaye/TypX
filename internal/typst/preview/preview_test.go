@@ -525,6 +525,70 @@ func TestPreviewMouseDragDefersSixelAndClearsCleanly(t *testing.T) {
 	}
 }
 
+func TestPreviewKeyboardResizeShortcuts(t *testing.T) {
+	sim, bp := initPreviewTestEnv(t)
+	SetCapsForTest(TerminalCaps{Sixel: true, CellW: 10, CellH: 20, Source: "test", Probed: true})
+	SetCompiler(&fakeCompiler{pages: 2})
+	var outBuf bytes.Buffer
+	SetOutput(&outBuf)
+	Init()
+
+	pp, ok := Open(bp, true)
+	if !ok || pp == nil {
+		t.Fatal("preview.Open failed")
+	}
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !pp.IsCompiling() && pp.viewport != nil
+	})
+	pp.Display()
+	sim.Show()
+	screen.RunPostShowHooks()
+
+	// Dock a fixed left sidebar (like Outline) to ensure '>' / '<' only trade width with the editor.
+	tab := action.MainTab()
+	outlineID := tab.Node.DockLeft(26)
+	if outlineID == 0 {
+		t.Fatal("DockLeft failed")
+	}
+	tab.Resize()
+	pp.Display()
+	sim.Show()
+	screen.RunPostShowHooks()
+
+	outlineBefore := tab.GetNode(outlineID).W
+	w0 := pp.GetView().Width
+
+	// '>' widens the preview pane by resizeStepCols without touching the fixed left sidebar.
+	outBuf.Reset()
+	pp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, '>', 0, ""))
+	if got := pp.GetView().Width; got != w0+resizeStepCols {
+		t.Fatalf("expected '>' to widen preview from %d to %d, got %d", w0, w0+resizeStepCols, got)
+	}
+	if got := tab.GetNode(outlineID).W; got != outlineBefore {
+		t.Fatalf("expected fixed left sidebar width %d unchanged, got %d", outlineBefore, got)
+	}
+	pp.Display()
+	sim.Show()
+	screen.RunPostShowHooks()
+	if !strings.Contains(outBuf.String(), "\x1b[2J") || !strings.Contains(outBuf.String(), "\x1bP0;1;0q") {
+		t.Fatal("expected '>' resize to trigger synchronized ED 2 clear + Sixel re-emit")
+	}
+
+	// '<' narrows back to w0.
+	pp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, '<', 0, ""))
+	if got := pp.GetView().Width; got != w0 {
+		t.Fatalf("expected '<' to narrow preview back to %d, got %d", w0, got)
+	}
+
+	// Repeated '<' clamps cleanly at MinPreviewWidth.
+	for i := 0; i < 20; i++ {
+		pp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, '<', 0, ""))
+	}
+	if got := pp.GetView().Width; got != MinPreviewWidth {
+		t.Fatalf("expected preview width to clamp at MinPreviewWidth=%d, got %d", MinPreviewWidth, got)
+	}
+}
+
 func TestPreviewFooterResponsiveAndEllipsis(t *testing.T) {
 	base := " *Preview | p.1/10 (0%)"
 
