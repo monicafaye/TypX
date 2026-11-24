@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://github.com/monicafaye/TypX/releases"><img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-2b8a9e?style=flat-square" alt="Platforms: Windows, macOS, Linux" /></a>
   <a href="https://typst.app/"><img src="https://img.shields.io/badge/built%20for-Typst-239dad?style=flat-square" alt="Built for Typst" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-4c9a2a?style=flat-square" alt="License: GPLv3" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4c9a2a?style=flat-square" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/go-1.23%2B-00add8?style=flat-square" alt="Go 1.23+" />
 </p>
 
@@ -303,6 +303,6 @@ Inside TypX, press `Ctrl+E` and run `help` or open a specific topic:
 
 ## Credits and license
 
-TypX is licensed under the [GNU General Public License v3.0](LICENSE).
+TypX is licensed under the [MIT License](LICENSE).
 
 TypX is derived from [zyedidia/micro](https://github.com/zyedidia/micro) (`v2.0.15`), whose original code is licensed under the MIT License in [LICENSE-MICRO](LICENSE-MICRO), and uses [tinymist](https://github.com/Myriad-Dreamin/tinymist) for Typst language intelligence and live preview. See [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY) for third-party dependency licenses.

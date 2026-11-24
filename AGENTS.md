@@ -73,4 +73,4 @@ CGO_ENABLED=1 go test -race ./...
 
 ## Licensing
 
-TypX is licensed under **GNU GPLv3** (`LICENSE`). Upstream `zyedidia/micro` code remains under its original **MIT License** (`LICENSE-MICRO`), and third-party notices live in `LICENSE-THIRD-PARTY`. Do not remove or alter existing upstream copyright notices.
+TypX is licensed under the **MIT License** (`LICENSE`). Upstream `zyedidia/micro` code remains under its original **MIT License** (`LICENSE-MICRO`), and third-party notices live in `LICENSE-THIRD-PARTY`. Do not remove or alter existing upstream copyright notices.
