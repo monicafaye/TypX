@@ -1,188 +1,224 @@
 # TypX — System Architecture (`ARCHITECTURE.md`)
 
-## 1. High-Level System Architecture
+TypX is a single-binary Go terminal editor for [Typst](https://typst.app/), forked from **`zyedidia/micro` (`v2.0.15`)**. Typst modules (`internal/typst/*`, `internal/lsp`) stay decoupled from one another and integrate into `micro` through narrow **seams** wired in one composition root (`internal/typst/features`), while delegating Typst compilation, semantic analysis, and live preview rendering to an out-of-process **`tinymist`** binary.
 
-TypX is a single-binary Go terminal application forked from **`zyedidia/micro` (`v2.0.15`)**. Typst-native features live in modular Go packages (`internal/typst/*` and `internal/lsp/*`) that integrate into `micro`'s buffer, rendering, action, and split-pane layers through narrow hooks, while delegating Typst compilation, semantic analysis, and live preview rendering to an out-of-process **`tinymist`** binary.
+---
+
+## 1. Module & Dependency Graph
+
+Solid arrows (`-->`) denote Go compile-time imports (`A --> B` means `A` imports `B`). Dashed arrows (`-.->`) denote out-of-process stdio/HTTP IPC or spawned CLI compiles.
 
 ```mermaid
 flowchart TB
-    User["Terminal User (tcell / Keyboard, Mouse & Sixel)"]
+    Cmd["cmd/typx (CLI, Startup, Main Event Loop)"]
 
-    subgraph TypX["TypX Go Process (cmd/typx)"]
-        EventLoop["Main Event Loop (cmd/typx/typx.go)"]
-        Action["internal/action (BufPane, Commands, Keybindings, UI Queue)"]
-        Views["internal/views (Tab & Split Tree + DockLeft/DockRight)"]
-        Display["internal/display (BufWindow, StatusLine, InfoWindow)"]
-        Buffer["internal/buffer (LineArray, Highlighter, Messages, Observers)"]
-        Config["internal/config (Settings, go:embed Runtime, Lua VM)"]
-        Screen["internal/screen (tcell Screen + PostShow Sixel Hooks)"]
-
-        subgraph TypstPkg["internal/typst"]
-            Features["features (Registration & Cross-Package Wiring)"]
-            Conceal["conceal (Math Lexer, Symbol Table, VisualMap)"]
-            Outline["outline (Incremental Parser, OutlinePane)"]
-            Preview["preview (Sixel Encoder, PNG Deck, PreviewPane)"]
-            Shortcuts["shortcuts (Mode Detector, Snippets, Smart Pairs)"]
-        end
-
-        subgraph LSPPkg["internal/lsp"]
-            Discovery["discovery (Cross-Platform Binary Finder)"]
-            Client["client (JSON-RPC 2.0 Stdio Transport)"]
-            Tinymist["tinymist (Diagnostics, Completion, Root Resolver, Browser Preview)"]
-            Proxy["preview_proxy (Local HTTP/WS Proxy & Live Progress Overlay)"]
-        end
+    subgraph Composition["Composition Root"]
+        Features["internal/typst/features (Seam Wiring, Statusline, BottomBar Provider)"]
     end
 
-    TinymistProc["tinymist subprocess (LSP, Preview Server, PNG Export)"]
-    Browser["OS Default Browser (Optional Companion Live Preview)"]
+    subgraph TypstModules["Typst Modules"]
+        Mode["internal/typst (Lexical Mode Detector — stdlib only)"]
+        Conceal["internal/typst/conceal (Symbol Table, VisualMap)"]
+        Shortcuts["internal/typst/shortcuts (Wrappers, Snippets, Smart Pairs)"]
+        Outline["internal/typst/outline (Incremental Parser, OutlinePane)"]
+        Preview["internal/typst/preview (Sixel, PNG Deck, PDF Anchor Index, PreviewPane)"]
+        LSP["internal/lsp (tinymist JSON-RPC Client, Root Resolver, Browser Proxy)"]
+    end
 
-    User <--> EventLoop
-    EventLoop --> Action
-    Action --> Views
-    Action --> Buffer
-    Features --> Action
+    subgraph MicroCore["Inherited micro Core (Narrow Seams Only)"]
+        Action["internal/action (BufPane, Tab, UI Queue, Registries, BottomBar Clicks)"]
+        Display["internal/display (BufWindow, StatusLine, BottomBar)"]
+        Buffer["internal/buffer (LineArray, Messages, Lifecycle Observers)"]
+        Screen["internal/screen (tcell Screen, PostShow Hooks)"]
+        Views["internal/views (Split Tree + DockLeft/DockRight — stdlib only)"]
+        Config["internal/config (Settings, Embedded Runtime, Lua VM)"]
+    end
+
+    TinymistLSP["tinymist lsp (stdio JSON-RPC 2.0 + preview server)"]
+    TinymistCLI["tinymist compile (per-compile PNG + parallel PDF)"]
+    Browser["OS Browser (Optional Companion Preview)"]
+
+    Cmd --> Features
+    Cmd --> LSP
+    Cmd --> Preview
+    Cmd --> Action
+    Cmd --> Buffer
+    Cmd --> Display
+    Cmd --> Screen
+    Cmd --> Config
+
+    Features --> Mode
+    Features --> Conceal
     Features --> Shortcuts
     Features --> Outline
     Features --> Preview
-    Features --> Tinymist
-    Display --> Buffer
-    Display --> Conceal
-    Display --> Screen
+    Features --> LSP
+    Features --> Action
+    Features --> Buffer
+    Features --> Display
+    Features --> Config
+
+    Conceal --> Mode
+    Shortcuts --> Action
+    Shortcuts --> Buffer
+    Outline --> Mode
+    Outline --> Action
+    Outline --> Buffer
+    Outline --> Display
+    Outline --> Screen
+    Outline --> Config
+    Preview --> Action
+    Preview --> Buffer
+    Preview --> Display
     Preview --> Screen
-    Preview --> TinymistProc
-    Views --> Display
-    Views --> Outline
-    Views --> Preview
-    Config --> Buffer
-    Config --> Action
-    Tinymist --> Client
-    Tinymist --> Discovery
-    Tinymist --> Proxy
-    Client <-->|"JSON-RPC 2.0 (stdin/stdout)"| TinymistProc
-    Proxy <-->|"HTTP / WebSocket"| TinymistProc
-    Proxy <-->|"HTTP / WebSocket"| Browser
+    Preview --> Views
+    Preview --> Config
+    LSP --> Action
+    LSP --> Buffer
+    LSP --> Display
+    LSP --> Config
+
+    Action --> Buffer
+    Action --> Display
+    Action --> Screen
+    Action --> Views
+    Action --> Config
+    Display --> Conceal
+    Display --> Buffer
+    Display --> Screen
+    Display --> Views
+    Display --> Config
+    Buffer --> Screen
+    Buffer --> Config
+    Screen --> Config
+
+    LSP <-.->|"JSON-RPC 2.0 / HTTP+WS"| TinymistLSP
+    LSP <-.->|"Local Proxy HTTP+WS"| Browser
+    Preview -.->|"exec: --format png & pdf"| TinymistCLI
 ```
 
 ---
 
-## 2. Repository & Package Layout
+## 2. Lifecycle Ordering: Startup, Event Loop & Teardown
 
-```text
-TypX/
-├── cmd/
-│   └── typx/                     # CLI flags (--check, --no-lsp, --preview), startup, main event loop
-├── internal/
-│   ├── action/                   # BufPane, Tab, keybinding dispatch (incl. Alt+Shift fallback), UI queue, bottom bar clicks, extension registry
-│   ├── buffer/                   # LineArray, EventHandler, Messages/Gutter, Observer lifecycle hooks
-│   ├── clipboard/                # Upstream micro clipboard integration
-│   ├── config/                   # TypX config dir, typst.* settings, trimmed embedded runtime assets
-│   ├── display/                  # BufWindow (concealment render hook), UIWindow, StatusLine (narrow-pane compaction), BottomBar
-│   ├── lsp/                      # Lightweight Go LSP client & browser preview orchestration for tinymist
-│   │   ├── client.go             # JSON-RPC 2.0 Content-Length transport, request correlation, stderr ring
-│   │   ├── discovery.go          # Cross-platform tinymist binary resolution & version probe
-│   │   ├── protocol.go           # Minimal LSP 3.17 structs + UTF-16 <-> rune column conversion
-│   │   ├── tinymist.go           # Debounced doc sync, multi-file project root resolution, diagnostics/hover/completion
-│   │   ├── preview_proxy.go      # Local proxy for tinymist browser preview with live compile status & caching
-│   │   ├── browser.go            # Cross-platform URL opener (cmd/start, open, xdg-open)
-│   │   ├── job_windows.go        # Windows Job Object subprocess cleanup (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
-│   │   └── lsp.go                # Public Init/Shutdown/Check entry points & InlinePreviewHandler bridge
-│   ├── screen/                   # tcell screen wrapper + PostShow hooks for Sixel output
-│   ├── shell/                    # Upstream micro shell/terminal integration
-│   ├── typst/                    # Pure-Go Typst editing, outline, and in-terminal preview packages
-│   │   ├── mode.go               # Cached O(1) lexical mode detector (Markup / Math / Code / Raw)
-│   │   ├── features/             # Central wiring of Typst commands, actions, bottom bar hints, outline, and preview
-│   │   ├── conceal/              # Unicode symbol table, word-boundary-safe scanner, VisualMap
-│   │   ├── outline/              # Incremental heading/figure/label parser + left-docked OutlinePane
-│   │   ├── preview/              # Cross-platform Sixel capability probe, PNG deck, right-docked PreviewPane
-│   │   └── shortcuts/            # Math/markup wrappers, snippet templates, smart pairing
-│   └── views/                    # Micro split-pane layout tree (extended with DockLeft / DockRight splits)
-├── runtime/
-│   ├── syntax/                   # Trimmed: typst, bibtex, filemanager, markdown, yaml, toml, json, ini, patch, micro, default
-│   ├── colorschemes/             # typx-dark, typx-light, and core micro colorschemes
-│   ├── help/                     # Built-in TypX help topics (including typst.md)
-│   └── plugins/                  # Bundled Lua plugins (incl. filemanager and Typst-guarded autoclose)
-├── tests/e2e/                    # Headless editor & CLI E2E suites + mocktinymist test server
-├── tools/                        # Build metadata helpers (build-date.go, info-plist.go, testgen.go)
-├── go.mod                        # module github.com/monicafaye/TypX
-├── AGENTS.md                     # Contributor & AI-agent conventions and invariants
-├── ARCHITECTURE.md               # This document
-└── README.md                     # User guide, installation, shortcuts, configuration
-```
+Filesystem inspection does not reveal runtime ordering constraints; these sequences are load-bearing:
+
+1. **Config Directory Precedence (`internal/config/config.go`)**:
+   `-config-dir` flag → `TYPX_CONFIG_HOME` → `<os.UserConfigDir()>/typx` → `~/.config/typx`.
+2. **Startup Sequence (`cmd/typx/typx.go`)**:
+   - Parse flags (`-check`, `-no-lsp`, `-preview`, `-config-dir`, and dynamic `-<option>` overrides) and initialize config/settings.
+   - If `-check`, run `runCheck` (bounded `tinymist` version probe + environment check) and exit without touching the terminal screen.
+   - Call **`preview.ProbeTerminal()` *before* `screen.Init()`**: terminal capability/cell-pixel queries read stdin/stdout directly before `tcell` takes ownership of the TTY.
+   - Initialize `screen`, clipboard, and `config.LoadAllPlugins()`.
+   - Run **`features.Init()`** *before* **`lsp.Init(lsp.Options{StartPreview, InitialFiles})`**: `features.Init()` installs `lsp.SetInlinePreviewHandler`, which `lsp.ShouldUseInlinePreview()` reads to decide whether `-preview` opens inline or in the browser. Passing `InitialFiles` lets LSP resolve the Typst project root before `LoadInput` runs.
+   - Run `action.InitBindings()` → `action.InitCommands()` → plugin `preinit` → `action.InitGlobals()` → `LoadInput(args)` → `action.InitTabs(b)`.
+   - If `-preview` and inline preview is selected, open `preview.Open(cp, false)` on the active `.typ` `BufPane` now that tabs exist.
+   - Run plugin `init` → `postinit` → `config.InitColorscheme()` → `StartAutoSave()`, then enter `DoEvent()`.
+3. **Single `DoEvent()` Iteration (`cmd/typx/typx.go`)**:
+   1. `buffer.FlushObservers()` — delivers coalesced edits/cursor moves before rendering so conceal caches, outline highlights, and LSP state reflect the current frame.
+   2. Render all panes, tabs, and `InfoBar` → `screen.Screen.Show()` → **`screen.RunPostShowHooks()`** (emits Sixel frames *after* `tcell` cell diffing completes).
+   3. Block on `select` across shell jobs, autosave, `screen.Events`, `screen.DrawChan()`, **`action.UIQueueReady()`** (`action.DrainUIQueue()`), and termination signals.
+   4. Dispatch terminal events in precedence order: `EventResize` → active `InfoBar` prompt → **`action.HandleBottomBarEvent`** (bottom bar / `Alt+G` key menu) → `action.Tabs.HandleEvent`.
+4. **Teardown (`exit(rc)` in `cmd/typx/typx.go`)**:
+   `preview.Shutdown()` (cancels active compiles, cleans temp PNG/PDF dirs) → `lsp.Shutdown()` (terminates `tinymist` LSP/preview subprocesses, reinforced on Windows by Job Objects) → `b.Fini()` on unmodified buffers → `screen.Screen.Fini()`.
 
 ---
 
-## 3. Integration Hooks into `zyedidia/micro`
+## 3. Seams into `zyedidia/micro`
 
-To keep maintenance predictable and preserve `micro`'s stability, TypX isolates its core integrations to a small set of well-defined hooks:
+To keep upstream `micro` diffs minimal and localized, TypX interacts with `micro` core through seven narrow seams:
 
-1. **Startup, Branding & Teardown (`cmd/typx/typx.go`, `internal/config/config.go`)**:
-   - Resolves config directory via `TYPX_CONFIG_HOME`, `<os.UserConfigDir()>/typx`, then `~/.config/typx`.
-   - Adds `--check`, `--no-lsp`, and `--preview` CLI flags.
-   - Startup order: `config.LoadAllPlugins()` -> `features.Init()` -> `lsp.Init(...)` -> `action.InitBindings()` -> `action.InitCommands()` -> `LoadInput()`.
-   - `exit(rc)` calls `lsp.Shutdown()` to reap `tinymist` subprocesses across every exit path.
-
-2. **Main-Loop UI Callback Queue (`internal/action/uiqueue.go`)**:
-   - `action.EnqueueUI(func())` provides an unbounded, non-blocking, FIFO queue drained on the main goroutine inside `DoEvent()`.
-   - **Invariant**: All background goroutines (LSP transport, preview compilation, async outline updates) MUST marshal mutations to `buffer.Buffer`, `display`, `action.Tabs`, `action.InfoBar`, and `tcell.Screen` through `action.EnqueueUI`.
-
-3. **Buffer Lifecycle Observers (`internal/buffer/hooks.go`)**:
-   - `buffer.RegisterObserver(Observer)` delivers `OnBufferOpen`, `OnBufferChange`, `OnBufferSave`, `OnBufferClose`, and `OnCursorMove` synchronously on the main goroutine.
-   - `OnBufferChange` and `OnCursorMove` coalesce per main-loop iteration (changes always precede cursor moves), and pending changes flush before save/close.
-
-4. **Extension & Statusline Registries (`internal/action/extension.go`, `internal/display/statusline.go`)**:
-   - `action.RegisterCommand`, `action.RegisterAction`, and `action.RegisterDefaultBinding` allow TypX features to register without hardcoding into `micro` maps (precedence: user `bindings.json` > TypX default > `micro` default).
-   - `display.SetStatusInfoFn` powers `$(typst.mode)`, `$(typst.words)`, and `$(typst.lsp)` statusline segments.
-
-5. **Concealment Rendering Hook (`internal/display/bufwindow.go`, `internal/display/softwrap.go`)**:
-   - `BufWindow` renders concealed `conceal.LineView` glyphs on non-active lines (or non-active tokens when `typst.concealMode == "token"`) for `.typ` buffers while bypassing concealment on the active cursor line.
-   - `LocFromVisual` maps screen coordinates back to true buffer rune indices through `LineView.VisualToBuf`.
-
-6. **Docked Splits & Post-Show Graphics (`internal/views/splits.go`, `internal/screen/screen.go`)**:
-   - `views.Node` supports fixed-width `DockLeft` (Document Outline) and proportional `DockRight` (in-terminal Sixel Preview) panes that coexist cleanly with normal editor splits.
-   - `screen.RegisterPostShowHook` runs immediately after `tcell.Screen.Show()` so Sixel preview graphics paint cleanly over reserved terminal cells without being clobbered by `tcell` cell updates.
+| Seam | Location | Interface & Invariant |
+| --- | --- | --- |
+| **Main-Loop UI Queue** | `internal/action/uiqueue.go` | `action.EnqueueUI(func())` schedules callbacks onto the main goroutine (drained in `DoEvent()`). All worker goroutines marshal buffer, pane, tab, `InfoBar`, and screen mutations through this seam. |
+| **Buffer Lifecycle Observers** | `internal/buffer/hooks.go` | `buffer.RegisterObserver(Observer)` delivers `OnBufferOpen`, `OnBufferChange`, `OnBufferSave`, `OnBufferClose`, and `OnCursorMove` synchronously on the main goroutine. Changes and cursor moves coalesce per frame (changes always precede cursor moves and flush before save/close). Key per-document state on `b.SharedBuffer` or `b.AbsPath` and check `b.Shared()` on close; `OnBufferClose` is not guaranteed on `SIGTERM`/panic. |
+| **Extension Registries & Input Hooks** | `internal/action/extension.go` | `RegisterCommand`, `RegisterAction`, `RegisterDefaultBinding` (precedence: user `bindings.json` > TypX default > `micro` default), `RegisterRuneHook`, and `RegisterPreActionHook` (`Backspace`, `InsertNewline`). Registration panics on duplicates so collisions fail loudly in tests. |
+| **Statusline & Bottom Bar** | `internal/display/statusline.go`, `internal/display/bottombar.go`, `internal/action/bottombar.go` | `display.SetStatusInfoFn` feeds `$(typst.mode)`, `$(typst.words)`, and `$(typst.lsp)`. `display.SetBottomBarProvider` supplies context hints and `Alt+G` menu rows; `action.HandleBottomBarEvent` intercepts clicks and menu keys before pane dispatch. |
+| **Display-Only Concealment** | `internal/display/bufwindow.go`, `internal/display/softwrap.go` | `BufWindow` renders `conceal.LineView` glyphs on `.typ` buffers without altering buffer bytes, and `LocFromVisual` maps clicks/visual coordinates back to buffer rune indices via `LineView.VisualToBuf`. |
+| **Docked Split Panes** | `internal/views/splits.go` | `Node.DockLeft(width)` (fixed-width Outline) and `Node.DockRight(width)` (proportional Preview) attach auxiliary panes alongside normal editor splits. |
+| **Post-Show Graphics** | `internal/screen/screen.go` | `screen.RegisterPostShowHook` runs after `tcell.Screen.Show()` so raw terminal graphics (Sixel) paint over reserved cells without `tcell` overwriting them. |
 
 ---
 
-## 4. Subsystem Designs
+## 4. Cross-Module Seams & Composition Root
 
-### 4.1 Cursor-Aware Concealment Engine (`internal/typst/conceal`)
+`internal/typst/features/features.go` (`features.Init()`) is the single composition root that wires TypX's decoupled modules together. Each seam keeps the owning module deep and testable with fake adapters:
 
-TypX avoids cursor/mouse drift by generating an explicit per-line bidirectional coordinate map (`LineView`):
-
-- **Lexical Context**: Uses `internal/typst/mode.go`'s cached line-entry state to detect multi-line `$ ... $` blocks and raw fences in $O(1)$ per visible line.
-- **Word-Boundary Safety**: Alphabetic Typst symbols (`alpha`, `in`, `sum`, `dot`) only match on non-identifier boundaries so words like `sin`, `index`, or `summary` are never corrupted. Multi-character operators (`->`, `<=`, `!=`) match greedily by longest prefix.
-- **Zero Buffer Mutation**: Saved files always contain exact raw Typst source.
-- **Active-Line / Active-Token Unconceal**: Defaults to `"line"` (`typst.concealMode`), bypassing remapping on the line currently being edited.
-
-### 4.2 `tinymist` LSP, Multi-File Roots & Browser Preview (`internal/lsp`)
-
-- **Discovery (`discovery.go`)**: Checks `typst.tinymistPath`, `PATH`, and OS-specific install locations (WinGet, Scoop, Cargo, Homebrew, `~/.local/bin`, VS Code extensions). Startup avoids blocking probes; `typx --check` runs a bounded version check.
-- **Transport (`client.go`, `protocol.go`)**: Spawns `tinymist lsp` over stdio JSON-RPC 2.0 (`Content-Length` framing) with dedicated reader/writer goroutines, UTF-16 <-> rune column conversion, and a stderr ring buffer surfaced via `:tinymist-status`.
-- **Multi-File Project Root Resolution (`tinymist.go`)**: Resolves the Typst project root (`FindProjectRoot`) by inspecting `typst.toml`, root-relative `/...` imports, `.git`, and relative `../` imports so included chapter/template files compile and lint against the right workspace root.
-- **Browser Preview & Local Proxy (`tinymist.go`, `preview_proxy.go`, `browser.go`)**: Launches `tinymist` live preview (with partial rendering and debounced cursor sync) fronted by a local HTTP/WebSocket proxy that injects compile-progress status, supports ETag/prefetch caching, and cleanly tears down child processes on exit (including Windows Job Objects).
-
-### 4.3 Native In-Terminal Sixel Preview (`internal/typst/preview`)
-
-- **Terminal Capability Probe (`terminal.go`, `terminal_unix.go`, `terminal_windows.go`)**: Detects Sixel support and terminal cell pixel dimensions across platforms (CSI `16t`/`14t`, DA1, `TIOCGWINSZ`, Windows Terminal / Konsole / foot / WezTerm / xterm).
-- **Continuous Page Deck (`deck.go`, `sixel.go`)**: Compiles document pages via `tinymist` into PNGs, lazily decodes visible pages, scales with a pure-Go box-area filter, encodes 248-color RLE Sixel streams, and supports continuous clamped scrolling, zoom, margin trimming, and dark-mode inversion.
-- **Right-Docked Pane (`pane.go`)**: Integrates into the tab split tree via `DockRight`, auto-recompiles on debounced buffer changes, supports keyboard (`<`/`>`) and mouse-drag width resizing (deferring Sixel redraws while `tab.IsResizing()` is active), wipes stale Sixel pixels atomically via DEC Mode 2026 synchronized `ED 2` + `screen.Screen.Sync()` on geometry shifts/close/tab switch to prevent Windows ConPTY ghosting, and bridges to `:preview` / `Alt+P` through `lsp.InlinePreviewHandler` (avoiding import cycles between `internal/lsp` and `internal/typst/preview`).
-
-### 4.4 Document Outline Sidebar (`internal/typst/outline`)
-
-- **Incremental Parser (`parser.go`)**: Pure-Go scanner extracting `= Headings`, `#figure(...)` captions, and optional `<label>` anchors while skipping fenced raw blocks and nested `/* ... */` comments; optionally enriched by `tinymist` `textDocument/documentSymbol`.
-- **Docked Sidebar (`pane.go`)**: Left-docked pane (`Alt+O` / `:outline`) with live cursor section tracking, keyboard/mouse jump-and-center, and interactive `/` filtering.
-
-### 4.5 Context-Aware Shortcuts, Bottom Bar & Bundled File Manager (`internal/typst/shortcuts`, `internal/typst/features`, `runtime/plugins/filemanager`)
-
-- **Shortcuts & Smart Pairing (`internal/typst/shortcuts`)**: Context-aware commands (`Alt+M`, `Alt+Shift+M`, `Alt+B`, `Alt+E`, `Alt+Left`/`Alt+Right`), indentation-aware `$0` snippet templates (`:insert` / `Alt+I`), Typst-aware smart pairing (`$`, `[`, `(`, `{`, `"`) guided by `internal/typst/mode.go`, and Windows `Alt+Shift` keybinding fallback (`altShiftFallbackKeyEvents` in `internal/action/events.go`).
-- **Context-Aware Clickable Bottom Bar (`internal/display/bottombar.go`, `internal/action/bottombar.go`, `internal/typst/features/bottombar.go`)**: Renders priority-filtered, mouse-clickable shortcut hints tailored to the active context (Markup, Math, Code, Outline, Preview, Files, Help) with live toggle indicators and clickable diagnostic pills.
-- **Bundled File Manager (`runtime/plugins/filemanager/`)**: MIT-licensed `filemanager` plugin (`Alt+T` / `:tree`) patched for `micro v2.0.15` (`LocFromVisual`) and Windows file-handle safety (`os.Create` handle cleanup).
+| Seam | Interface | Production Adapter (`features.Init()`) | Purpose |
+| --- | --- | --- | --- |
+| `lsp.SetInlinePreviewHandler` | `lsp.InlinePreviewHandler` (`SupportsInline`, `IsOpen`, `Open`, `Toggle`, `Close`, `ToggleInvert`, `ToggleTrim`) | `inlinePreviewAdapter` delegating to `internal/typst/preview` | Routes `:preview` / `Alt+P` / `--preview` between inline Sixel preview and browser preview without `lsp` ↔ `preview` imports. |
+| `preview.SetCompiler` | `preview.Compiler` (`CompilePages(ctx, CompileRequest) (*DocumentDeck, error)`) | `&preview.TinymistCompiler{...}` (swapped for fakes in tests) | Isolates PNG/PDF subprocess compilation from `PreviewPane` state and viewport rendering. |
+| `preview.TinymistCompiler.DiscoverFn` & `preview.SetRootResolver` | `TinymistDiscoveryFunc`, `RootResolverFunc` | `lsp.Discover` and `lsp.FindProjectRoot` | Reuses LSP binary discovery and multi-file root resolution without importing `internal/lsp`. |
+| `outline.SetSymbolProvider` | `outline.SymbolProvider` | `lsp.RequestDocumentSymbols` → `convertLSPSymbols` | Enriches the pure-Go outline parser with `tinymist` `textDocument/documentSymbol` results when LSP is active. |
+| `outline.SetJumpHandler` | `outline.JumpHandler` | `syncPreviewToOutlineItem` → `preview.PreviewPane.ScrollToSection` & `lsp.ScrollPreviewTo` | Repositions inline Sixel and/or browser preview when an outline entry is selected without coupling `outline` to `preview` or `lsp`. |
+| `shortcuts.SetModeDetector` | `func(lines [][]byte, line, col int) shortcuts.Mode` | `typst.DetectModeAt` (with rune-to-character cluster column mapping) | Injects canonical lexical mode detection into `shortcuts` (note: `shortcuts/mode.go` retains a standalone fallback; `internal/typst` is stdlib-only, so this seam is historical rather than cycle-required). |
 
 ---
 
-## 5. Package Dependency Rules
+## 5. Modules (Interface, Implementation & Invariants)
 
-To prevent Go import cycles:
-- `internal/typst` (`mode.go`) and `internal/typst/conceal` MUST NOT import `internal/action` or `internal/display`.
-- `internal/lsp` and `internal/typst/preview` MUST NOT import each other directly; cross-package coordination is wired in `internal/typst/features`.
-- Core `micro` packages (`action`, `buffer`, `config`, `display`) MUST NOT import `internal/lsp` or `internal/typst/features`.
+### 5.1 Lexical Mode & Concealment (`internal/typst`, `internal/typst/conceal`)
+
+- **Interface**: `typst.ScanLineState` / `DetectModeAtLine` / `DetectModeAt` (cached per-line lexical state: `Markup`, `Math`, `Code`, `Raw`); `conceal.BuildLineView` returning `LineView` with `VisualToBuf` / `BufToVisual`; `conceal.ToggleSetting`.
+- **Implementation**: Line-entry state caching tracks multi-line `$ ... $` blocks and raw fences in `O(1)` per visible line. Longest-match symbol scanning covers Unicode math symbols, operators (`->`, `<=`, `!=`), and compound dotted Typst identifiers (`in.not`, `subset.eq.not`, `inter.big`) while enforcing non-identifier boundaries so words like `sin`, `index`, or `summary` stay intact.
+- **Invariants**:
+  - Concealment is strictly display-only and never mutates buffer bytes.
+  - Active cursor line (default `typst.concealMode == "line"`) or active token (`"token"`) bypasses concealment.
+  - Register compound dotted Typst math symbols explicitly in `internal/typst/conceal/symbols.go` so longest-match scanning does not split prefixes like `in` inside `in.not`.
+
+### 5.2 `tinymist` LSP & Browser Preview (`internal/lsp`)
+
+- **Interface**: `lsp.Init(Options)`, `lsp.Shutdown()`, `lsp.Check(io.Writer)`, `lsp.Discover`, `lsp.FindProjectRoot`, `lsp.RequestDocumentSymbols`, `lsp.ScrollPreviewTo`, `lsp.IsPreviewActive`, `lsp.ShouldUseInlinePreview`, plus commands/actions (`:preview`, `:diagnostics`, `:tinymist-status`, `:tinymist-restart`, `:hover`, `:lsp-complete`).
+- **Implementation**:
+  - Binary discovery checks `typst.tinymistPath`, `PATH`, and OS-specific install paths (WinGet, Scoop, Cargo, Homebrew, `~/.local/bin`, VS Code extensions). Startup reads `ServerInfo.Version` from the LSP `initialize` response rather than running a blocking `--version` probe.
+  - Stdio JSON-RPC 2.0 transport (`Content-Length` framing) with dedicated reader/writer goroutines, UTF-16 ↔ rune column conversion, debounced document sync, and a stderr ring buffer surfaced via `:tinymist-status`.
+  - `FindProjectRoot` resolves multi-file project roots in order: `typst.toml` → ancestor matching `#import "/..."` → `.git` → `../` depth → file directory.
+  - Companion browser preview launches `tinymist.doStartPreview` (`--no-open`, `--task-id`, `--partial-rendering true`, `--root`) fronted by a local HTTP/WebSocket proxy that injects compile-progress overlays and ETag/prefetch caching.
+- **Invariants**:
+  - Offline editing works cleanly when `tinymist` is absent or `--no-lsp` is set.
+  - `tinymist.doStartPreview`, `tinymist.scrollPreview`, and `tinymist.doKillPreview` require the explicit task ID string as `args[0]`.
+  - Child processes never leak stdout/stderr onto the `tcell` screen and are reaped on exit (including Windows Job Objects with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`).
+
+### 5.3 Native In-Terminal Sixel Preview & PDF Anchor Sync (`internal/typst/preview`)
+
+- **Interface**: `preview.ProbeTerminal`, `preview.SupportsSixel`, `preview.Init`, `preview.Shutdown`, `preview.Open` / `Toggle` / `CloseForTab` / `PaneForTab`, `PreviewPane.ScrollToSection(SectionTarget)`, `DocumentDeck.ResolveSectionScrollY`, and `ParsePDFAnchors([]byte) *DocumentAnchors`.
+- **Implementation**:
+  - **Terminal probe**: Cross-platform Sixel & cell-pixel detection (CSI `16t`/`14t`, DA1, `TIOCGWINSZ`, Windows Terminal / Konsole / foot / WezTerm / xterm).
+  - **Parallel PNG + PDF compile (`TinymistCompiler.CompilePages`)**: Stages unsaved buffers to a sibling shadow file so relative/root imports still resolve, runs `tinymist compile --format png` for per-page raster images, and in parallel runs a non-fatal `tinymist compile --format pdf` to extract rendered coordinates via the zero-dependency PDF parser (`ParsePDFAnchors`, walking `/Pages`, `/Names /Dests`, and `/Outlines`).
+  - **Three-tier section jump (`ResolveSectionScrollY`)**: Resolves an outline target to a continuous pixel `scrollY` (accounting for margin trimming) via (1) exact `<label>` named destination from `/Names /Dests`, (2) DP monotonic alignment of source headings against PDF `/Outlines` bookmarks (with 1-to-1 sandwiched-gap filling for math/macro headings), and (3) bracketed interpolation between surrounding PDF anchors or proportional buffer-line fallback.
+  - **Continuous deck & Sixel output**: Lazily decodes visible pages, scales with a pure-Go box-area filter, encodes 248-color RLE Sixel streams, and supports clamped scrolling, zoom, margin trimming, dark-mode inversion, and keyboard (`<`/`>`) + mouse-drag width resizing inside a `DockRight` pane.
+- **Invariants**:
+  - Set `cmd.Dir = rootDir` alongside `--root` when invoking `tinymist compile` so Windows relative ancestor checks do not fail.
+  - Capture `canceled := ctx.Err() == context.Canceled` *before* calling `cancel()` when dispatching compile results to `action.EnqueueUI`.
+  - On Windows ConPTY, any preview geometry shift, pane close, tab switch, or divider drag start triggers `pendingSync` and wipes atomically inside DEC Mode 2026 (`\x1b[?2026h` + `\x1b[0m\x1b[2J` → `screen.Screen.Sync()` → Sixel emit → `\x1b[?2026l`). Always reset SGR (`\x1b[0m`) before clearing Sixel regions and defer Sixel redraws while `tab.IsResizing()` is true.
+
+### 5.4 Document Outline Sidebar (`internal/typst/outline`)
+
+- **Interface**: `outline.Init`, `outline.SetSymbolProvider`, `outline.SetJumpHandler`, `outline.EffectiveWidth`, and `OutlinePane` (`action.Pane`, `action.AuxiliaryPane`, `display.Window`).
+- **Implementation**: Pure-Go incremental parser extracts `= Headings`, `#figure(...)` captions, and `<label>` anchors while skipping raw fences and nested `/* ... */` comments (switching to async snapshot parsing above 5,000 lines), optionally enriched by LSP symbols. Renders in a `DockLeft` pane (`Alt+O` / `:outline`) with live cursor tracking, jump-and-center, interactive `/` filtering, and `JumpHandler` dispatch to preview sync.
+- **Invariants**:
+  - `micro` stores `cursor-line`'s highlight color in the foreground slot — decompose `fg` and apply `.Background(fg)` for active outline rows.
+  - Enforce minimum width clamping (`EffectiveWidth`) so the sidebar hides cleanly below `MinTerminalWidth` (50 columns) without starving editor panes.
+
+### 5.5 Shortcuts, Bottom Bar & Bundled Plugins (`internal/typst/shortcuts`, `internal/typst/features`, `runtime/plugins/`)
+
+- **Interface**: `shortcuts.RegisterAll`, `shortcuts.HandleTypstRune` / `HandleTypstBackspace` / `HandleTypstNewline`; `features.Init` (wires statusline `$(typst.mode)` / `$(typst.words)` caches and `buildBottomBarContext`).
+- **Implementation**:
+  - Context-aware math/markup actions (`Alt+M`, `Alt+Shift+M`, `Alt+B`, `Alt+E`, `Alt+Left`/`Alt+Right`), indentation-aware `$0` snippet templates (`:insert` / `Alt+I`), and mode-aware smart pairing (`$`, `[`, `(`, `{`, `"`).
+  - Priority-filtered, mouse-clickable bottom bar + `Alt+G` key menu tailored to active context (Markup, Math, Code, Outline, Preview, Files, Help) with live toggle indicators and clickable diagnostic pills.
+  - Bundled MIT-licensed `filemanager` plugin (`Alt+T` / `:tree`) and Typst-guarded `autoclose` plugin.
+- **Invariants**:
+  - Preserve `altShiftFallbackKeyEvents` (`internal/action/events.go`) so Windows ConPTY `ModAlt | ModShift` events match uppercase `Alt-M` bindings.
+  - In bundled Lua plugins: close `*os.File` handles from `os.Create` (prevents Windows locks), use `LocFromVisual`, and keep `autoclose.lua` yielding on `.typ` buffers when `typst.smartPairs` is enabled.
+  - Statuslines, preview footers, and the bottom bar must compact or drop low-priority items gracefully in narrow 3-pane layouts.
+
+---
+
+## 6. Import Dependency Rules
+
+Verified against `go list ./...`. Route new cross-module interactions through `internal/typst/features` seams rather than adding direct imports:
+
+- **`internal/typst` (`mode.go`) & `internal/views`**: Remain stdlib-only.
+- **`internal/typst/conceal`**: Imports only `internal/typst` and `internal/util` (never `internal/action` or `internal/display`, since `display` imports `conceal`).
+- **`internal/lsp`, `internal/typst/preview`, `internal/typst/outline`**: Never import one another directly; coordinate through `features.Init()` seams (`InlinePreviewHandler`, `Compiler`/discovery/root resolver, `SymbolProvider`, `JumpHandler`).
+- **Inherited `micro` core (`action`, `buffer`, `config`, `display`, `screen`, `views`)**: Never import `internal/lsp`, `internal/typst/features`, `outline`, `preview`, or `shortcuts`. The sole Typst import inside `micro` core is `internal/display` → `internal/typst/conceal`.
