@@ -190,8 +190,15 @@ func EncodeSixel(img *image.RGBA) []byte {
 
 // cropWhitespace trims near-white outer margins around a rendered page, keeping pad pixels.
 func cropWhitespace(src *image.RGBA, pad int) *image.RGBA {
+	out, _, _ := cropWhitespaceWithBounds(src, pad)
+	return out
+}
+
+// cropWhitespaceWithBounds trims near-white outer margins around src and returns
+// the cropped image along with its top pixel offset and height in src coordinates.
+func cropWhitespaceWithBounds(src *image.RGBA, pad int) (*image.RGBA, int, int) {
 	if src == nil {
-		return nil
+		return nil, 0, 0
 	}
 	w, h := src.Bounds().Dx(), src.Bounds().Dy()
 	minX, minY := w, h
@@ -217,7 +224,7 @@ func cropWhitespace(src *image.RGBA, pad int) *image.RGBA {
 		}
 	}
 	if maxX < minX || maxY < minY {
-		return src
+		return src, 0, h
 	}
 	minX -= pad
 	minY -= pad
@@ -235,10 +242,11 @@ func cropWhitespace(src *image.RGBA, pad int) *image.RGBA {
 	if maxY >= h {
 		maxY = h - 1
 	}
-	rect := image.Rect(0, 0, maxX-minX+1, maxY-minY+1)
+	cropH := maxY - minY + 1
+	rect := image.Rect(0, 0, maxX-minX+1, cropH)
 	out := image.NewRGBA(rect)
 	draw.Draw(out, rect, src, image.Pt(minX, minY), draw.Src)
-	return out
+	return out, minY, cropH
 }
 
 // scaleArea performs box-averaged downscaling (crisp for anti-aliased text/math)

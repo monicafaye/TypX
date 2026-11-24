@@ -44,6 +44,11 @@ const (
 // with the buffer Version the symbols correspond to.
 type SymbolProvider func(b *buffer.Buffer, cb func(version uint64, symbols []Symbol)) bool
 
+// JumpHandler is invoked on the main UI goroutine whenever the user chooses
+// an entry in the Document Outline (via Enter or mouse click). allItems holds
+// the full unfiltered outline in document order.
+type JumpHandler func(bp *action.BufPane, item Item, allItems []Item)
+
 // EffectiveWidth computes a safe docked sidebar width for a terminal of termWidth
 // columns given configuredWidth (from typst.outlineWidth). Returns 0 when
 // termWidth < MinTerminalWidth.
@@ -604,6 +609,12 @@ func (op *OutlinePane) jumpToSelected() {
 	target.Relocate()
 	op.syncActiveSection()
 	op.returnFocus()
+
+	if op.mgr != nil {
+		if handler := op.mgr.getJumpHandler(); handler != nil {
+			handler(target, item, op.Items())
+		}
+	}
 }
 
 // HandleEvent processes keyboard and mouse events for the OutlinePane.
@@ -1061,6 +1072,7 @@ type Manager struct {
 
 	providerMu     sync.RWMutex
 	symbolProvider SymbolProvider
+	jumpHandler    JumpHandler
 }
 
 func newManager() *Manager {
@@ -1117,6 +1129,26 @@ func (m *Manager) getSymbolProvider() SymbolProvider {
 	p := m.symbolProvider
 	m.providerMu.RUnlock()
 	return p
+}
+
+// SetJumpHandler registers an optional callback invoked when the user selects
+// a section in the Document Outline (e.g., to reposition an open preview).
+// Pass nil to clear.
+func SetJumpHandler(h JumpHandler) {
+	defaultManager.setJumpHandler(h)
+}
+
+func (m *Manager) setJumpHandler(h JumpHandler) {
+	m.providerMu.Lock()
+	m.jumpHandler = h
+	m.providerMu.Unlock()
+}
+
+func (m *Manager) getJumpHandler() JumpHandler {
+	m.providerMu.RLock()
+	h := m.jumpHandler
+	m.providerMu.RUnlock()
+	return h
 }
 
 // PaneForTab returns the currently open OutlinePane on tab, or nil.

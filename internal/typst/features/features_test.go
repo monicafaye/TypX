@@ -1,8 +1,14 @@
 package features
 
 import (
+	"context"
+	"image"
+	"image/color"
+	"image/draw"
 	"testing"
+	"time"
 
+	"github.com/micro-editor/tcell/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -12,6 +18,8 @@ import (
 	"github.com/monicafaye/TypX/internal/display"
 	ulua "github.com/monicafaye/TypX/internal/lua"
 	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/typst/outline"
+	"github.com/monicafaye/TypX/internal/typst/preview"
 	"github.com/monicafaye/TypX/internal/typst/shortcuts"
 	lua "github.com/yuin/gopher-lua"
 )
@@ -176,4 +184,98 @@ func TestSmartPairHooksWiredThroughActionLayer(t *testing.T) {
 	assert.Equal(t, "  ", string(bp.Buf.LineBytes(1)))
 	assert.Equal(t, "}", string(bp.Buf.LineBytes(2)))
 	assert.Equal(t, buffer.Loc{X: 2, Y: 1}, bp.Cursor.Loc)
+}
+
+type stubAnchoredCompiler struct {
+	pages   int
+	anchors *preview.DocumentAnchors
+}
+
+func (s *stubAnchoredCompiler) CompilePages(ctx context.Context, req preview.CompileRequest) (*preview.DocumentDeck, error) {
+	imgs := make([]*image.RGBA, s.pages)
+	for i := 0; i < s.pages; i++ {
+		img := image.NewRGBA(image.Rect(0, 0, 400, 600))
+		draw.Draw(img, img.Bounds(), &image.Uniform{C: color.RGBA{255, 255, 255, 255}}, image.Point{}, draw.Src)
+		imgs[i] = img
+	}
+	deck := preview.NewDocumentDeckFromImages(imgs, time.Millisecond)
+	deck.SetAnchors(s.anchors)
+	return deck, nil
+}
+
+func TestOutlineSelectionRepositionsPreviewPane(t *testing.T) {
+	initTestEnv(t)
+	if sim, ok := screen.Screen.(tcell.SimulationScreen); ok {
+		sim.SetSize(140, 36)
+	}
+	preview.SetCapsForTest(preview.TerminalCaps{Sixel: true, CellW: 10, CellH: 20, Source: "test", Probed: true})
+	preview.SetCompiler(&stubAnchoredCompiler{
+		pages: 3,
+		anchors: &preview.DocumentAnchors{
+			Outlines: []preview.OutlineAnchor{
+				{Title: "Introduction", Depth: 1, PageIdx: 0, YFrac: 0.08},
+				{Title: "Methodology", Depth: 1, PageIdx: 1, YFrac: 0.45},
+				{Title: "Conclusion", Depth: 1, PageIdx: 2, YFrac: 0.15},
+			},
+		},
+	})
+	t.Cleanup(func() {
+		preview.Shutdown()
+		if tab := action.MainTab(); tab != nil {
+			outline.CloseForTab(tab)
+		}
+		buffer.CloseOpenBuffers()
+		action.DrainUIQueue()
+	})
+
+	doc := "= Introduction\nIntro body.\n\n= Methodology\nMethod details.\n\n= Conclusion\nFinal remarks.\n"
+	b := buffer.NewBufferFromString(doc, "paper.typ", buffer.BTDefault)
+	action.InitTabs([]*buffer.Buffer{b})
+	action.Tabs.Resize()
+	tab := action.MainTab()
+	bp := tab.CurPane()
+
+	pp, ok := preview.Open(bp, false)
+	require.True(t, ok)
+	require.NotNil(t, pp)
+
+	// Wait for mock compile to deliver the 3-page deck.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		action.DrainUIQueue()
+		if !pp.IsCompiling() && pp.MaxScrollY() > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.False(t, pp.IsCompiling())
+	require.Greater(t, pp.MaxScrollY(), 0)
+
+	// Initially preview is at page 1.
+	fp, _, total := pp.PageRange()
+	require.Equal(t, 3, total)
+	require.Equal(t, 1, fp)
+
+	// Open outline, select "Conclusion" (index 2), press Enter -> editor jumps AND preview repositions to page 3!
+	op, ok := outline.Open(bp, true)
+	require.True(t, ok)
+	require.NotNil(t, op)
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone, ""))
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone, ""))
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, ""))
+
+	assert.Equal(t, 6, bp.Cursor.Y, "editor cursor should jump to Conclusion line")
+	fp, _, _ = pp.PageRange()
+	assert.Equal(t, 3, fp, "preview pane should reposition to page 3 for Conclusion")
+
+	// Filter "/Method" in outline and press Enter -> preview repositions to page 2!
+	outline.Open(bp, true)
+	for _, r := range "/Method" {
+		action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone, ""))
+	}
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, ""))
+
+	assert.Equal(t, 3, bp.Cursor.Y, "editor cursor should jump to Methodology line")
+	fp, _, _ = pp.PageRange()
+	assert.Equal(t, 2, fp, "preview pane should reposition to page 2 for Methodology")
 }

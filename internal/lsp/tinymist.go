@@ -1043,6 +1043,42 @@ func (m *Manager) OnCursorMove(b *buffer.Buffer, ev buffer.CursorEvent) {
 	m.mu.Unlock()
 }
 
+// scrollPreviewTo immediately sends tinymist.scrollPreview for an explicit
+// navigation event (such as jumping via the Document Outline), canceling any
+// pending debounced cursor timer so no duplicate scroll is dispatched.
+func (m *Manager) scrollPreviewTo(b *buffer.Buffer, line, runeCol int) bool {
+	if !isTrackableTypst(b) || !m.atomicPreview.Load() {
+		return false
+	}
+	if line < 0 {
+		line = 0
+	}
+	if n := b.LinesNum(); n > 0 && line >= n {
+		line = n - 1
+	}
+	if runeCol < 0 {
+		runeCol = 0
+	}
+	absPath := b.AbsPath
+	lineBytes := b.LineBytes(line)
+	utf16Col := RuneColToUTF16(lineBytes, runeCol)
+
+	m.mu.Lock()
+	if !m.previewActive || m.shuttingDown || m.State() != StateReady || m.client == nil {
+		m.mu.Unlock()
+		return false
+	}
+	if m.cursorTimer != nil {
+		m.cursorTimer.Stop()
+		m.cursorTimer = nil
+	}
+	gen := m.gen
+	m.mu.Unlock()
+
+	go m.sendCursorScrollSync(gen, absPath, line, utf16Col)
+	return true
+}
+
 func (m *Manager) sendCursorScrollSync(gen uint64, absPath string, line, utf16Col int) {
 	m.mu.Lock()
 	if m.shuttingDown || m.gen != gen || !m.previewActive || m.State() != StateReady || m.client == nil {

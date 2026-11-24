@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -135,6 +136,37 @@ func (c *TinymistCompiler) CompilePages(ctx context.Context, req CompileRequest)
 		outTemplate,
 	}
 
+	// In parallel, compile a lightweight PDF to extract exact heading/label
+	// page + Y coordinates for outline-to-preview jump synchronization. PDF
+	// compilation is non-fatal and typically finishes faster than PNG rasterization.
+	pdfPath := filepath.Join(tmpDir, "outline.pdf")
+	pdfCtx, cancelPDF := context.WithCancel(ctx)
+	defer cancelPDF()
+	var anchors *DocumentAnchors
+	var pdfWG sync.WaitGroup
+	pdfWG.Add(1)
+	go func() {
+		defer pdfWG.Done()
+		defer os.Remove(pdfPath)
+		pdfArgs := []string{
+			"compile",
+			"--root", rootDir,
+			"--format", "pdf",
+			inputPath,
+			pdfPath,
+		}
+		pdfCmd := exec.CommandContext(pdfCtx, bin, pdfArgs...)
+		if rootDir != "" {
+			pdfCmd.Dir = rootDir
+		}
+		if err := pdfCmd.Run(); err != nil {
+			return
+		}
+		if pdfBytes, err := os.ReadFile(pdfPath); err == nil {
+			anchors = ParsePDFAnchors(pdfBytes)
+		}
+	}()
+
 	t0 := time.Now()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	// Set working directory to rootDir to avoid tinymist's unnormalized relative
@@ -145,6 +177,9 @@ func (c *TinymistCompiler) CompilePages(ctx context.Context, req CompileRequest)
 	out, err := cmd.CombinedOutput()
 	compileDur := time.Since(t0)
 	if err != nil {
+		// Cancel and wait for the PDF goroutine before removing tmpDir/shadowPath.
+		cancelPDF()
+		pdfWG.Wait()
 		os.RemoveAll(tmpDir)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -156,11 +191,13 @@ func (c *TinymistCompiler) CompilePages(ctx context.Context, req CompileRequest)
 		return nil, fmt.Errorf("%s", msg)
 	}
 
+	pdfWG.Wait()
 	deck, err := LoadDocumentDeckFromDir(tmpDir, compileDur)
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		return nil, err
 	}
+	deck.anchors = anchors
 	return deck, nil
 }
 
@@ -184,6 +221,8 @@ type pageSlot struct {
 	scaledW      int
 	scaledInvert bool
 	scaledTrim   bool
+	cropTop      int
+	cropH        int
 }
 
 // DocumentDeck holds a compiled document's per-page PNGs with lazy decoding,
@@ -197,6 +236,7 @@ type DocumentDeck struct {
 	totalHeight int
 	layoutW     int
 	layoutTrim  bool
+	anchors     *DocumentAnchors
 }
 
 // NewDocumentDeckFromImages builds an in-memory DocumentDeck directly from RGBA
@@ -297,6 +337,21 @@ func (d *DocumentDeck) CompileDuration() time.Duration {
 	return d.compileDur
 }
 
+// Anchors returns the PDF outline/destination anchors attached to this deck, if any.
+func (d *DocumentDeck) Anchors() *DocumentAnchors {
+	if d == nil {
+		return nil
+	}
+	return d.anchors
+}
+
+// SetAnchors attaches PDF outline/destination anchors to this deck.
+func (d *DocumentDeck) SetAnchors(a *DocumentAnchors) {
+	if d != nil {
+		d.anchors = a
+	}
+}
+
 func (p *pageSlot) ensureRaw() (*image.RGBA, error) {
 	if p.raw != nil {
 		return p.raw, nil
@@ -326,14 +381,17 @@ func (p *pageSlot) ensureScaled(dstW int, invert, trim bool) (*image.RGBA, error
 		return nil, err
 	}
 	src := raw
+	cropTop, cropH := 0, raw.Bounds().Dy()
 	if trim {
-		src = cropWhitespace(raw, 24)
+		src, cropTop, cropH = cropWhitespaceWithBounds(raw, 24)
 	}
 	scaled := scaleArea(src, dstW, invert)
 	p.scaled = scaled
 	p.scaledW = dstW
 	p.scaledInvert = invert
 	p.scaledTrim = trim
+	p.cropTop = cropTop
+	p.cropH = cropH
 	return scaled, nil
 }
 

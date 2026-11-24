@@ -502,3 +502,36 @@ func TestCompileStatusAndStatusLineIndicators(t *testing.T) {
 	b.AddMessage(buffer.NewMessage(diagnosticOwner, "err 2", buffer.Loc{X: 0, Y: 0}, buffer.Loc{X: 1, Y: 0}, buffer.MTError))
 	assert.Equal(t, "LSP: ready | ERR: 2 | PREVIEW: ON | ", m.statusLine(b))
 }
+
+func TestScrollPreviewToSendsImmediateScrollCommand(t *testing.T) {
+	dir, logPath := setupLSPEnv(t, 0)
+
+	Init(Options{})
+	action.InitBindings()
+	action.InitCommands()
+	action.InitGlobals()
+
+	typPath := filepath.Join(dir, "outline_sync.typ")
+	b := openTestBuffer(t, typPath, "= Intro\n\n= Methods\n\n= Conclusion\n")
+	action.InitTabs([]*buffer.Buffer{b})
+	bp := action.MainTab().CurPane()
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return defaultManager.State() == StateReady
+	}, "expected tinymist LSP ready")
+
+	// Start browser preview via LSP executeCommand.
+	require.True(t, defaultManager.togglePreview(bp))
+	waitForCondition(t, 5*time.Second, func() bool {
+		defaultManager.mu.Lock()
+		mode := defaultManager.previewMode
+		defaultManager.mu.Unlock()
+		return mode == "lsp"
+	}, "expected browser preview started in lsp mode")
+
+	// Trigger immediate outline-style scroll to line 4 ("= Conclusion") without moving cursor.
+	require.True(t, ScrollPreviewTo(b, 4, 0))
+	waitForCondition(t, 5*time.Second, func() bool {
+		return strings.Contains(readMockLog(logPath), "tinymist.scrollPreview")
+	}, "expected ScrollPreviewTo to dispatch tinymist.scrollPreview immediately")
+}

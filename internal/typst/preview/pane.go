@@ -86,12 +86,13 @@ type PreviewPane struct {
 
 	active bool
 
-	deck        *DocumentDeck
-	viewport    *ViewportRender
-	scrollY     int
-	zoomPct     int
-	invert      bool
-	trimMargins bool
+	deck           *DocumentDeck
+	viewport       *ViewportRender
+	scrollY        int
+	zoomPct        int
+	invert         bool
+	trimMargins    bool
+	pendingSection *SectionTarget
 
 	compiling     bool
 	compileStart  time.Time
@@ -214,6 +215,7 @@ func (pp *PreviewPane) Close() {
 		pp.deck = nil
 	}
 	pp.viewport = nil
+	pp.pendingSection = nil
 	pp.sixelDirty = false
 
 	if !already && pp.mgr != nil && pp.tab != nil {
@@ -367,6 +369,7 @@ func (pp *PreviewPane) rebuildViewport(clearRight bool) bool {
 // ScrollBy shifts the continuous scroll offset by delta pixels, strictly clamped
 // to [0, MaxScrollY] with zero overscroll debt. Returns true if the viewport moved.
 func (pp *PreviewPane) ScrollBy(delta int) bool {
+	pp.pendingSection = nil
 	if pp.viewport == nil || pp.deck == nil {
 		return false
 	}
@@ -386,6 +389,7 @@ func (pp *PreviewPane) ScrollBy(delta int) bool {
 
 // JumpPageDelta jumps directly to the top of the next/previous page.
 func (pp *PreviewPane) JumpPageDelta(delta int) bool {
+	pp.pendingSection = nil
 	if pp.viewport == nil || pp.deck == nil || pp.deck.PageCount() == 0 {
 		return false
 	}
@@ -409,6 +413,53 @@ func (pp *PreviewPane) JumpPageDelta(delta int) bool {
 	}
 	pp.scrollY = nextY
 	return pp.rebuildViewport(false)
+}
+
+// Target returns the linked editor BufPane, if still open in this tab.
+func (pp *PreviewPane) Target() *action.BufPane {
+	return pp.resolveTarget()
+}
+
+// ScrollToSection repositions the continuous preview viewport to the rendered
+// location of target. When a compile is still in flight (or no deck is rendered
+// yet), the target is also remembered and applied as soon as the deck arrives.
+// Returns true if the viewport moved immediately.
+func (pp *PreviewPane) ScrollToSection(target SectionTarget) bool {
+	cp := target
+	if len(target.AllSections) > 0 {
+		cp.AllSections = append([]SectionEntry(nil), target.AllSections...)
+	}
+
+	targetPane := pp.resolveTarget()
+	deckMatchesTarget := pp.deck != nil &&
+		(targetPane == nil || targetPane.Buf == nil || pp.lastShared == nil || pp.lastShared == targetPane.Buf.SharedBuffer)
+
+	if !deckMatchesTarget {
+		pp.pendingSection = &cp
+		return false
+	}
+	if pp.compiling {
+		pp.pendingSection = &cp
+	} else {
+		pp.pendingSection = nil
+	}
+
+	dstW, viewH := pp.targetPixelSize()
+	if dstW <= 0 || viewH <= 0 {
+		pp.pendingSection = &cp
+		return false
+	}
+
+	nextY := pp.deck.ResolveSectionScrollY(cp, dstW, viewH, pp.invert, pp.trimMargins)
+	if pp.viewport != nil && nextY == pp.scrollY {
+		return false
+	}
+	pp.scrollY = nextY
+	if pp.rebuildViewport(false) {
+		screen.Redraw()
+		return true
+	}
+	return false
 }
 
 func (pp *PreviewPane) resolveTarget() *action.BufPane {
@@ -628,6 +679,13 @@ func (pp *PreviewPane) startCompileNow() {
 			pp.lastErr = ""
 			if oldDeck != nil {
 				oldDeck.Close()
+			}
+			if pp.pendingSection != nil {
+				sec := *pp.pendingSection
+				pp.pendingSection = nil
+				if dstW, viewH := pp.targetPixelSize(); dstW > 0 && viewH > 0 {
+					pp.scrollY = pp.deck.ResolveSectionScrollY(sec, dstW, viewH, pp.invert, pp.trimMargins)
+				}
 			}
 			// Re-render viewport at current scrollY (clamped safely to new doc height).
 			pp.rebuildViewport(false)
@@ -1039,12 +1097,14 @@ func (pp *PreviewPane) HandleEvent(event tcell.Event) {
 			pp.ScrollBy(-step)
 			return
 		case tcell.KeyHome:
+			pp.pendingSection = nil
 			if pp.scrollY != 0 {
 				pp.scrollY = 0
 				pp.rebuildViewport(false)
 			}
 			return
 		case tcell.KeyEnd:
+			pp.pendingSection = nil
 			if pp.viewport != nil && pp.scrollY != pp.viewport.MaxScrollY {
 				pp.scrollY = pp.viewport.MaxScrollY
 				pp.rebuildViewport(false)
@@ -1074,11 +1134,13 @@ func (pp *PreviewPane) HandleEvent(event tcell.Event) {
 				}
 				pp.ScrollBy(step)
 			case 'g':
+				pp.pendingSection = nil
 				if pp.scrollY != 0 {
 					pp.scrollY = 0
 					pp.rebuildViewport(false)
 				}
 			case 'G':
+				pp.pendingSection = nil
 				if pp.viewport != nil && pp.scrollY != pp.viewport.MaxScrollY {
 					pp.scrollY = pp.viewport.MaxScrollY
 					pp.rebuildViewport(false)
@@ -1605,6 +1667,7 @@ func (m *Manager) onPaneFocus(tab *action.Tab, pane action.Pane) {
 	if pp.target != bp {
 		pp.target = bp
 		pp.scrollY = 0
+		pp.pendingSection = nil
 		pp.ScheduleCompile(true)
 	}
 }
@@ -1671,6 +1734,7 @@ func (m *Manager) OnBufferClose(b *buffer.Buffer) {
 		if replacement != nil {
 			pp.target = replacement
 			pp.scrollY = 0
+			pp.pendingSection = nil
 			pp.ScheduleCompile(true)
 		} else {
 			m.CloseForTab(tab)

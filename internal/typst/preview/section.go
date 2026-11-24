@@ -1,0 +1,555 @@
+package preview
+
+import (
+	"strings"
+	"unicode"
+)
+
+const sectionTopPaddingPx = 24
+
+// SectionKind identifies the kind of outline entry targeted for preview sync.
+type SectionKind int
+
+const (
+	SectionHeading SectionKind = iota
+	SectionFigure
+	SectionLabel
+)
+
+// SectionEntry describes a single document outline entry in document order,
+// used to align source outline items with rendered PDF anchors.
+type SectionEntry struct {
+	Kind  SectionKind
+	Level int
+	Title string
+	Label string
+	Line  int
+}
+
+// SectionTarget describes a user-selected outline entry to reposition the preview to.
+type SectionTarget struct {
+	Kind        SectionKind
+	Level       int
+	Title       string
+	Label       string
+	Line        int
+	TotalLines  int
+	AllSections []SectionEntry
+}
+
+// ResolveSectionScrollY computes the continuous vertical scrollY (in pixels) that
+// brings target cleanly into view near the top of the preview viewport.
+//
+// Resolution uses three tiers:
+//  1. Exact named label destination from PDF /Names /Dests.
+//  2. Exact heading bookmark from PDF /Outlines using monotonic alignment.
+//  3. Bracketed interpolation between the nearest surrounding PDF anchors
+//     (or proportional buffer-line interpolation when no PDF anchors exist).
+func (d *DocumentDeck) ResolveSectionScrollY(target SectionTarget, dstW, viewH int, invert, trim bool) int {
+	if d == nil || len(d.pages) == 0 {
+		return 0
+	}
+	if dstW < 16 {
+		dstW = 16
+	}
+	if viewH < 16 {
+		viewH = 16
+	}
+	d.ComputeLayout(dstW, trim)
+
+	maxScrollY := d.totalHeight - viewH
+	if maxScrollY < 0 {
+		maxScrollY = 0
+	}
+
+	// Tier 1 & Tier 2: exact anchor for the target itself.
+	if anchor, ok := d.resolveExactAnchor(target); ok {
+		if y, pageTop, ok := d.anchorToVirtualY(anchor, dstW, invert, trim); ok {
+			// Refresh maxScrollY in case ensureScaled changed a trimmed page height.
+			maxScrollY = d.totalHeight - viewH
+			if maxScrollY < 0 {
+				maxScrollY = 0
+			}
+			scrollY := y - sectionTopPaddingPx
+			if scrollY < pageTop {
+				scrollY = pageTop
+			}
+			return clampScrollY(scrollY, maxScrollY)
+		}
+	}
+
+	// Tier 3: bracketed interpolation between surrounding PDF anchors (e.g., for
+	// unlabeled figures, standalone labels, or bookmarked:false headings).
+	if y, ok := d.resolveInterpolatedY(target, dstW, invert, trim); ok {
+		maxScrollY = d.totalHeight - viewH
+		if maxScrollY < 0 {
+			maxScrollY = 0
+		}
+		if target.Line <= 0 {
+			return 0
+		}
+		scrollY := y - sectionTopPaddingPx
+		return clampScrollY(scrollY, maxScrollY)
+	}
+
+	// Ultimate fallback: proportional buffer line ratio across total document height.
+	if target.Line <= 0 || target.TotalLines <= 1 {
+		return 0
+	}
+	ratio := float64(target.Line) / float64(target.TotalLines-1)
+	if ratio < 0 {
+		ratio = 0
+	} else if ratio > 1 {
+		ratio = 1
+	}
+	scrollY := int(ratio*float64(d.totalHeight)) - sectionTopPaddingPx
+	return clampScrollY(scrollY, maxScrollY)
+}
+
+func clampScrollY(y, maxY int) int {
+	if y < 0 {
+		return 0
+	}
+	if y > maxY {
+		return maxY
+	}
+	return y
+}
+
+func (d *DocumentDeck) anchorToVirtualY(anchor PageAnchor, dstW int, invert, trim bool) (y int, pageTop int, ok bool) {
+	if d == nil || anchor.PageIdx < 0 || anchor.PageIdx >= len(d.pages) {
+		return 0, 0, false
+	}
+	if d.layoutW != dstW || d.layoutTrim != trim || len(d.pageTops) != len(d.pages) {
+		d.ComputeLayout(dstW, trim)
+	}
+	p := d.pages[anchor.PageIdx]
+	if trim {
+		if sc, err := p.ensureScaled(dstW, invert, trim); err == nil && sc != nil {
+			if sc.Bounds().Dy() != d.pageHeights[anchor.PageIdx] {
+				d.ComputeLayout(dstW, trim)
+			}
+		}
+	}
+	pageTop = d.pageTops[anchor.PageIdx]
+	pageH := d.pageHeights[anchor.PageIdx]
+
+	yFrac := anchor.YFrac
+	if yFrac < 0 {
+		yFrac = 0
+	} else if yFrac > 1 {
+		yFrac = 1
+	}
+
+	if trim && p.cropH > 0 && p.srcH > 0 {
+		rawY := yFrac * float64(p.srcH)
+		relCrop := (rawY - float64(p.cropTop)) / float64(p.cropH)
+		if relCrop < 0 {
+			relCrop = 0
+		} else if relCrop > 1 {
+			relCrop = 1
+		}
+		return pageTop + int(relCrop*float64(pageH)), pageTop, true
+	}
+	return pageTop + int(yFrac*float64(pageH)), pageTop, true
+}
+
+func (d *DocumentDeck) resolveExactAnchor(target SectionTarget) (PageAnchor, bool) {
+	if d == nil || d.anchors == nil {
+		return PageAnchor{}, false
+	}
+	// Tier 1: exact PDF named destination by <label>.
+	if target.Label != "" && len(d.anchors.NamedDests) > 0 {
+		if a, ok := d.anchors.NamedDests[target.Label]; ok {
+			return a, true
+		}
+	}
+	if target.Kind != SectionHeading || len(d.anchors.Outlines) == 0 {
+		return PageAnchor{}, false
+	}
+
+	// Tier 2: align all document headings against PDF /Outlines in order.
+	if len(target.AllSections) > 0 {
+		aligned := alignSectionsToAnchors(target.AllSections, d.anchors)
+		// Find the matching entry in AllSections (preferring exact line + kind + title).
+		bestIdx := -1
+		for i, s := range target.AllSections {
+			if s.Kind != target.Kind {
+				continue
+			}
+			if s.Line == target.Line && s.Title == target.Title {
+				bestIdx = i
+				break
+			}
+			if s.Line == target.Line && bestIdx < 0 {
+				bestIdx = i
+			}
+		}
+		if bestIdx >= 0 {
+			if a, ok := aligned[bestIdx]; ok {
+				return a, true
+			}
+		}
+	}
+
+	// Direct title fallback when AllSections wasn't supplied.
+	wantNorm := normalizeHeadingTitle(target.Title)
+	bestScore := 0
+	var best PageAnchor
+	for _, oa := range d.anchors.Outlines {
+		sc := headingMatchScore(wantNorm, target.Level, normalizeHeadingTitle(oa.Title), oa.Depth)
+		if sc > bestScore {
+			bestScore = sc
+			best = PageAnchor{PageIdx: oa.PageIdx, YFrac: oa.YFrac}
+		}
+	}
+	if bestScore >= 40 {
+		return best, true
+	}
+	return PageAnchor{}, false
+}
+
+func (d *DocumentDeck) resolveInterpolatedY(target SectionTarget, dstW int, invert, trim bool) (int, bool) {
+	if d == nil || d.anchors == nil || len(target.AllSections) == 0 {
+		return 0, false
+	}
+	aligned := alignSectionsToAnchors(target.AllSections, d.anchors)
+	if len(aligned) == 0 {
+		return 0, false
+	}
+
+	// Find closest anchored section at or before target.Line, and closest after target.Line.
+	hasPrev := false
+	prevLine := 0
+	var prevAnchor PageAnchor
+
+	hasNext := false
+	nextLine := 0
+	var nextAnchor PageAnchor
+
+	for i, s := range target.AllSections {
+		a, ok := aligned[i]
+		if !ok {
+			continue
+		}
+		if s.Line <= target.Line {
+			if !hasPrev || s.Line >= prevLine {
+				hasPrev = true
+				prevLine = s.Line
+				prevAnchor = a
+			}
+		} else {
+			if !hasNext || s.Line < nextLine {
+				hasNext = true
+				nextLine = s.Line
+				nextAnchor = a
+			}
+		}
+	}
+
+	if !hasPrev && !hasNext {
+		return 0, false
+	}
+
+	prevY := 0
+	if hasPrev {
+		if y, _, ok := d.anchorToVirtualY(prevAnchor, dstW, invert, trim); ok {
+			prevY = y
+		} else {
+			hasPrev = false
+		}
+	}
+
+	nextY := d.totalHeight
+	if hasNext {
+		if y, _, ok := d.anchorToVirtualY(nextAnchor, dstW, invert, trim); ok {
+			nextY = y
+		} else {
+			hasNext = false
+		}
+	}
+
+	if !hasPrev && !hasNext {
+		return 0, false
+	}
+	if !hasPrev {
+		prevLine = 0
+		prevY = 0
+	}
+	if !hasNext {
+		nextLine = target.TotalLines - 1
+		if nextLine <= target.Line {
+			nextLine = target.Line + 1
+		}
+		nextY = d.totalHeight
+	}
+	if nextY < prevY {
+		nextY = prevY
+	}
+	span := nextLine - prevLine
+	if span <= 0 {
+		return prevY, true
+	}
+	t := float64(target.Line-prevLine) / float64(span)
+	if t < 0 {
+		t = 0
+	} else if t > 1 {
+		t = 1
+	}
+	return prevY + int(t*float64(nextY-prevY)), true
+}
+
+// alignSectionsToAnchors maps indices in sections to their exact PDF PageAnchors.
+func alignSectionsToAnchors(sections []SectionEntry, anchors *DocumentAnchors) map[int]PageAnchor {
+	res := make(map[int]PageAnchor)
+	if anchors == nil {
+		return res
+	}
+
+	// 1. Named destinations resolve any labeled section directly.
+	if len(anchors.NamedDests) > 0 {
+		for i, s := range sections {
+			if s.Label != "" {
+				if a, ok := anchors.NamedDests[s.Label]; ok {
+					res[i] = a
+				}
+			}
+		}
+	}
+
+	if len(anchors.Outlines) == 0 {
+		return res
+	}
+
+	// 2. Collect heading entries in document order.
+	var srcIdx []int
+	var srcNorm []string
+	for i, s := range sections {
+		if s.Kind == SectionHeading {
+			srcIdx = append(srcIdx, i)
+			srcNorm = append(srcNorm, normalizeHeadingTitle(s.Title))
+		}
+	}
+	m := len(srcIdx)
+	n := len(anchors.Outlines)
+	if m == 0 {
+		return res
+	}
+
+	pdfNorm := make([]string, n)
+	for j, oa := range anchors.Outlines {
+		pdfNorm[j] = normalizeHeadingTitle(oa.Title)
+	}
+
+	// Monotonic sequence alignment (DP) so duplicate heading titles and extra
+	// included/unbookmarked headings align in exact document order.
+	const maxDPCells = 250_000
+	if m*n <= maxDPCells {
+		// dp[i][j] = best alignment score for src[i:] and pdf[j:]
+		cols := n + 1
+		dp := make([]int, (m+1)*cols)
+		choice := make([]uint8, m*n) // 1=match, 2=skip src, 3=skip pdf
+
+		for i := m - 1; i >= 0; i-- {
+			si := srcIdx[i]
+			for j := n - 1; j >= 0; j-- {
+				best := dp[(i+1)*cols+j]
+				act := uint8(2)
+
+				if skipPDF := dp[i*cols+(j+1)]; skipPDF > best {
+					best = skipPDF
+					act = 3
+				}
+
+				sc := headingMatchScore(srcNorm[i], sections[si].Level, pdfNorm[j], anchors.Outlines[j].Depth)
+				// Also give a strong bonus if both share the exact same named destination position.
+				if a, ok := res[si]; ok && a.PageIdx == anchors.Outlines[j].PageIdx {
+					sc += 120
+				}
+				if sc >= 35 {
+					if take := sc + dp[(i+1)*cols+(j+1)]; take > best {
+						best = take
+						act = 1
+					}
+				}
+				dp[i*cols+j] = best
+				choice[i*n+j] = act
+			}
+		}
+
+		// Reconstruct matched pairs in order.
+		matchedSrc := make([]int, m)
+		for i := range matchedSrc {
+			matchedSrc[i] = -1
+		}
+		for i, j := 0, 0; i < m && j < n; {
+			switch choice[i*n+j] {
+			case 1:
+				matchedSrc[i] = j
+				i++
+				j++
+			case 2:
+				i++
+			default:
+				j++
+			}
+		}
+
+		// Fill any 1-to-1 sandwiched gaps (e.g., heading containing pure math/macros
+		// whose rendered PDF text differs completely from raw source syntax, while
+		// sitting between identical-count matched neighbors).
+		fillSandwichedGaps(matchedSrc, n, sections, srcIdx, anchors.Outlines)
+
+		for i, j := range matchedSrc {
+			if j >= 0 {
+				si := srcIdx[i]
+				if _, already := res[si]; !already {
+					oa := anchors.Outlines[j]
+					res[si] = PageAnchor{PageIdx: oa.PageIdx, YFrac: oa.YFrac}
+				}
+			}
+		}
+		return res
+	}
+
+	// Linear greedy fallback for extraordinarily large outlines (>500 headings).
+	j := 0
+	for i := 0; i < m && j < n; i++ {
+		si := srcIdx[i]
+		for k := j; k < n && k < j+8; k++ {
+			if headingMatchScore(srcNorm[i], sections[si].Level, pdfNorm[k], anchors.Outlines[k].Depth) >= 40 {
+				if _, already := res[si]; !already {
+					oa := anchors.Outlines[k]
+					res[si] = PageAnchor{PageIdx: oa.PageIdx, YFrac: oa.YFrac}
+				}
+				j = k + 1
+				break
+			}
+		}
+	}
+	return res
+}
+
+// fillSandwichedGaps maps unmatched headings when an unmatched run of length k
+// in src aligns 1:1 with an unmatched run of the exact same length k in pdf
+// (with matching heading depth), handling headings composed solely of Typst math
+// or dynamic expressions.
+func fillSandwichedGaps(matchedSrc []int, pdfLen int, sections []SectionEntry, srcIdx []int, pdfOutlines []OutlineAnchor) {
+	m := len(matchedSrc)
+	// Fast path: if counts are equal and nothing matched by text, check if every
+	// heading depth aligns 1:1 (e.g. purely mathematical or macro headings).
+	i := 0
+	prevPDF := -1
+	for i < m {
+		if matchedSrc[i] >= 0 {
+			prevPDF = matchedSrc[i]
+			i++
+			continue
+		}
+		runStart := i
+		for i < m && matchedSrc[i] < 0 {
+			i++
+		}
+		runEnd := i // exclusive
+		nextPDF := pdfLen
+		if runEnd < m {
+			nextPDF = matchedSrc[runEnd]
+		}
+		srcRunLen := runEnd - runStart
+		pdfRunLen := nextPDF - (prevPDF + 1)
+		if srcRunLen > 0 && srcRunLen == pdfRunLen {
+			depthsMatch := true
+			for k := 0; k < srcRunLen; k++ {
+				srcLvl := sections[srcIdx[runStart+k]].Level
+				pdfDepth := pdfOutlines[prevPDF+1+k].Depth
+				if srcLvl > 0 && pdfDepth > 0 && srcLvl != pdfDepth {
+					depthsMatch = false
+					break
+				}
+			}
+			if depthsMatch {
+				for k := 0; k < srcRunLen; k++ {
+					matchedSrc[runStart+k] = prevPDF + 1 + k
+				}
+			}
+		}
+		if runEnd < m {
+			prevPDF = matchedSrc[runEnd]
+		}
+	}
+}
+
+func headingMatchScore(srcNorm string, srcLevel int, pdfNorm string, pdfDepth int) int {
+	if srcNorm == "" || pdfNorm == "" {
+		return 0
+	}
+	depthBonus := 0
+	if srcLevel > 0 && pdfDepth > 0 && srcLevel == pdfDepth {
+		depthBonus = 10
+	}
+	if srcNorm == pdfNorm {
+		return 100 + depthBonus
+	}
+	if strings.Contains(pdfNorm, srcNorm) || strings.Contains(srcNorm, pdfNorm) {
+		shortLen := len(srcNorm)
+		longLen := len(pdfNorm)
+		if longLen < shortLen {
+			shortLen, longLen = longLen, shortLen
+		}
+		if shortLen >= 3 && shortLen*2 >= longLen {
+			return 70 + depthBonus
+		}
+	}
+	// Word-token overlap (handles e.g. "Proof of $alpha$" vs "Proof of α").
+	srcWords := strings.Fields(srcNorm)
+	pdfWords := strings.Fields(pdfNorm)
+	if len(srcWords) == 0 || len(pdfWords) == 0 {
+		return 0
+	}
+	pdfSet := make(map[string]bool, len(pdfWords))
+	for _, w := range pdfWords {
+		pdfSet[w] = true
+	}
+	shared := 0
+	for _, w := range srcWords {
+		if pdfSet[w] {
+			shared++
+		}
+	}
+	if shared == 0 {
+		return 0
+	}
+	denom := len(srcWords)
+	if len(pdfWords) > denom {
+		denom = len(pdfWords)
+	}
+	score := (shared * 65) / denom
+	if score >= 30 {
+		return score + depthBonus
+	}
+	return 0
+}
+
+func normalizeHeadingTitle(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inSpace := true
+	for _, r := range s {
+		switch r {
+		case '*', '_', '`', '$', '\\', '[', ']':
+			// Strip common Typst inline markup delimiters so raw source headings
+			// match rendered PDF bookmark titles.
+			continue
+		}
+		if unicode.IsSpace(r) {
+			if !inSpace {
+				b.WriteByte(' ')
+				inSpace = true
+			}
+			continue
+		}
+		b.WriteRune(unicode.ToLower(r))
+		inSpace = false
+	}
+	return strings.TrimSpace(b.String())
+}

@@ -95,6 +95,7 @@ func Init() {
 				cb(ver, convertLSPSymbols(syms))
 			})
 		})
+		outline.SetJumpHandler(syncPreviewToOutlineItem)
 		outline.Init()
 
 		// 7. Wire native in-terminal continuous Sixel preview pane.
@@ -153,6 +154,49 @@ func (inlinePreviewAdapter) ToggleTrim(tab *action.Tab) bool {
 	}
 	pp.ToggleTrimMargins()
 	return true
+}
+
+func syncPreviewToOutlineItem(bp *action.BufPane, item outline.Item, allItems []outline.Item) {
+	if bp == nil || bp.Buf == nil || !bp.Buf.IsTypst() {
+		return
+	}
+	if tab := bp.Tab(); tab != nil {
+		if pp := preview.PaneForTab(tab); pp != nil {
+			entries := make([]preview.SectionEntry, len(allItems))
+			for i, it := range allItems {
+				entries[i] = preview.SectionEntry{
+					Kind:  convertOutlineKind(it.Kind),
+					Level: it.Level,
+					Title: it.Title,
+					Label: it.Label,
+					Line:  it.Line,
+				}
+			}
+			pp.ScrollToSection(preview.SectionTarget{
+				Kind:        convertOutlineKind(item.Kind),
+				Level:       item.Level,
+				Title:       item.Title,
+				Label:       item.Label,
+				Line:        item.Line,
+				TotalLines:  bp.Buf.LinesNum(),
+				AllSections: entries,
+			})
+		}
+	}
+	if lsp.IsPreviewActive() {
+		lsp.ScrollPreviewTo(bp.Buf, item.Line, item.Column)
+	}
+}
+
+func convertOutlineKind(k outline.ItemKind) preview.SectionKind {
+	switch k {
+	case outline.KindFigure:
+		return preview.SectionFigure
+	case outline.KindLabel:
+		return preview.SectionLabel
+	default:
+		return preview.SectionHeading
+	}
 }
 
 func convertLSPSymbols(syms []lsp.DocumentSymbol) []outline.Symbol {

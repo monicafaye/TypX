@@ -356,6 +356,14 @@ func IsPreviewActive() bool {
 	return defaultManager.atomicPreview.Load()
 }
 
+// ScrollPreviewTo immediately requests the active browser companion preview to
+// scroll to the given 0-based line and rune column in b (bypassing cursor
+// debounce and working even if the cursor was already on that line).
+// Returns false if browser preview is inactive or LSP is offline.
+func ScrollPreviewTo(b *buffer.Buffer, line, runeCol int) bool {
+	return defaultManager.scrollPreviewTo(b, line, runeCol)
+}
+
 // RequestDocumentSymbols asynchronously requests LSP textDocument/documentSymbol
 // for the given Typst buffer if tinymist is ready. Returns false immediately if
 // LSP is offline or the buffer is not trackable. When symbols arrive, cb runs on

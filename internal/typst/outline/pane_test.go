@@ -52,6 +52,7 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 	SetSymbolProvider(nil)
+	SetJumpHandler(nil)
 	buffer.CloseOpenBuffers()
 	buffer.FlushObservers()
 	action.DrainUIQueue()
@@ -62,6 +63,7 @@ func TestMain(m *testing.M) {
 func setupTabs(t *testing.T, w, h int, docs ...struct{ name, text string }) []*action.BufPane {
 	t.Helper()
 	SetSymbolProvider(nil)
+	SetJumpHandler(nil)
 	for tab := range defaultManager.panes {
 		defaultManager.CloseForTab(tab)
 	}
@@ -98,6 +100,7 @@ func setupTabs(t *testing.T, w, h int, docs ...struct{ name, text string }) []*a
 
 	t.Cleanup(func() {
 		SetSymbolProvider(nil)
+		SetJumpHandler(nil)
 		for tab := range defaultManager.panes {
 			defaultManager.CloseForTab(tab)
 		}
@@ -799,5 +802,71 @@ func TestOutlineCurrentItemUsesCursorLineAsBackground(t *testing.T) {
 				t.Fatalf("%s: expected active item to be bold", schemeName)
 			}
 		})
+	}
+}
+
+func TestOutlineJumpHandlerInvokedOnEnterClickAndFilter(t *testing.T) {
+	panes := setupTabs(t, 80, 24, struct{ name, text string }{
+		name: "paper.typ",
+		text: sampleMultiSectionDoc(),
+	})
+	bp := panes[0]
+	tab := action.MainTab()
+
+	type jumpRecord struct {
+		pane     *action.BufPane
+		item     Item
+		allCount int
+	}
+	var jumps []jumpRecord
+	SetJumpHandler(func(target *action.BufPane, item Item, allItems []Item) {
+		jumps = append(jumps, jumpRecord{
+			pane:     target,
+			item:     item,
+			allCount: len(allItems),
+		})
+	})
+
+	bp.HandleCommand("outline")
+	renderAll()
+	op := PaneForTab(tab)
+	if op == nil {
+		t.Fatal("expected OutlinePane open")
+	}
+
+	// 1. Enter on second item ("Background") fires JumpHandler with full item list.
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone, ""))
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, ""))
+	if len(jumps) != 1 {
+		t.Fatalf("expected 1 jump after Enter, got %d", len(jumps))
+	}
+	if jumps[0].pane != bp || jumps[0].item.Title != "Background" || jumps[0].allCount != 4 {
+		t.Fatalf("unexpected Enter jump record: %+v", jumps[0])
+	}
+
+	// 2. Escape returns focus without invoking JumpHandler.
+	bp.HandleCommand("outline focus")
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone, ""))
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone, ""))
+	if len(jumps) != 1 {
+		t.Fatalf("expected Esc not to invoke JumpHandler, got %d jumps", len(jumps))
+	}
+
+	// 3. Mouse click on 4th entry ("Conclusion", row 1+3=4) fires JumpHandler.
+	ov := op.GetView()
+	action.Tabs.HandleEvent(tcell.NewEventMouse(ov.X+2, ov.Y+4, tcell.Button1, tcell.ModNone, ""))
+	action.Tabs.HandleEvent(tcell.NewEventMouse(ov.X+2, ov.Y+4, tcell.ButtonNone, tcell.ModNone, ""))
+	if len(jumps) != 2 || jumps[1].item.Title != "Conclusion" || jumps[1].allCount != 4 {
+		t.Fatalf("unexpected click jump record: %#v", jumps)
+	}
+
+	// 4. Filter "/Pipe" + Enter still delivers full unfiltered allItems (4 items).
+	bp.HandleCommand("outline focus")
+	for _, r := range "/Pipe" {
+		action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone, ""))
+	}
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, ""))
+	if len(jumps) != 3 || jumps[2].item.Kind != KindFigure || jumps[2].allCount != 4 {
+		t.Fatalf("unexpected filter jump record: %#v", jumps)
 	}
 }
