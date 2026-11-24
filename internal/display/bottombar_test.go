@@ -235,3 +235,47 @@ func TestStatusLineSemanticStylingAndCleanOverflow(t *testing.T) {
 	assert.True(t, strings.HasSuffix(narrowRow, "…"), "expected clean ellipsis on overflow, got %q", narrowRow)
 	assert.NotContains(t, narrowRow, "utf-8", "rightText must not collide with overflowing leftText")
 }
+
+func TestStatusLineCompactsLongFilenameOnNarrowPane(t *testing.T) {
+	longPath := `..\course-notes\courses\AIF231105\lectures\01-sets.typ`
+	win, sim, cleanup := newTestWin(t, "= Heading\n$a in A$\n", longPath, 110, 10)
+	defer cleanup()
+
+	var err error
+	config.Colorscheme, err = config.LoadColorscheme("typx-dark", nil)
+	require.NoError(t, err)
+
+	win.Buf.Settings["statusline"] = true
+	win.Buf.Settings["statusformatl"] = "$(filename) ($(line),$(col)) | MATH | 531 words | LSP: ready"
+	win.Buf.Settings["statusformatr"] = ""
+	win.SetActive(true)
+
+	sl := NewStatusLine(win)
+	y := win.Height + win.Y - 1
+
+	// Wide pane keeps the full path.
+	sl.Display()
+	sim.Show()
+	assert.Contains(t, simRowText(sim, y), longPath)
+
+	// Medium pane compacts to …\parent\basename so mode & status remain visible.
+	sim.SetSize(68, 10)
+	sim.Clear()
+	win.Resize(68, 10)
+	sl.Display()
+	sim.Show()
+	medRow := simRowText(sim, y)
+	assert.Contains(t, medRow, `…\lectures\01-sets.typ`)
+	assert.Contains(t, medRow, "MATH")
+	assert.Contains(t, medRow, "LSP: ready")
+
+	// Narrow 3-pane editor width falls back to basename so mode & LSP aren't clipped to "MAT…".
+	sim.SetSize(56, 10)
+	sim.Clear()
+	win.Resize(56, 10)
+	sl.Display()
+	sim.Show()
+	narrowRow := simRowText(sim, y)
+	assert.True(t, strings.HasPrefix(narrowRow, "01-sets.typ (1,1) | MATH"), "got %q", narrowRow)
+	assert.Contains(t, narrowRow, "LSP: ready")
+}

@@ -164,31 +164,46 @@ func (s *StatusLine) Display() {
 		return
 	}
 
-	formatter := func(match []byte) []byte {
-		name := match[2 : len(match)-1]
-		if bytes.HasPrefix(name, []byte("opt")) {
-			option := name[4:]
-			return fmt.Append(nil, s.FindOpt(string(option)))
-		} else if bytes.HasPrefix(name, []byte("bind")) {
-			binding := string(name[5:])
-			for k, v := range config.Bindings["buffer"] {
-				if v == binding {
-					return []byte(k)
+	formatStatus := func(tmpl, filenameOverride string) []byte {
+		return formatParser.ReplaceAllFunc([]byte(tmpl), func(match []byte) []byte {
+			name := match[2 : len(match)-1]
+			if bytes.HasPrefix(name, []byte("opt")) {
+				option := name[4:]
+				return fmt.Append(nil, s.FindOpt(string(option)))
+			} else if bytes.HasPrefix(name, []byte("bind")) {
+				binding := string(name[5:])
+				for k, v := range config.Bindings["buffer"] {
+					if v == binding {
+						return []byte(k)
+					}
 				}
+				return []byte("null")
+			} else {
+				if filenameOverride != "" && string(name) == "filename" {
+					return []byte(filenameOverride)
+				}
+				if fn, ok := statusInfo[string(name)]; ok {
+					return []byte(fn(s.win.Buf))
+				}
+				return []byte{}
 			}
-			return []byte("null")
-		} else {
-			if fn, ok := statusInfo[string(name)]; ok {
-				return []byte(fn(s.win.Buf))
-			}
-			return []byte{}
-		}
+		})
 	}
 
-	leftText := []byte(s.win.Buf.Settings["statusformatl"].(string))
-	leftText = formatParser.ReplaceAllFunc(leftText, formatter)
-	rightText := []byte(s.win.Buf.Settings["statusformatr"].(string))
-	rightText = formatParser.ReplaceAllFunc(rightText, formatter)
+	leftFormat := s.win.Buf.Settings["statusformatl"].(string)
+	leftText := formatStatus(leftFormat, "")
+	if s.win.Width > 0 && strings.Contains(leftFormat, "$(filename)") {
+		leftW := util.StringWidth(leftText, util.CharacterCount(leftText), 1)
+		if leftW > s.win.Width {
+			fullName := statusInfo["filename"](s.win.Buf)
+			fullNameW := runewidth.StringWidth(fullName)
+			budget := s.win.Width - (leftW - fullNameW)
+			if short := compactStatusFilename(fullName, budget); short != fullName {
+				leftText = formatStatus(leftFormat, short)
+			}
+		}
+	}
+	rightText := formatStatus(s.win.Buf.Settings["statusformatr"].(string), "")
 
 	statusLineStyle := config.DefStyle.Reverse(true)
 	if s.win.IsActive() {
@@ -436,6 +451,35 @@ func classifyStatusSegment(seg string, p statusLinePalette) tcell.Style {
 	default:
 		return p.base
 	}
+}
+
+func compactStatusFilename(name string, budget int) string {
+	if !strings.ContainsAny(name, `/\`) {
+		return name
+	}
+	sep := "/"
+	if strings.Contains(name, `\`) {
+		sep = `\`
+	}
+	rawParts := strings.FieldsFunc(name, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	if len(rawParts) <= 1 {
+		return name
+	}
+	nameW := runewidth.StringWidth(name)
+	base := rawParts[len(rawParts)-1]
+	if len(rawParts) >= 2 {
+		parentBase := "…" + sep + rawParts[len(rawParts)-2] + sep + base
+		pbW := runewidth.StringWidth(parentBase)
+		if pbW <= budget && pbW < nameW {
+			return parentBase
+		}
+	}
+	if runewidth.StringWidth(base) < nameW {
+		return base
+	}
+	return name
 }
 
 func drawStatusSpans(startX, y, maxWidth int, spans []statusSpan) {
