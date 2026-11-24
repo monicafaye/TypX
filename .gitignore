@@ -2,6 +2,7 @@
 
 typx
 typx.exe
+typx.exe~
 !cmd/typx
 binaries/
 tmp.sh
