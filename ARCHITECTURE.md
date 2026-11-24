@@ -72,11 +72,11 @@ TypX/
 ├── cmd/
 │   └── typx/                     # CLI flags (--check, --no-lsp, --preview), startup, main event loop
 ├── internal/
-│   ├── action/                   # BufPane, Tab, keybinding dispatch, UI callback queue, extension registry
+│   ├── action/                   # BufPane, Tab, keybinding dispatch (incl. Alt+Shift fallback), UI queue, bottom bar clicks, extension registry
 │   ├── buffer/                   # LineArray, EventHandler, Messages/Gutter, Observer lifecycle hooks
 │   ├── clipboard/                # Upstream micro clipboard integration
 │   ├── config/                   # TypX config dir, typst.* settings, trimmed embedded runtime assets
-│   ├── display/                  # BufWindow (concealment render hook), UIWindow, StatusLine providers
+│   ├── display/                  # BufWindow (concealment render hook), UIWindow, StatusLine (narrow-pane compaction), BottomBar
 │   ├── lsp/                      # Lightweight Go LSP client & browser preview orchestration for tinymist
 │   │   ├── client.go             # JSON-RPC 2.0 Content-Length transport, request correlation, stderr ring
 │   │   ├── discovery.go          # Cross-platform tinymist binary resolution & version probe
@@ -90,17 +90,17 @@ TypX/
 │   ├── shell/                    # Upstream micro shell/terminal integration
 │   ├── typst/                    # Pure-Go Typst editing, outline, and in-terminal preview packages
 │   │   ├── mode.go               # Cached O(1) lexical mode detector (Markup / Math / Code / Raw)
-│   │   ├── features/             # Central wiring of Typst commands, actions, outline, and preview
+│   │   ├── features/             # Central wiring of Typst commands, actions, bottom bar hints, outline, and preview
 │   │   ├── conceal/              # Unicode symbol table, word-boundary-safe scanner, VisualMap
 │   │   ├── outline/              # Incremental heading/figure/label parser + left-docked OutlinePane
 │   │   ├── preview/              # Cross-platform Sixel capability probe, PNG deck, right-docked PreviewPane
 │   │   └── shortcuts/            # Math/markup wrappers, snippet templates, smart pairing
 │   └── views/                    # Micro split-pane layout tree (extended with DockLeft / DockRight splits)
 ├── runtime/
-│   ├── syntax/                   # Trimmed: typst, bibtex, markdown, yaml, toml, json, ini, patch, micro, default
+│   ├── syntax/                   # Trimmed: typst, bibtex, filemanager, markdown, yaml, toml, json, ini, patch, micro, default
 │   ├── colorschemes/             # typx-dark, typx-light, and core micro colorschemes
 │   ├── help/                     # Built-in TypX help topics (including typst.md)
-│   └── plugins/                  # Preserved core Lua plugins
+│   └── plugins/                  # Bundled Lua plugins (incl. filemanager and Typst-guarded autoclose)
 ├── tests/e2e/                    # Headless editor & CLI E2E suites + mocktinymist test server
 ├── tools/                        # Build metadata helpers (build-date.go, info-plist.go, testgen.go)
 ├── go.mod                        # module github.com/monicafaye/TypX
@@ -165,16 +165,18 @@ TypX avoids cursor/mouse drift by generating an explicit per-line bidirectional 
 
 - **Terminal Capability Probe (`terminal.go`, `terminal_unix.go`, `terminal_windows.go`)**: Detects Sixel support and terminal cell pixel dimensions across platforms (CSI `16t`/`14t`, DA1, `TIOCGWINSZ`, Windows Terminal / Konsole / foot / WezTerm / xterm).
 - **Continuous Page Deck (`deck.go`, `sixel.go`)**: Compiles document pages via `tinymist` into PNGs, lazily decodes visible pages, scales with a pure-Go box-area filter, encodes 248-color RLE Sixel streams, and supports continuous clamped scrolling, zoom, margin trimming, and dark-mode inversion.
-- **Right-Docked Pane (`pane.go`)**: Integrates into the tab split tree via `DockRight`, auto-recompiles on debounced buffer changes, and bridges to `:preview` / `Alt+P` through `lsp.InlinePreviewHandler` (avoiding import cycles between `internal/lsp` and `internal/typst/preview`).
+- **Right-Docked Pane (`pane.go`)**: Integrates into the tab split tree via `DockRight`, auto-recompiles on debounced buffer changes, supports keyboard (`<`/`>`) and mouse-drag width resizing (deferring Sixel redraws while `tab.IsResizing()` is active), wipes stale Sixel pixels atomically via DEC Mode 2026 synchronized `ED 2` + `screen.Screen.Sync()` on geometry shifts/close/tab switch to prevent Windows ConPTY ghosting, and bridges to `:preview` / `Alt+P` through `lsp.InlinePreviewHandler` (avoiding import cycles between `internal/lsp` and `internal/typst/preview`).
 
 ### 4.4 Document Outline Sidebar (`internal/typst/outline`)
 
 - **Incremental Parser (`parser.go`)**: Pure-Go scanner extracting `= Headings`, `#figure(...)` captions, and optional `<label>` anchors while skipping fenced raw blocks and nested `/* ... */` comments; optionally enriched by `tinymist` `textDocument/documentSymbol`.
 - **Docked Sidebar (`pane.go`)**: Left-docked pane (`Alt+O` / `:outline`) with live cursor section tracking, keyboard/mouse jump-and-center, and interactive `/` filtering.
 
-### 4.5 LyX-Style Shortcuts & Smart Pairing (`internal/typst/shortcuts`)
+### 4.5 Context-Aware Shortcuts, Bottom Bar & Bundled File Manager (`internal/typst/shortcuts`, `internal/typst/features`, `runtime/plugins/filemanager`)
 
-- Context-aware commands (`Alt+M`, `Alt+Shift+M`, `Alt+B`, `Alt+E`, `Alt+Left`/`Alt+Right`), indentation-aware `$0` snippet templates (`:insert` / `Alt+I`), and Typst-aware smart pairing (`$`, `[`, `(`, `{`, `"`) guided by `internal/typst/mode.go`.
+- **Shortcuts & Smart Pairing (`internal/typst/shortcuts`)**: Context-aware commands (`Alt+M`, `Alt+Shift+M`, `Alt+B`, `Alt+E`, `Alt+Left`/`Alt+Right`), indentation-aware `$0` snippet templates (`:insert` / `Alt+I`), Typst-aware smart pairing (`$`, `[`, `(`, `{`, `"`) guided by `internal/typst/mode.go`, and Windows `Alt+Shift` keybinding fallback (`altShiftFallbackKeyEvents` in `internal/action/events.go`).
+- **Context-Aware Clickable Bottom Bar (`internal/display/bottombar.go`, `internal/action/bottombar.go`, `internal/typst/features/bottombar.go`)**: Renders priority-filtered, mouse-clickable shortcut hints tailored to the active context (Markup, Math, Code, Outline, Preview, Files, Help) with live toggle indicators and clickable diagnostic pills.
+- **Bundled File Manager (`runtime/plugins/filemanager/`)**: MIT-licensed `filemanager` plugin (`Alt+T` / `:tree`) patched for `micro v2.0.15` (`LocFromVisual`) and Windows file-handle safety (`os.Create` handle cleanup).
 
 ---
 
