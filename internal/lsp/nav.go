@@ -98,7 +98,7 @@ func (m *Manager) triggerDefinition(bp *action.BufPane, explicitCmd bool) bool {
 	m.mu.Unlock()
 
 	if state != StateReady || c == nil {
-		setInfoMessage("LSP is not ready")
+		setInfoMessage(m.notReadyMessage(state, "LSP is not ready"))
 		return true
 	}
 
@@ -213,7 +213,7 @@ func (m *Manager) triggerReferences(bp *action.BufPane, explicitCmd bool) bool {
 	m.mu.Unlock()
 
 	if state != StateReady || c == nil {
-		setInfoMessage("LSP is not ready")
+		setInfoMessage(m.notReadyMessage(state, "LSP is not ready"))
 		return true
 	}
 

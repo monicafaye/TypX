@@ -25,7 +25,7 @@ func (m *Manager) triggerWorkspaceSymbols(bp *action.BufPane, query string, expl
 	m.mu.Unlock()
 
 	if state != StateReady || c == nil {
-		setInfoMessage("LSP is not ready")
+		setInfoMessage(m.notReadyMessage(state, "LSP is not ready"))
 		return true
 	}
 

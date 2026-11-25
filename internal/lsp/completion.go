@@ -31,7 +31,7 @@ func (m *Manager) triggerCompletion(bp *action.BufPane) bool {
 	m.mu.Unlock()
 
 	if state != StateReady || c == nil {
-		notifyInfoMessage("LSP: offline")
+		notifyInfoMessage(m.notReadyMessage(state, "LSP: offline"))
 		return true
 	}
 
@@ -165,7 +165,7 @@ func (m *Manager) triggerHover(bp *action.BufPane) bool {
 	m.mu.Unlock()
 
 	if state != StateReady || c == nil {
-		notifyInfoMessage("LSP: offline")
+		notifyInfoMessage(m.notReadyMessage(state, "LSP: offline"))
 		return true
 	}
 

@@ -30,7 +30,7 @@ func (m *Manager) triggerCodeAction(bp *action.BufPane, explicitCmd bool) bool {
 	m.mu.Unlock()
 
 	if state != StateReady || c == nil {
-		setInfoMessage("LSP is not ready")
+		setInfoMessage(m.notReadyMessage(state, "LSP is not ready"))
 		return true
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"runtime"
 	"strings"
 	"sync"
 	"unicode"
@@ -109,7 +110,7 @@ func Init() {
 					if res.ConfiguredMissing {
 						return "", fmt.Errorf("configured typst.tinymistPath not found: %s", cfg)
 					}
-					return "", fmt.Errorf("tinymist binary not found on PATH or standard install locations")
+					return "", fmt.Errorf("tinymist binary not found — install with: %s", lsp.PrimaryInstallHint(runtime.GOOS))
 				}
 				return res.Path, nil
 			},

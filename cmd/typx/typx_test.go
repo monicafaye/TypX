@@ -335,10 +335,12 @@ func TestRunCheck(t *testing.T) {
 
 	assert.Equal(t, 0, code)
 	assert.Contains(t, out, "TypX ")
+	assert.Contains(t, out, "Platform:     ")
 	assert.Contains(t, out, "Config dir:   [OK]")
 	assert.Contains(t, out, "Settings:     [OK]")
 	assert.Contains(t, out, "Typst syntax: [OK]")
 	assert.Contains(t, out, "Tinymist LSP:")
+	assert.Contains(t, out, "Result:       [OK]")
 }
 
 func TestDoEventDrainsUIQueue(t *testing.T) {

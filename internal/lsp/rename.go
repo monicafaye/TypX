@@ -36,7 +36,7 @@ func (m *Manager) triggerRename(bp *action.BufPane, newNameArg string, explicitC
 	m.mu.Unlock()
 
 	if state != StateReady || c == nil {
-		setInfoMessage("LSP is not ready")
+		setInfoMessage(m.notReadyMessage(state, "LSP is not ready"))
 		return true
 	}
 

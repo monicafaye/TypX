@@ -22,6 +22,7 @@ type State int32
 
 const (
 	StateOff State = iota
+	StateMissing
 	StateStarting
 	StateReady
 	StateRestarting
@@ -32,6 +33,8 @@ func (s State) String() string {
 	switch s {
 	case StateOff:
 		return "off"
+	case StateMissing:
+		return "no tinymist"
 	case StateStarting:
 		return "starting"
 	case StateReady:
@@ -90,6 +93,7 @@ type Manager struct {
 	atomicCompileStartNs  atomic.Int64
 	atomicPreviewStartNs  atomic.Int64
 	atomicPinnedMain      atomic.Value
+	missingHintShown      atomic.Bool
 
 	mu                 sync.Mutex
 	gen                uint64
@@ -236,6 +240,7 @@ func (m *Manager) Init(opts Options) {
 	m.pinnedRoot = ""
 	m.pinExplicitlyCleared = false
 	m.atomicPinnedMain.Store("")
+	m.missingHintShown.Store(false)
 	if m.rootURI != "" {
 		if root := URIToPath(m.rootURI); root != "" {
 			if pinned := loadPersistedPin(root); pinned != "" {
@@ -337,6 +342,7 @@ func (m *Manager) Shutdown() {
 	m.pinnedRoot = ""
 	m.pinExplicitlyCleared = false
 	m.atomicPinnedMain.Store("")
+	m.missingHintShown.Store(false)
 	m.resetCompileStatusLocked()
 	m.setStateLocked(StateOff)
 	m.mu.Unlock()
@@ -409,11 +415,14 @@ func (m *Manager) startAsync(gen uint64) {
 		} else {
 			m.lastErr = "tinymist not found"
 		}
-		m.setStateLocked(StateOff)
+		m.setStateLocked(StateMissing)
 		m.mu.Unlock()
 
 		if res.ConfiguredMissing {
+			m.missingHintShown.Store(true)
 			notifyInfoError("Tinymist not found at configured path (run :tinymist-status): " + configuredPath)
+		} else {
+			action.EnqueueUI(func() {})
 		}
 		return
 	}
@@ -986,6 +995,7 @@ func (m *Manager) restart() {
 	m.autoRestarts = 0
 	m.lastErr = ""
 	m.lastStderr = nil
+	m.missingHintShown.Store(false)
 	m.resetCompileStatusLocked()
 	m.lspEnabled = lspEnabled
 	m.tinymistPath = tinymistPath
@@ -1180,6 +1190,22 @@ func lastNonEmptyLine(lines []string) string {
 		}
 	}
 	return ""
+}
+
+func (m *Manager) notReadyMessage(state State, fallback string) string {
+	switch state {
+	case StateMissing:
+		if !m.missingHintShown.Swap(true) {
+			return fmt.Sprintf("tinymist not found — install with: %s (or :tinymist-status)", PrimaryInstallHint(runtime.GOOS))
+		}
+		return "LSP: no tinymist (run :tinymist-status)"
+	case StateStarting:
+		return "LSP: starting..."
+	case StateError:
+		return "LSP: error (run :tinymist-status)"
+	default:
+		return fallback
+	}
 }
 
 func notifyInfoMessage(msg string) {

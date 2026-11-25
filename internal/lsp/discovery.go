@@ -376,6 +376,15 @@ func ProbeVersion(ctx context.Context, binPath string) (string, error) {
 	}
 }
 
+// PrimaryInstallHint returns the top OS-specific install command for tinymist.
+func PrimaryInstallHint(goos string) string {
+	hints := InstallHints(goos)
+	if len(hints) == 0 {
+		return "cargo install --locked tinymist"
+	}
+	return hints[0]
+}
+
 // InstallHints returns OS-specific installation instructions for tinymist.
 func InstallHints(goos string) []string {
 	switch goos {

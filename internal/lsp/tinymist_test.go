@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -422,6 +423,47 @@ func TestNoLSPGracefulDegradation(t *testing.T) {
 	assert.Equal(t, StateOff, defaultManager.State())
 	assert.Contains(t, StatusLineInfo()(b), "LSP: off")
 	assert.Empty(t, readMockLog(logPath), "no LSP process should spawn when typst.lspEnabled=false")
+}
+
+func TestMissingTinymistStateAndOneTimeInstallHint(t *testing.T) {
+	dir, _ := setupLSPEnv(t, 0)
+	origDiscover := defaultManager.discoverFn
+	defaultManager.discoverFn = func(string) DiscoveryResult {
+		return DiscoveryResult{}
+	}
+	t.Cleanup(func() {
+		defaultManager.discoverFn = origDiscover
+	})
+
+	Init(Options{})
+	action.InitBindings()
+	action.InitCommands()
+	action.InitGlobals()
+
+	typPath := filepath.Join(dir, "missing.typ")
+	b := openTestBuffer(t, typPath, "= Missing\n")
+	action.InitTabs([]*buffer.Buffer{b})
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return defaultManager.State() == StateMissing
+	}, "expected StateMissing when tinymist is not found")
+
+	assert.Contains(t, StatusLineInfo()(b), "LSP: no tinymist |")
+
+	// First explicit LSP action shows the one-time non-blocking OS install hint.
+	bp := action.MainTab().CurPane()
+	require.NotNil(t, bp)
+	assert.True(t, LspHoverAction()(bp))
+	action.DrainUIQueue()
+	firstMsg := action.InfoBar.Msg
+	assert.Contains(t, firstMsg, "tinymist not found")
+	assert.Contains(t, firstMsg, PrimaryInstallHint(runtime.GOOS))
+
+	// Subsequent LSP action shows the concise reminder without repeating the install command.
+	assert.True(t, LspCompleteAction()(bp))
+	action.DrainUIQueue()
+	secondMsg := action.InfoBar.Msg
+	assert.Equal(t, "LSP: no tinymist (run :tinymist-status)", secondMsg)
 }
 
 func TestFindProjectRoot(t *testing.T) {

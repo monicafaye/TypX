@@ -430,7 +430,7 @@ func classifyStatusSegment(seg string, p statusLinePalette) tcell.Style {
 		return p.accent
 	case "LSP: ready":
 		return p.ok
-	case "LSP: off", "LSP: missing":
+	case "LSP: off", "LSP: missing", "LSP: no tinymist":
 		return p.dim
 	case "LSP: error":
 		return p.err

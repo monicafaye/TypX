@@ -353,7 +353,7 @@ func (m *Manager) startPreview(absPath string, openBrowser bool) {
 	}
 	if binPath == "" {
 		m.clearPreviewState()
-		notifyInfoError("Cannot start preview: tinymist binary not found")
+		notifyInfoError("Cannot start preview: " + m.notReadyMessage(StateMissing, "tinymist binary not found"))
 		return
 	}
 

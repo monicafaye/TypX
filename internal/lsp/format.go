@@ -51,7 +51,7 @@ func (m *Manager) triggerFormat(bp *action.BufPane, explicitCmd bool) bool {
 	m.mu.Unlock()
 
 	if state != StateReady || c == nil {
-		notifyInfoMessage("LSP: offline (cannot format)")
+		notifyInfoMessage(m.notReadyMessage(state, "LSP: offline (cannot format)"))
 		return true
 	}
 

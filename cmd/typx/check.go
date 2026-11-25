@@ -48,6 +48,7 @@ func runCheck(w io.Writer, configDirErr, settingsErr error) int {
 	failed := false
 
 	fmt.Fprintf(w, "TypX %s (based on micro %s)\n", util.TypXVersion, util.MicroBaseVersion)
+	fmt.Fprintf(w, "Platform:     %s/%s\n", runtime.GOOS, runtime.GOARCH)
 
 	if configDirErr != nil {
 		fmt.Fprintf(w, "Config dir:   [FAIL] %s (%v)\n", config.ConfigDir, configDirErr)
@@ -91,7 +92,9 @@ func runCheck(w io.Writer, configDirErr, settingsErr error) int {
 	preview.Check(w)
 
 	if failed {
+		fmt.Fprintln(w, "Result:       [FAIL] one or more required checks failed")
 		return 1
 	}
+	fmt.Fprintln(w, "Result:       [OK] environment ready")
 	return 0
 }
