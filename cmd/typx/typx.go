@@ -44,6 +44,7 @@ var (
 	flagCheck     = flag.Bool("check", false, "Verify TypX environment and exit")
 	flagNoLSP     = flag.Bool("no-lsp", false, "Launch without starting tinymist LSP")
 	flagPreview   = flag.Bool("preview", false, "Start companion live preview on the opened .typ file")
+	flagNew       = flag.String("new", "", "Create a new .typ document or project from a template")
 	optionFlags   map[string]*string
 
 	sighup chan os.Signal
@@ -77,6 +78,8 @@ func InitFlags() {
 		fmt.Println("    \tLaunch without starting the tinymist LSP server")
 		fmt.Println("-preview")
 		fmt.Println("    \tImmediately start companion live preview on the opened .typ file")
+		fmt.Println("-new template")
+		fmt.Println("    \tCreate a new .typ file or project from a template (use `-new list` to list)")
 
 		fmt.Print("\nTypX's plugins can be managed at the command line with the following commands.\n")
 		fmt.Println("-plugin install [PLUGIN]...")
@@ -380,6 +383,20 @@ func main() {
 
 	DoPluginFlags()
 
+	openArgs := flag.Args()
+	if *flagNew != "" {
+		var exitNow bool
+		var newErr error
+		openArgs, exitNow, newErr = handleNewFlag(*flagNew, openArgs, os.Stdout, nil)
+		if newErr != nil {
+			fmt.Fprintln(os.Stderr, "Error:", newErr)
+			exit(1)
+		}
+		if exitNow {
+			exit(0)
+		}
+	}
+
 	// Probe terminal inline graphics (Sixel) and cell pixel dimensions before
 	// tcell takes over stdin/stdout. Safe no-op on non-TTY streams.
 	preview.ProbeTerminal()
@@ -426,7 +443,7 @@ func main() {
 
 	features.Init()
 	startBrowserPreview := *flagPreview && !lsp.ShouldUseInlinePreview()
-	lsp.Init(lsp.Options{StartPreview: startBrowserPreview, InitialFiles: flag.Args()})
+	lsp.Init(lsp.Options{StartPreview: startBrowserPreview, InitialFiles: openArgs})
 
 	action.InitBindings()
 	action.InitCommands()
@@ -438,8 +455,7 @@ func main() {
 
 	action.InitGlobals()
 	buffer.SetMessager(action.InfoBar)
-	args := flag.Args()
-	b := LoadInput(args)
+	b := LoadInput(openArgs)
 
 	if len(b) == 0 {
 		// No buffers to open

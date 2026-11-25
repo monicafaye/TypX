@@ -641,3 +641,30 @@ func TestE2E_LiveTinymist_Smoke(t *testing.T) {
 		})
 	}
 }
+
+func TestCLI_NewFlagListAndNoClobber(t *testing.T) {
+	typx := harness.BuildTypxBinary(t)
+	cfgDir := harness.IsolatedConfigDir(t, nil)
+
+	res := harness.RunCLI(t, typx, map[string]string{
+		"TYPX_CONFIG_HOME": cfgDir,
+	}, "", "--new", "list")
+	require.Equal(t, 0, res.ExitCode, "stderr: %s", res.Stderr)
+	assert.Contains(t, res.Stdout, "Built-in Starters:")
+	assert.Contains(t, res.Stdout, "article")
+	assert.Contains(t, res.Stdout, "notes")
+	assert.Contains(t, res.Stdout, "paper")
+
+	// Refuses overwriting an existing non-empty file with clear error and exit code 1.
+	existing := filepath.Join(t.TempDir(), "existing.typ")
+	require.NoError(t, os.WriteFile(existing, []byte("= Keep Me\n"), 0o644))
+	errRes := harness.RunCLI(t, typx, map[string]string{
+		"TYPX_CONFIG_HOME": cfgDir,
+	}, "", "--new", "notes", existing)
+	assert.Equal(t, 1, errRes.ExitCode)
+	assert.Contains(t, errRes.Stderr, "already exists")
+
+	kept, err := os.ReadFile(existing)
+	require.NoError(t, err)
+	assert.Equal(t, "= Keep Me\n", string(kept))
+}
