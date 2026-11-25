@@ -74,6 +74,11 @@ func TestDecodeImageToRGBA_PNGAndWebP(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, image.Rect(0, 0, 12, 8), pngImg.Bounds())
 
+	// Transparent PNGs must composite onto paper white instead of turning black.
+	transImg, err := DecodeImageToRGBA(minimalPNGBytes(t, 4, 4, color.RGBA{0, 0, 0, 0}))
+	require.NoError(t, err)
+	assert.Equal(t, color.RGBA{255, 255, 255, 255}, transImg.RGBAAt(1, 1))
+
 	webpImg, err := DecodeImageToRGBA(minimalLosslessWebP())
 	require.NoError(t, err)
 	assert.Equal(t, image.Rect(0, 0, 1, 1), webpImg.Bounds())
@@ -88,15 +93,15 @@ func TestUniverseFetchThumbnailCacheAndFallback(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/thumbnails/charged-ieee-0.1.4-small.webp":
-			smallHits.Add(1)
+		case "/thumbnails/charged-ieee-0.1.4.webp":
+			fullHits.Add(1)
 			w.Header().Set("Content-Type", "image/webp")
 			_, _ = w.Write(webpBytes)
-		case "/thumbnails/fallback-pkg-1.0.0-small.webp":
-			smallHits.Add(1)
-			w.WriteHeader(http.StatusNotFound)
 		case "/thumbnails/fallback-pkg-1.0.0.webp":
 			fullHits.Add(1)
+			w.WriteHeader(http.StatusNotFound)
+		case "/thumbnails/fallback-pkg-1.0.0-small.webp":
+			smallHits.Add(1)
 			w.Header().Set("Content-Type", "image/webp")
 			_, _ = w.Write(webpBytes)
 		default:
@@ -112,23 +117,26 @@ func TestUniverseFetchThumbnailCacheAndFallback(t *testing.T) {
 		HTTPClient: srv.Client(),
 	}
 
-	// 1. Fetches -small.webp and caches on disk.
+	// 1. Prefers full-res .webp and caches it under thumb-full-*.webp.
 	got1, err := client.FetchThumbnail(context.Background(), "charged-ieee", "0.1.4", cacheDir)
 	require.NoError(t, err)
 	assert.Equal(t, webpBytes, got1)
-	assert.Equal(t, int32(1), smallHits.Load())
+	assert.Equal(t, int32(1), fullHits.Load())
+	assert.Equal(t, int32(0), smallHits.Load())
+	_, statErr := os.Stat(filepath.Join(cacheDir, "thumb-full-charged-ieee-0.1.4.webp"))
+	assert.NoError(t, statErr)
 
 	// 2. Second request serves from disk with 0 HTTP hits.
 	got2, err := client.FetchThumbnail(context.Background(), "charged-ieee", "0.1.4", cacheDir)
 	require.NoError(t, err)
 	assert.Equal(t, webpBytes, got2)
-	assert.Equal(t, int32(1), smallHits.Load())
+	assert.Equal(t, int32(1), fullHits.Load())
 
-	// 3. 404 on -small.webp falls back cleanly to full .webp.
+	// 3. 404 on full .webp falls back cleanly to -small.webp.
 	gotFallback, err := client.FetchThumbnail(context.Background(), "fallback-pkg", "1.0.0", cacheDir)
 	require.NoError(t, err)
 	assert.Equal(t, webpBytes, gotFallback)
-	assert.Equal(t, int32(1), fullHits.Load())
+	assert.Equal(t, int32(1), smallHits.Load())
 }
 
 func TestLoadTemplatePreviewImagesLocalUniverseAndCompiledCache(t *testing.T) {

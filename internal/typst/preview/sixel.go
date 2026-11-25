@@ -5,6 +5,8 @@ import (
 	"image"
 	"image/draw"
 	"strconv"
+
+	xdraw "golang.org/x/image/draw"
 )
 
 // Palette layout (248 colors):
@@ -249,10 +251,16 @@ func cropWhitespaceWithBounds(src *image.RGBA, pad int) (*image.RGBA, int, int) 
 	return out, minY, cropH
 }
 
-// scaleArea performs box-averaged downscaling (crisp for anti-aliased text/math)
-// with optional soft dark-theme tone inversion.
+// scaleArea performs high-quality Catmull-Rom resampling (crisp for both downscaled
+// text/math and upscaled thumbnails) with optional soft dark-theme tone inversion.
 func scaleArea(src *image.RGBA, dstW int, invert bool) *image.RGBA {
+	if src == nil {
+		return nil
+	}
 	sw, sh := src.Bounds().Dx(), src.Bounds().Dy()
+	if sw <= 0 || sh <= 0 {
+		return image.NewRGBA(image.Rect(0, 0, 1, 1))
+	}
 	if dstW <= 0 {
 		dstW = sw
 	}
@@ -262,69 +270,23 @@ func scaleArea(src *image.RGBA, dstW int, invert bool) *image.RGBA {
 	}
 
 	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
-	scaleX := float64(sw) / float64(dstW)
-	scaleY := float64(sh) / float64(dstH)
+	if dstW == sw && dstH == sh {
+		draw.Draw(dst, dst.Bounds(), src, src.Bounds().Min, draw.Src)
+	} else {
+		xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), xdraw.Src, nil)
+	}
 
 	for dy := 0; dy < dstH; dy++ {
-		sy0 := float64(dy) * scaleY
-		sy1 := float64(dy+1) * scaleY
-		iy0 := int(sy0)
-		iy1 := int(sy1)
-		if iy1 <= iy0 {
-			iy1 = iy0 + 1
-		}
-		if iy1 > sh {
-			iy1 = sh
-		}
-		if iy0 >= sh {
-			iy0 = sh - 1
-		}
-
+		rowOff := dy * dst.Stride
 		for dx := 0; dx < dstW; dx++ {
-			sx0 := float64(dx) * scaleX
-			sx1 := float64(dx+1) * scaleX
-			ix0 := int(sx0)
-			ix1 := int(sx1)
-			if ix1 <= ix0 {
-				ix1 = ix0 + 1
-			}
-			if ix1 > sw {
-				ix1 = sw
-			}
-			if ix0 >= sw {
-				ix0 = sw - 1
-			}
-
-			var rSum, gSum, bSum, count uint32
-			for sy := iy0; sy < iy1; sy++ {
-				rowOff := sy * src.Stride
-				for sx := ix0; sx < ix1; sx++ {
-					off := rowOff + sx*4
-					rSum += uint32(src.Pix[off])
-					gSum += uint32(src.Pix[off+1])
-					bSum += uint32(src.Pix[off+2])
-					count++
-				}
-			}
-			if count == 0 {
-				count = 1
-			}
-			r := uint8(rSum / count)
-			g := uint8(gSum / count)
-			b := uint8(bSum / count)
-
+			off := rowOff + dx*4
 			if invert {
 				// Soft dark-theme paper inversion: white -> #1b1e28, black -> #e6edf3
-				r = uint8(27 + (int(255-r)*203)/255)
-				g = uint8(30 + (int(255-g)*207)/255)
-				b = uint8(40 + (int(255-b)*203)/255)
+				dst.Pix[off] = uint8(27 + (int(255-dst.Pix[off])*203)/255)
+				dst.Pix[off+1] = uint8(30 + (int(255-dst.Pix[off+1])*207)/255)
+				dst.Pix[off+2] = uint8(40 + (int(255-dst.Pix[off+2])*203)/255)
 			}
-
-			doff := dy*dst.Stride + dx*4
-			dst.Pix[doff] = r
-			dst.Pix[doff+1] = g
-			dst.Pix[doff+2] = b
-			dst.Pix[doff+3] = 255
+			dst.Pix[off+3] = 255
 		}
 	}
 	return dst

@@ -170,3 +170,35 @@ func TestOverridePreservesExistingDocumentPreviewAndCompileHelper(t *testing.T) 
 	assert.Len(t, imgs, 1)
 	assert.Equal(t, image.Rect(0, 0, 200, 300), imgs[0].Bounds())
 }
+
+func TestScaleAreaResamplingAndDarkInvert(t *testing.T) {
+	t.Parallel()
+
+	// Create a 10x10 diagonal gradient source image so upscaling and downscaling
+	// produce smooth interpolated intermediate pixels rather than blocky steps.
+	src := image.NewRGBA(image.Rect(0, 0, 10, 10))
+	for y := 0; y < 10; y++ {
+		for x := 0; x < 10; x++ {
+			v := uint8((x + y) * 14)
+			src.SetRGBA(x, y, color.RGBA{v, v, v, 255})
+		}
+	}
+
+	up := scaleArea(src, 40, false)
+	require.Equal(t, image.Rect(0, 0, 40, 40), up.Bounds())
+	assert.Equal(t, uint8(255), up.RGBAAt(20, 20).A)
+	// Adjacent pixels on an upscaled gradient should interpolate smoothly.
+	left := int(up.RGBAAt(18, 20).R)
+	mid := int(up.RGBAAt(19, 20).R)
+	right := int(up.RGBAAt(20, 20).R)
+	assert.GreaterOrEqual(t, right, mid)
+	assert.GreaterOrEqual(t, mid, left)
+
+	// Pure white with dark-theme inversion maps to #1b1e28 and opaque alpha.
+	white := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	draw.Draw(white, white.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
+	inv := scaleArea(white, 4, true)
+	require.Equal(t, image.Rect(0, 0, 4, 4), inv.Bounds())
+	px := inv.RGBAAt(2, 2)
+	assert.Equal(t, color.RGBA{27, 30, 40, 255}, px)
+}

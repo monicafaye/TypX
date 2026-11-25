@@ -24,7 +24,7 @@ const (
 	defaultUniverseTTL     = 24 * time.Hour
 
 	maxUniverseIndexBytes = 32 << 20 // 32 MiB
-	maxThumbnailBytes     = 4 << 20  // 4 MiB
+	maxThumbnailBytes     = 10 << 20 // 10 MiB
 	maxTarballBytes       = 50 << 20 // 50 MiB
 	maxExtractedBytes     = 50 << 20 // 50 MiB
 	maxExtractedFiles     = 1000
@@ -281,7 +281,7 @@ func (c *UniverseClient) writeCache(payload universeCachePayload) error {
 }
 
 // FetchThumbnail loads a cached Typst Universe template thumbnail or fetches
-// `<name>-<version>-small.webp` (falling back to `<name>-<version>.webp` on 404).
+// `<name>-<version>.webp` (falling back to `<name>-<version>-small.webp` on 404).
 func (c *UniverseClient) FetchThumbnail(ctx context.Context, name, version, previewCacheDir string) ([]byte, error) {
 	if !isSafePkgToken(name) || !isSafePkgToken(version) {
 		return nil, fmt.Errorf("invalid package coordinates: %q %q", name, version)
@@ -289,15 +289,15 @@ func (c *UniverseClient) FetchThumbnail(ctx context.Context, name, version, prev
 
 	var cachePath string
 	if strings.TrimSpace(previewCacheDir) != "" {
-		cachePath = filepath.Join(previewCacheDir, fmt.Sprintf("thumb-%s-%s.webp", name, version))
+		cachePath = filepath.Join(previewCacheDir, fmt.Sprintf("thumb-full-%s-%s.webp", name, version))
 		if raw, err := os.ReadFile(cachePath); err == nil && len(raw) > 0 {
 			return raw, nil
 		}
 	}
 
 	urls := []string{
-		fmt.Sprintf("%s/thumbnails/%s-%s-small.webp", c.baseURL(), name, version),
 		fmt.Sprintf("%s/thumbnails/%s-%s.webp", c.baseURL(), name, version),
+		fmt.Sprintf("%s/thumbnails/%s-%s-small.webp", c.baseURL(), name, version),
 	}
 
 	var lastErr error

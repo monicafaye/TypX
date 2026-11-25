@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	_ "image/jpeg"
 	"image/png"
@@ -44,7 +45,8 @@ func DefaultPreviewCacheDir() string {
 	return ""
 }
 
-// DecodeImageToRGBA decodes PNG, JPEG, or WebP bytes into an *image.RGBA.
+// DecodeImageToRGBA decodes PNG, JPEG, or WebP bytes into an opaque *image.RGBA
+// composited over paper white so transparent areas render cleanly in dark or light themes.
 func DecodeImageToRGBA(data []byte) (*image.RGBA, error) {
 	if len(data) == 0 {
 		return nil, errors.New("empty image data")
@@ -53,12 +55,10 @@ func DecodeImageToRGBA(data []byte) (*image.RGBA, error) {
 	if err != nil {
 		return nil, err
 	}
-	if rgba, ok := img.(*image.RGBA); ok {
-		return rgba, nil
-	}
 	b := img.Bounds()
 	rgba := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
-	draw.Draw(rgba, rgba.Bounds(), img, b.Min, draw.Src)
+	draw.Draw(rgba, rgba.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+	draw.Draw(rgba, rgba.Bounds(), img, b.Min, draw.Over)
 	return rgba, nil
 }
 
