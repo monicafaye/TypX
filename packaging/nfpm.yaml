@@ -1,0 +1,35 @@
+name: "typx"
+arch: "${PKG_ARCH}"
+platform: "linux"
+version: "${PKG_VERSION}"
+release: "1"
+section: "editors"
+priority: "optional"
+maintainer: "monicafaye <354112421+monicafaye@users.noreply.github.com>"
+homepage: "https://github.com/monicafaye/TypX"
+license: "MIT"
+description: |
+  Terminal editor for Typst with live math concealment, document outline,
+  tinymist LSP integration, and native in-terminal Sixel preview.
+  Forked from zyedidia/micro.
+contents:
+  - src: "${PKG_BINARY}"
+    dst: "/usr/bin/typx"
+    file_info:
+      mode: 0755
+  - src: "LICENSE"
+    dst: "/usr/share/doc/typx/LICENSE"
+    file_info:
+      mode: 0644
+  - src: "LICENSE-MICRO"
+    dst: "/usr/share/doc/typx/LICENSE-MICRO"
+    file_info:
+      mode: 0644
+  - src: "LICENSE-THIRD-PARTY"
+    dst: "/usr/share/doc/typx/LICENSE-THIRD-PARTY"
+    file_info:
+      mode: 0644
+  - src: "README.md"
+    dst: "/usr/share/doc/typx/README.md"
+    file_info:
+      mode: 0644
