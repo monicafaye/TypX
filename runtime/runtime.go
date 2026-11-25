@@ -8,11 +8,11 @@ import (
 
 //go:generate go run syntax/make_headers.go syntax
 
-//go:embed colorschemes help plugins syntax
+//go:embed colorschemes help plugins syntax templates
 var runtime embed.FS
 
 func fixPath(name string) string {
-	return strings.TrimLeft(filepath.ToSlash(name), "runtime/")
+	return strings.TrimPrefix(filepath.ToSlash(name), "runtime/")
 }
 
 // AssetDir lists file names in folder
