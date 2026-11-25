@@ -62,9 +62,11 @@ type Template struct {
 	IsMultiFile bool
 	DirPath     string
 	FilePath    string
-	Entrypoint  string
-	PackageSpec string
-	AssetName   string
+	Entrypoint    string
+	PackageSpec   string
+	AssetName     string
+	ThumbnailPath string
+	ThumbnailName string
 }
 
 // DisplayTitle returns Title if non-empty, falling back to Name or ID.

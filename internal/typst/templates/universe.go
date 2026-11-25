@@ -24,6 +24,7 @@ const (
 	defaultUniverseTTL     = 24 * time.Hour
 
 	maxUniverseIndexBytes = 32 << 20 // 32 MiB
+	maxThumbnailBytes     = 4 << 20  // 4 MiB
 	maxTarballBytes       = 50 << 20 // 50 MiB
 	maxExtractedBytes     = 50 << 20 // 50 MiB
 	maxExtractedFiles     = 1000
@@ -198,16 +199,17 @@ func extractLatestUniverseTemplates(entries []universeIndexEntry) []Template {
 		}
 		spec := "@preview/" + e.Name + ":" + e.Version
 		bestByName[key] = Template{
-			ID:          spec,
-			Name:        e.Name,
-			Title:       e.Name + " (" + e.Version + ")",
-			Description: e.Description,
-			Category:    cat,
-			Version:     e.Version,
-			Source:      SourceUniverse,
-			IsMultiFile: true,
-			Entrypoint:  filepath.ToSlash(e.Template.Entrypoint),
-			PackageSpec: spec,
+			ID:            spec,
+			Name:          e.Name,
+			Title:         e.Name + " (" + e.Version + ")",
+			Description:   e.Description,
+			Category:      cat,
+			Version:       e.Version,
+			Source:        SourceUniverse,
+			IsMultiFile:   true,
+			Entrypoint:    filepath.ToSlash(e.Template.Entrypoint),
+			PackageSpec:   spec,
+			ThumbnailName: filepath.ToSlash(e.Template.Thumbnail),
 		}
 	}
 
@@ -272,6 +274,99 @@ func (c *UniverseClient) writeCache(payload universeCachePayload) error {
 		return err
 	}
 	if err := os.Rename(tmpName, cf); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
+// FetchThumbnail loads a cached Typst Universe template thumbnail or fetches
+// `<name>-<version>-small.webp` (falling back to `<name>-<version>.webp` on 404).
+func (c *UniverseClient) FetchThumbnail(ctx context.Context, name, version, previewCacheDir string) ([]byte, error) {
+	if !isSafePkgToken(name) || !isSafePkgToken(version) {
+		return nil, fmt.Errorf("invalid package coordinates: %q %q", name, version)
+	}
+
+	var cachePath string
+	if strings.TrimSpace(previewCacheDir) != "" {
+		cachePath = filepath.Join(previewCacheDir, fmt.Sprintf("thumb-%s-%s.webp", name, version))
+		if raw, err := os.ReadFile(cachePath); err == nil && len(raw) > 0 {
+			return raw, nil
+		}
+	}
+
+	urls := []string{
+		fmt.Sprintf("%s/thumbnails/%s-%s-small.webp", c.baseURL(), name, version),
+		fmt.Sprintf("%s/thumbnails/%s-%s.webp", c.baseURL(), name, version),
+	}
+
+	var lastErr error
+	for idx, u := range urls {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "TypX")
+
+		resp, err := c.httpClient().Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusNotFound && idx == 0 {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("thumbnail not found: HTTP 404")
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("thumbnail request failed: HTTP %d", resp.StatusCode)
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxThumbnailBytes+1))
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if len(raw) > maxThumbnailBytes {
+			return nil, fmt.Errorf("thumbnail exceeds %d byte limit", maxThumbnailBytes)
+		}
+		if len(raw) == 0 {
+			return nil, errors.New("empty thumbnail response")
+		}
+		if cachePath != "" {
+			_ = writeBytesAtomic(cachePath, raw)
+		}
+		return raw, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, errors.New("thumbnail unavailable")
+}
+
+func writeBytesAtomic(target string, data []byte) error {
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".cache-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, target); err != nil {
 		return err
 	}
 	cleanup = false

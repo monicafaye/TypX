@@ -16,7 +16,7 @@ require (
 	github.com/yuin/gopher-lua v1.1.1
 	github.com/zyedidia/clipper v0.1.1
 	github.com/zyedidia/glob v0.0.0-20170209203856-dd4023a66dc3
-	golang.org/x/text v0.4.0
+	golang.org/x/text v0.22.0
 	gopkg.in/yaml.v2 v2.2.8
 	layeh.com/gopher-luar v1.0.11
 )
@@ -29,6 +29,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/zyedidia/poller v1.0.1 // indirect
+	golang.org/x/image v0.24.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/term v0.29.0 // indirect
 )

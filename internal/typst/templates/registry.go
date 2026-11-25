@@ -318,20 +318,39 @@ func scanPackageNamespace(nsDir, nsName string, source SourceKind) []Template {
 			if len(man.Package.Categories) > 0 {
 				cat = man.Package.Categories[0]
 			}
+			var thumbPath string
+			if man.Template.Thumbnail != "" {
+				cand := filepath.Clean(filepath.Join(verDir, filepath.FromSlash(man.Template.Thumbnail)))
+				if isSubpath(verDir, cand) {
+					if fi, err := os.Stat(cand); err == nil && fi.Mode().IsRegular() {
+						thumbPath = cand
+					}
+				}
+				if thumbPath == "" {
+					cand = filepath.Clean(filepath.Join(tmplRoot, filepath.FromSlash(man.Template.Thumbnail)))
+					if isSubpath(tmplRoot, cand) {
+						if fi, err := os.Stat(cand); err == nil && fi.Mode().IsRegular() {
+							thumbPath = cand
+						}
+					}
+				}
+			}
 			spec := "@" + nsName + "/" + pkgName + ":" + pkgVer
 			best = &Template{
-				ID:          spec,
-				Name:        pkgName,
-				Title:       pkgName + " (" + pkgVer + ")",
-				Description: man.Package.Description,
-				Category:    cat,
-				Version:     pkgVer,
-				Source:      source,
-				IsMultiFile: true,
-				DirPath:     tmplRoot,
-				FilePath:    entryAbs,
-				Entrypoint:  filepath.ToSlash(man.Template.Entrypoint),
-				PackageSpec: spec,
+				ID:            spec,
+				Name:          pkgName,
+				Title:         pkgName + " (" + pkgVer + ")",
+				Description:   man.Package.Description,
+				Category:      cat,
+				Version:       pkgVer,
+				Source:        source,
+				IsMultiFile:   true,
+				DirPath:       tmplRoot,
+				FilePath:      entryAbs,
+				Entrypoint:    filepath.ToSlash(man.Template.Entrypoint),
+				PackageSpec:   spec,
+				ThumbnailPath: thumbPath,
+				ThumbnailName: filepath.ToSlash(man.Template.Thumbnail),
 			}
 		}
 		if best != nil {
