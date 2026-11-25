@@ -41,39 +41,79 @@ const (
 	backupRemove
 )
 
-type backupRequest struct {
-	buf     *SharedBuffer
-	reqType backupRequestType
+type backupEntry struct {
+	backupDir string
+	absPath   string
 }
 
-var requestedBackups map[*SharedBuffer]bool
+type backupRequest struct {
+	buf       *SharedBuffer
+	reqType   backupRequestType
+	backupDir string
+	absPath   string
+	enabled   bool
+	keep      bool
+}
+
+var requestedBackups map[*SharedBuffer]backupEntry
 
 func init() {
-	requestedBackups = make(map[*SharedBuffer]bool)
+	requestedBackups = make(map[*SharedBuffer]backupEntry)
 }
 
 func (b *SharedBuffer) RequestBackup() {
-	backupRequestChan <- backupRequest{buf: b, reqType: backupCreate}
+	enabled := b.Settings["backup"].(bool) && b.Path != "" && b.Type == BTDefault
+	var backupDir, absPath string
+	if enabled {
+		backupDir = b.backupDir()
+		absPath = b.AbsPath
+	}
+	backupRequestChan <- backupRequest{
+		buf:       b,
+		reqType:   backupCreate,
+		backupDir: backupDir,
+		absPath:   absPath,
+		enabled:   enabled,
+	}
 }
 
 func (b *SharedBuffer) CancelBackup() {
-	backupRequestChan <- backupRequest{buf: b, reqType: backupRemove}
+	keep := b.keepBackup() || b.Path == "" || b.Type != BTDefault
+	var backupDir, absPath string
+	if !keep {
+		backupDir = b.backupDir()
+		absPath = b.AbsPath
+	}
+	backupRequestChan <- backupRequest{
+		buf:       b,
+		reqType:   backupRemove,
+		backupDir: backupDir,
+		absPath:   absPath,
+		keep:      keep,
+	}
 }
 
 func handleBackupRequest(br backupRequest) {
 	switch br.reqType {
 	case backupCreate:
 		// schedule periodic backup
-		requestedBackups[br.buf] = true
+		if br.enabled {
+			requestedBackups[br.buf] = backupEntry{
+				backupDir: br.backupDir,
+				absPath:   br.absPath,
+			}
+		}
 	case backupRemove:
-		br.buf.RemoveBackup()
+		if !br.keep {
+			br.buf.removeBackupInDir(br.backupDir, br.absPath)
+		}
 		delete(requestedBackups, br.buf)
 	}
 }
 
 func periodicBackup() {
-	for buf := range requestedBackups {
-		err := buf.Backup()
+	for buf, entry := range requestedBackups {
+		_, _, err := buf.writeBackupInDir(entry.backupDir, entry.absPath)
 		if err == nil {
 			delete(requestedBackups, buf)
 		}
@@ -93,7 +133,10 @@ func (b *SharedBuffer) keepBackup() bool {
 }
 
 func (b *SharedBuffer) writeBackup(path string) (string, string, error) {
-	backupdir := b.backupDir()
+	return b.writeBackupInDir(b.backupDir(), path)
+}
+
+func (b *SharedBuffer) writeBackupInDir(backupdir, path string) (string, string, error) {
 	if _, err := os.Stat(backupdir); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return "", "", err
@@ -134,6 +177,11 @@ func (b *SharedBuffer) removeBackup(path string, resolveName string) {
 	}
 }
 
+func (b *SharedBuffer) removeBackupInDir(backupdir, absPath string) {
+	f, resolveName := util.DetermineEscapePath(backupdir, absPath)
+	b.removeBackup(f, resolveName)
+}
+
 // Backup saves the buffer to the backups directory
 func (b *SharedBuffer) Backup() error {
 	if !b.Settings["backup"].(bool) || b.Path == "" || b.Type != BTDefault {
@@ -149,8 +197,7 @@ func (b *SharedBuffer) RemoveBackup() {
 	if b.keepBackup() || b.Path == "" || b.Type != BTDefault {
 		return
 	}
-	f, resolveName := util.DetermineEscapePath(b.backupDir(), b.AbsPath)
-	b.removeBackup(f, resolveName)
+	b.removeBackupInDir(b.backupDir(), b.AbsPath)
 }
 
 // ApplyBackup applies the corresponding backup file to this buffer (if one exists)

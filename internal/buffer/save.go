@@ -161,14 +161,15 @@ func (wf wrappedFile) Write(b *SharedBuffer) (int, error) {
 		return 0, err
 	}
 
-	for _, l := range b.lines[1:] {
+	for i := 1; i < len(b.lines); i++ {
+		data := b.lines[i].data
 		if _, err = file.Write(eol); err != nil {
 			return 0, err
 		}
-		if _, err = file.Write(l.data); err != nil {
+		if _, err = file.Write(data); err != nil {
 			return 0, err
 		}
-		size += len(eol) + len(l.data)
+		size += len(eol) + len(data)
 	}
 
 	err = file.Flush()
@@ -248,10 +249,11 @@ func (b *Buffer) saveToFile(filename string, withSudo bool, autoSave bool) error
 	}
 
 	if !autoSave && b.Settings["rmtrailingws"].(bool) {
-		for i, l := range b.lines {
-			leftover := util.CharacterCount(bytes.TrimRightFunc(l.data, unicode.IsSpace))
+		for i := 0; i < len(b.lines); i++ {
+			data := b.lines[i].data
+			leftover := util.CharacterCount(bytes.TrimRightFunc(data, unicode.IsSpace))
 
-			linelen := util.CharacterCount(l.data)
+			linelen := util.CharacterCount(data)
 			b.Remove(Loc{leftover, i}, Loc{linelen, i})
 		}
 

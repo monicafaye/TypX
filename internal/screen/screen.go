@@ -31,7 +31,10 @@ var lock sync.Mutex
 
 // drawChan is a channel that will cause the screen to redraw when
 // written to even if no event user event has occurred
-var drawChan chan bool
+var (
+	drawChan   chan bool
+	drawChanMu sync.RWMutex
+)
 
 // rawSeq is the list of raw escape sequences that are bound to some actions
 // via keybindings and thus should be parsed by tcell. We need to register
@@ -80,8 +83,14 @@ func Unlock() {
 
 // Redraw schedules a redraw with the draw channel
 func Redraw() {
+	drawChanMu.RLock()
+	ch := drawChan
+	drawChanMu.RUnlock()
+	if ch == nil {
+		return
+	}
 	select {
-	case drawChan <- true:
+	case ch <- true:
 	default:
 		// channel is full
 	}
@@ -89,7 +98,10 @@ func Redraw() {
 
 // DrawChan returns the draw channel
 func DrawChan() chan bool {
-	return drawChan
+	drawChanMu.RLock()
+	ch := drawChan
+	drawChanMu.RUnlock()
+	return ch
 }
 
 type screenCell struct {
@@ -210,7 +222,9 @@ func TempStart(screenWasNil bool) {
 
 // Init creates and initializes the tcell screen
 func Init() error {
+	drawChanMu.Lock()
 	drawChan = make(chan bool, 8)
+	drawChanMu.Unlock()
 
 	// Should we enable true color?
 	truecolor := config.GetGlobalOption("truecolor").(string)
@@ -270,7 +284,9 @@ func Init() error {
 
 // InitSimScreen initializes a simulation screen for testing purposes
 func InitSimScreen() (tcell.SimulationScreen, error) {
+	drawChanMu.Lock()
 	drawChan = make(chan bool, 8)
+	drawChanMu.Unlock()
 
 	// Initilize tcell
 	var err error

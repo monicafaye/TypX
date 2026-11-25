@@ -42,13 +42,12 @@ type searchState struct {
 }
 
 // A Line contains the data in bytes as well as a highlight state, match
-// and a flag for whether the highlighting needs to be updated
+// and search match cache for the line
 type Line struct {
 	data []byte
 
 	state highlight.State
 	match highlight.LineMatch
-	lock  sync.Mutex
 
 	// The search states for the line, used for highlighting of search matches,
 	// separately from the syntax highlighting.
@@ -71,10 +70,11 @@ type FileFormat byte
 // A LineArray simply stores and array of lines and makes it easy to insert
 // and delete in it
 type LineArray struct {
-	lines    []Line
-	Endings  FileFormat
-	initsize uint64
-	lock     sync.Mutex
+	lines     []Line
+	Endings   FileFormat
+	initsize  uint64
+	lock      sync.Mutex
+	stateLock sync.Mutex
 }
 
 // Append efficiently appends lines together
@@ -170,11 +170,14 @@ func NewLineArray(size uint64, endings FileFormat, reader io.Reader) *LineArray 
 // Bytes returns the string that should be written to disk when
 // the line array is saved
 func (la *LineArray) Bytes() []byte {
+	la.lock.Lock()
+	defer la.lock.Unlock()
+
 	b := new(bytes.Buffer)
 	// initsize should provide a good estimate
 	b.Grow(int(la.initsize + 4096))
-	for i, l := range la.lines {
-		b.Write(l.data)
+	for i := range la.lines {
+		b.Write(la.lines[i].data)
 		if i != len(la.lines)-1 {
 			if la.Endings == FFDos {
 				b.WriteByte('\r')
@@ -332,29 +335,29 @@ func (la *LineArray) LineBytes(lineN int) []byte {
 
 // State gets the highlight state for the given line number
 func (la *LineArray) State(lineN int) highlight.State {
-	la.lines[lineN].lock.Lock()
-	defer la.lines[lineN].lock.Unlock()
+	la.stateLock.Lock()
+	defer la.stateLock.Unlock()
 	return la.lines[lineN].state
 }
 
 // SetState sets the highlight state at the given line number
 func (la *LineArray) SetState(lineN int, s highlight.State) {
-	la.lines[lineN].lock.Lock()
-	defer la.lines[lineN].lock.Unlock()
+	la.stateLock.Lock()
+	defer la.stateLock.Unlock()
 	la.lines[lineN].state = s
 }
 
 // SetMatch sets the match at the given line number
 func (la *LineArray) SetMatch(lineN int, m highlight.LineMatch) {
-	la.lines[lineN].lock.Lock()
-	defer la.lines[lineN].lock.Unlock()
+	la.stateLock.Lock()
+	defer la.stateLock.Unlock()
 	la.lines[lineN].match = m
 }
 
 // Match retrieves the match for the given line number
 func (la *LineArray) Match(lineN int) highlight.LineMatch {
-	la.lines[lineN].lock.Lock()
-	defer la.lines[lineN].lock.Unlock()
+	la.stateLock.Lock()
+	defer la.stateLock.Unlock()
 	return la.lines[lineN].match
 }
 

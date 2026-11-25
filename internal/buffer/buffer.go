@@ -166,18 +166,21 @@ func (b *SharedBuffer) setModified() {
 
 // calcHash calculates md5 hash of all lines in the buffer
 func (b *SharedBuffer) calcHash(out *[md5.Size]byte) {
+	b.Lock()
+	defer b.Unlock()
+
 	h := md5.New()
 
 	if len(b.lines) > 0 {
 		h.Write(b.lines[0].data)
 
-		for _, l := range b.lines[1:] {
+		for i := 1; i < len(b.lines); i++ {
 			if b.Endings == FFDos {
 				h.Write([]byte{'\r', '\n'})
 			} else {
 				h.Write([]byte{'\n'})
 			}
-			h.Write(l.data)
+			h.Write(b.lines[i].data)
 		}
 	}
 
@@ -1035,19 +1038,26 @@ func (b *Buffer) UpdateRules() {
 	}
 
 	if b.SyntaxDef != nil {
-		b.Highlighter = highlight.NewHighlighter(b.SyntaxDef)
+		hl := highlight.NewHighlighter(b.SyntaxDef)
+		b.Highlighter = hl
 		if b.Settings["syntax"].(bool) {
-			go func() {
-				b.Highlighter.HighlightStates(b)
-				b.Highlighter.HighlightMatches(b, 0, b.End().Y)
+			go func(hl *highlight.Highlighter) {
+				hl.HighlightStates(b)
+				b.Lock()
+				endY := b.LinesNum() - 1
+				b.Unlock()
+				hl.HighlightMatches(b, 0, endY)
 				screen.Redraw()
-			}()
+			}(hl)
 		}
 	}
 }
 
 // ClearMatches clears all of the syntax highlighting for the buffer
 func (b *Buffer) ClearMatches() {
+	b.Lock()
+	defer b.Unlock()
+
 	for i := range b.lines {
 		b.SetMatch(i, nil)
 		b.SetState(i, nil)
