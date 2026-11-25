@@ -41,9 +41,6 @@ func NewToggleTemplatesAction() action.BufKeyAction {
 			defaultManager.CloseForTab(tab)
 			return true
 		}
-		if !bp.Buf.IsTypst() {
-			return false
-		}
 		defaultManager.Open(bp, true)
 		return true
 	}

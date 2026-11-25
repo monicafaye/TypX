@@ -349,3 +349,118 @@ func TestTemplatePaneLivePreviewDefaultOnToggleAndCleanup(t *testing.T) {
 	fp.mu.Unlock()
 	assert.Greater(t, clearsAfterEsc, clearsAfterOff)
 }
+
+func TestTemplateGalleryWithoutOpenTypFile(t *testing.T) {
+	initPaneTestEnv(t, 120, 30)
+
+	persDir := filepath.Join(config.ConfigDir, "templates")
+	require.NoError(t, os.MkdirAll(persDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(persDir, "notes.typ"),
+		[]byte("// @title: Study Notes\n#let note(x) = [#x]\n\n= {{title}}\n\nBody\n"),
+		0o644,
+	))
+
+	backend := &fakeBackend{}
+	SetExternalBackend(backend)
+
+	// 1. Blank unnamed buffer (like launching `typx` with no args):
+	// Alt+Shift+N opens gallery, applying a single-file template inserts in-place
+	// and switches the buffer filetype to "typst".
+	unnamed := buffer.NewBufferFromString("", "", buffer.BTDefault)
+	require.False(t, unnamed.IsTypst())
+	action.InitTabs([]*buffer.Buffer{unnamed})
+	action.Tabs.Resize()
+	tab := action.MainTab()
+	bp := tab.CurPane()
+
+	toggle := NewToggleTemplatesAction()
+	require.True(t, toggle(bp), "ToggleTemplates should open gallery on blank unnamed buffer")
+	tp := PaneForTab(tab)
+	require.NotNil(t, tp)
+	assert.Equal(t, tp, tab.ActivePane())
+
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, ""))
+	assert.Equal(t, bp, tab.ActivePane())
+	assert.True(t, bp.Buf.IsTypst(), "applying template into unnamed buffer must activate typst filetype")
+	assert.Contains(t, string(bp.Buf.Bytes()), "#let note(x)")
+	assert.Contains(t, string(bp.Buf.Bytes()), "= Untitled Document")
+	CloseForTab(tab)
+
+	// 2. Non-Typst named file (e.g. README.md):
+	// Alt+Shift+N opens gallery; applying a template or inserting a preamble
+	// opens a new .typ tab without modifying README.md.
+	mdBuf := buffer.NewBufferFromString("# Readme\n", "README.md", buffer.BTDefault)
+	require.False(t, mdBuf.IsTypst())
+	action.InitTabs([]*buffer.Buffer{mdBuf})
+	action.Tabs.Resize()
+	mdTab := action.MainTab()
+	mdBP := mdTab.CurPane()
+
+	require.True(t, toggle(mdBP), "ToggleTemplates should open gallery on non-Typst file")
+	require.NotNil(t, PaneForTab(mdTab))
+
+	// Apply single-file template -> opens new .typ tab, leaves README.md untouched.
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, ""))
+	require.Len(t, action.Tabs.List, 2)
+	assert.Equal(t, "# Readme\n", string(mdBuf.Bytes()))
+	newBuf := action.MainTab().CurPane().Buf
+	assert.True(t, newBuf.IsTypst())
+	assert.Contains(t, string(newBuf.Bytes()), "#let note(x)")
+	assert.Equal(t, mdBP, mdTab.ActivePane(), "previous tab should return focus from gallery")
+
+	// Switch back to README.md and insert preamble (single-file) -> opens new .typ tab with preamble only.
+	action.Tabs.SetActive(0)
+	defaultManager.InsertPreamble(mdBP, mdTab, Template{
+		Name:     "notes",
+		Source:   SourcePersonal,
+		FilePath: filepath.Join(persDir, "notes.typ"),
+	})
+	require.Len(t, action.Tabs.List, 3)
+	preBuf := action.MainTab().CurPane().Buf
+	assert.True(t, preBuf.IsTypst())
+	assert.Contains(t, string(preBuf.Bytes()), "#let note(x)")
+	assert.NotContains(t, string(preBuf.Bytes()), "Body")
+	assert.Equal(t, "# Readme\n", string(mdBuf.Bytes()))
+
+	// Package preamble on README.md -> fetches via backend and opens in a new .typ tab.
+	action.Tabs.SetActive(0)
+	defaultManager.InsertPreamble(mdBP, mdTab, Template{
+		Name:        "charged-ieee",
+		Version:     "0.1.4",
+		Source:      SourceUniverse,
+		IsMultiFile: true,
+		PackageSpec: "@preview/charged-ieee:0.1.4",
+	})
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		action.DrainUIQueue()
+		if len(action.Tabs.List) >= 4 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.Len(t, action.Tabs.List, 4)
+	pkgPreBuf := action.MainTab().CurPane().Buf
+	assert.True(t, pkgPreBuf.IsTypst())
+	assert.Contains(t, string(pkgPreBuf.Bytes()), `#import "@preview/charged-ieee:0.1.4": *`)
+	assert.Equal(t, "# Readme\n", string(mdBuf.Bytes()))
+}
+
+func TestUnnamedBufferScaffoldDirAndProjectRootUseCwd(t *testing.T) {
+	initPaneTestEnv(t, 120, 30)
+
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+
+	unnamed := buffer.NewBufferFromString("", "", buffer.BTDefault)
+	require.Equal(t, "", unnamed.Path)
+	require.Equal(t, wd, unnamed.AbsPath)
+	action.InitTabs([]*buffer.Buffer{unnamed})
+	action.Tabs.Resize()
+	bp := action.MainTab().CurPane()
+
+	gotDir := defaultScaffoldDir(bp, Template{Name: "charged-ieee"})
+	assert.Equal(t, filepath.Join(wd, "charged-ieee"), gotDir)
+	assert.Equal(t, wd, defaultManager.resolveProjectRoot(bp))
+}

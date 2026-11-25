@@ -251,3 +251,86 @@ func TestE2E_TemplateGalleryLiveVisualPreview(t *testing.T) {
 	assert.Same(t, docPP, preview.PaneForTab(tab), "pre-existing document preview pane must remain open")
 	assert.False(t, docPP.HasOverride(), "closing gallery must restore underlying document preview deck")
 }
+
+func TestE2E_TemplateGalleryWithoutOpenTypFile(t *testing.T) {
+	harness.RequirePhase23(t)
+
+	preview.SetCapsForTest(preview.TerminalCaps{Sixel: true, CellW: 10, CellH: 20, Source: "test", Probed: true})
+	preview.SetCompiler(stubTemplatePreviewCompiler{})
+	templates.SetPreviewCacheDir(filepath.Join(t.TempDir(), "preview-cache"))
+
+	ed := harness.NewSimEditor(t, harness.SimOptions{
+		InitialName: "",
+		InitialText: "",
+		Settings: map[string]any{
+			"colorscheme":          "catppuccin-mocha",
+			"typst.lspEnabled":     false,
+			"typst.keyHints":       true,
+			"typst.templatesWidth": float64(30),
+			"typst.previewWidth":   float64(42),
+		},
+		Width:  130,
+		Height: 32,
+	})
+	t.Cleanup(func() {
+		if action.Tabs != nil {
+			for _, tab := range action.Tabs.List {
+				templates.CloseForTab(tab)
+				preview.CloseForTab(tab)
+			}
+		}
+		preview.SetCapsForTest(preview.TerminalCaps{})
+		preview.SetCompiler(&preview.TinymistCompiler{})
+		templates.SetPreviewCacheDir("")
+	})
+
+	persDir := filepath.Join(config.ConfigDir, "templates")
+	require.NoError(t, os.MkdirAll(persDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(persDir, "notes.typ"),
+		[]byte("// @title: Study Notes\n#let note(x) = [#x]\n\n= {{title}}\n"),
+		0o644,
+	))
+
+	// 1. Blank unnamed buffer promotes Alt+⇧N Templates on the bottom bar.
+	require.False(t, ed.Buf().IsTypst())
+	assert.Contains(t, ed.InfoBarText(), "Alt+⇧N Templates")
+
+	// 2. Alt+Shift+N opens Template Gallery and live visual preview without a .typ file.
+	tab := action.MainTab()
+	ed.InjectKey(tcell.KeyRune, 'N', tcell.ModAlt|tcell.ModShift)
+	require.NotNil(t, templates.PaneForTab(tab))
+	assert.Equal(t, "Templates", tab.ActivePane().Name())
+	require.True(t, ed.PumpUntil(3*time.Second, func() bool {
+		pp := preview.PaneForTab(tab)
+		return pp != nil && pp.HasOverride() && pp.OverrideTitle() == "Study Notes" && !pp.IsCompiling()
+	}), "expected live template preview to work without an open .typ file")
+
+	// 3. Applying template into blank unnamed buffer activates Typst filetype and closes override preview.
+	ed.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
+	assert.False(t, action.IsAuxiliaryPane(tab.ActivePane()))
+	assert.Nil(t, preview.PaneForTab(tab))
+	assert.True(t, ed.Buf().IsTypst())
+	assert.Contains(t, string(ed.Buf().Bytes()), "#let note(x)")
+	// Dismiss info message to check Typst idle bottom bar.
+	ed.InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
+	ed.Pump(2)
+	assert.Contains(t, ed.InfoBarText(), "Alt+P Preview")
+
+	// 4. On a non-Typst file (README.md), Alt+Shift+N opens gallery and Enter opens a new .typ tab.
+	readmePath := filepath.Join(t.TempDir(), "README.md")
+	require.NoError(t, os.WriteFile(readmePath, []byte("# Hello\n"), 0o644))
+	ed.RunCommand("tab " + readmePath)
+	mdTab := action.MainTab()
+	mdBuf := mdTab.CurPane().Buf
+	require.False(t, mdBuf.IsTypst())
+
+	ed.InjectKey(tcell.KeyRune, 'N', tcell.ModAlt|tcell.ModShift)
+	require.NotNil(t, templates.PaneForTab(mdTab))
+	ed.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
+	require.GreaterOrEqual(t, len(action.Tabs.List), 3)
+	assert.Equal(t, "# Hello\n", string(mdBuf.Bytes()))
+	newBuf := action.MainTab().CurPane().Buf
+	assert.True(t, newBuf.IsTypst())
+	assert.Contains(t, string(newBuf.Bytes()), "#let note(x)")
+}

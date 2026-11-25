@@ -720,10 +720,13 @@ func (pp *PreviewPane) startCompileNow() {
 	}
 
 	b := target.Buf
-	bufAbsPath := b.AbsPath
-	if bufAbsPath == "" && b.Path != "" {
-		if a, err := filepath.Abs(b.Path); err == nil {
-			bufAbsPath = a
+	bufAbsPath := ""
+	if b.Path != "" && !b.Type.Scratch {
+		bufAbsPath = b.AbsPath
+		if bufAbsPath == "" {
+			if a, err := filepath.Abs(b.Path); err == nil {
+				bufAbsPath = a
+			}
 		}
 	}
 

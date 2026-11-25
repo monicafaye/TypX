@@ -77,6 +77,17 @@ func IsBufferBlank(b *buffer.Buffer) bool {
 	return true
 }
 
+func isEditableDocBuffer(b *buffer.Buffer) bool {
+	return b != nil && b.Type.Kind == buffer.BTDefault.Kind && !b.Type.Readonly && !b.Type.Scratch
+}
+
+func isTypstOrUnnamedEditable(b *buffer.Buffer) bool {
+	if !isEditableDocBuffer(b) {
+		return false
+	}
+	return b.IsTypst() || b.Path == ""
+}
+
 type rowKind int
 
 const (
@@ -1189,7 +1200,7 @@ func (m *Manager) allTemplates(bp *action.BufPane) []Template {
 }
 
 func (m *Manager) resolveProjectRoot(bp *action.BufPane) string {
-	if bp != nil && bp.Buf != nil && bp.Buf.AbsPath != "" {
+	if bp != nil && bp.Buf != nil && bp.Buf.Path != "" && !bp.Buf.Type.Scratch && bp.Buf.AbsPath != "" {
 		if rr := m.getRootResolver(); rr != nil {
 			if r := rr(bp.Buf.AbsPath); r != "" {
 				return r
@@ -1573,14 +1584,20 @@ func (m *Manager) OnBufferClose(b *buffer.Buffer) {
 	}
 }
 
-// ApplyTemplate inserts a single-file template into an empty buffer (or prompts
-// insert-at-top vs. new-tab when non-empty), or scaffolds multi-file/package templates.
+// ApplyTemplate inserts a single-file template into an empty Typst or unnamed
+// buffer (or prompts insert-at-top vs. new-tab when non-empty), opens a new
+// .typ tab when the active buffer is a non-Typst or read-only file, or
+// scaffolds multi-file/package templates.
 func (m *Manager) ApplyTemplate(bp *action.BufPane, tab *action.Tab, t Template) {
 	if t.IsMultiFile || t.IsPackage() {
 		m.PromptScaffoldDir(bp, tab, t)
 		return
 	}
-	if bp != nil && bp.Buf != nil && IsBufferBlank(bp.Buf) {
+	if bp == nil || !isTypstOrUnnamedEditable(bp.Buf) {
+		m.openTemplateInNewTab(tab, bp, t, false)
+		return
+	}
+	if IsBufferBlank(bp.Buf) {
 		m.insertTemplateIntoBuffer(bp, tab, t, false)
 		return
 	}
@@ -1597,7 +1614,7 @@ func (m *Manager) ApplyTemplate(bp *action.BufPane, tab *action.Tab, t Template)
 		case "i", "insert", "top":
 			m.insertTemplateIntoBuffer(curBP, tab, t, false)
 		case "t", "tab", "new":
-			m.openTemplateInNewTab(curBP, t)
+			m.openTemplateInNewTab(tab, curBP, t, false)
 		case "p", "preamble":
 			m.insertTemplateIntoBuffer(curBP, tab, t, true)
 		}
@@ -1605,8 +1622,8 @@ func (m *Manager) ApplyTemplate(bp *action.BufPane, tab *action.Tab, t Template)
 }
 
 func (m *Manager) insertTemplateIntoBuffer(bp *action.BufPane, tab *action.Tab, t Template, preambleOnly bool) {
-	if bp == nil || bp.Buf == nil {
-		m.openTemplateInNewTab(bp, t)
+	if bp == nil || !isTypstOrUnnamedEditable(bp.Buf) {
+		m.openTemplateInNewTab(tab, bp, t, preambleOnly)
 		return
 	}
 	var vars TemplateVars
@@ -1632,6 +1649,9 @@ func (m *Manager) insertTemplateIntoBuffer(bp *action.BufPane, tab *action.Tab, 
 	} else {
 		bp.Buf.Insert(buffer.Loc{X: 0, Y: 0}, rendered+"\n")
 	}
+	if !bp.Buf.IsTypst() {
+		bp.Buf.DoSetOptionNative("filetype", "typst")
+	}
 	if c := bp.Buf.GetActiveCursor(); c != nil {
 		c.ResetSelection()
 		c.GotoLoc(buffer.Loc{X: 0, Y: 0})
@@ -1641,7 +1661,7 @@ func (m *Manager) insertTemplateIntoBuffer(bp *action.BufPane, tab *action.Tab, 
 	notifyMessage("Applied template: " + t.DisplayTitle())
 }
 
-func (m *Manager) openTemplateInNewTab(bp *action.BufPane, t Template) {
+func (m *Manager) openTemplateInNewTab(tab *action.Tab, bp *action.BufPane, t Template, preambleOnly bool) {
 	var vars TemplateVars
 	vars.Title = DeriveTitle(t.Name + ".typ")
 	rendered, err := RenderEntry(t, vars)
@@ -1649,13 +1669,27 @@ func (m *Manager) openTemplateInNewTab(bp *action.BufPane, t Template) {
 		notifyError("Failed to read template: " + err.Error())
 		return
 	}
+	if preambleOnly {
+		if pre := ExtractPreamble(rendered); pre != "" {
+			rendered = pre
+		}
+	}
+	if !strings.HasSuffix(rendered, "\n") {
+		rendered += "\n"
+	}
+	focusTargetPane(tab, bp)
 	bufName := uniqueUntitledTypstName(t.Name)
 	b := buffer.NewBufferFromString(rendered, bufName, buffer.BTDefault)
 	openBufferInNewTab(b)
+	if preambleOnly {
+		notifyMessage("Opened preamble in new tab: " + t.DisplayTitle())
+		return
+	}
 	notifyMessage("Opened template in new tab: " + t.DisplayTitle())
 }
 
-// InsertPreamble inserts t's entrypoint/preamble at line 0 of bp's buffer.
+// InsertPreamble inserts t's entrypoint/preamble at line 0 of bp's buffer, or
+// opens it in a new .typ tab when no editable Typst or unnamed buffer is active.
 func (m *Manager) InsertPreamble(bp *action.BufPane, tab *action.Tab, t Template) {
 	if !t.IsPackage() {
 		m.insertTemplateIntoBuffer(bp, tab, t, true)
@@ -1663,11 +1697,10 @@ func (m *Manager) InsertPreamble(bp *action.BufPane, tab *action.Tab, t Template
 	}
 
 	target := resolveActivePane(tab, bp)
-	if target == nil || target.Buf == nil {
-		notifyError("Open a Typst buffer to insert a preamble")
-		return
+	var targetBuf *buffer.Buffer
+	if target != nil && isTypstOrUnnamedEditable(target.Buf) {
+		targetBuf = target.Buf
 	}
-	targetBuf := target.Buf
 	spec := packageSpecForTemplate(t)
 	backend := m.getExternalBackend()
 	client := m.getUniverseClient()
@@ -1691,18 +1724,29 @@ func (m *Manager) InsertPreamble(bp *action.BufPane, tab *action.Tab, t Template
 			if curTab == nil && action.Tabs != nil {
 				curTab = action.MainTab()
 			}
+			if !strings.HasSuffix(content, "\n") {
+				content += "\n"
+			}
+			if targetBuf == nil {
+				focusTargetPane(curTab, resolveActivePane(curTab, bp))
+				bufName := uniqueUntitledTypstName(t.Name)
+				b := buffer.NewBufferFromString(content, bufName, buffer.BTDefault)
+				openBufferInNewTab(b)
+				notifyMessage("Opened preamble in new tab: " + spec)
+				return
+			}
 			curBP := resolvePaneForBuffer(curTab, targetBuf)
 			if curBP == nil {
 				notifyError("Target buffer was closed")
 				return
 			}
-			if !strings.HasSuffix(content, "\n") {
-				content += "\n"
-			}
 			if IsBufferBlank(curBP.Buf) {
 				curBP.Buf.Replace(curBP.Buf.Start(), curBP.Buf.End(), content)
 			} else {
 				curBP.Buf.Insert(buffer.Loc{X: 0, Y: 0}, content+"\n")
+			}
+			if !curBP.Buf.IsTypst() {
+				curBP.Buf.DoSetOptionNative("filetype", "typst")
 			}
 			if c := curBP.Buf.GetActiveCursor(); c != nil {
 				c.ResetSelection()
@@ -1912,7 +1956,7 @@ func packageSpecForTemplate(t Template) string {
 
 func defaultScaffoldDir(bp *action.BufPane, t Template) string {
 	baseDir := ""
-	if bp != nil && bp.Buf != nil && bp.Buf.AbsPath != "" {
+	if bp != nil && bp.Buf != nil && bp.Buf.Path != "" && !bp.Buf.Type.Scratch && bp.Buf.AbsPath != "" {
 		baseDir = filepath.Dir(bp.Buf.AbsPath)
 	} else if wd, err := os.Getwd(); err == nil {
 		baseDir = wd
@@ -1971,11 +2015,12 @@ func openScaffoldedEntry(tab *action.Tab, bp *action.BufPane, entryAbs string) {
 		notifyError("Failed to open scaffolded entry: " + err.Error())
 		return
 	}
-	if bp != nil && bp.Buf != nil && !bp.Buf.Modified() && bp.Buf.Path == "" && IsBufferBlank(bp.Buf) {
+	if bp != nil && isEditableDocBuffer(bp.Buf) && !bp.Buf.Modified() && bp.Buf.Path == "" && IsBufferBlank(bp.Buf) {
 		bp.OpenBuffer(b)
 		focusTargetPane(tab, bp)
 		return
 	}
+	focusTargetPane(tab, bp)
 	openBufferInNewTab(b)
 }
 

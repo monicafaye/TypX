@@ -15,11 +15,11 @@ import (
 
 func buildBottomBarContext() display.BottomBarContext {
 	if action.Tabs == nil || len(action.Tabs.List) == 0 {
-		return genericBottomBarContext(nil, false)
+		return genericBottomBarContext(nil, nil)
 	}
 	tab := action.MainTab()
 	if tab == nil {
-		return genericBottomBarContext(nil, false)
+		return genericBottomBarContext(nil, nil)
 	}
 
 	// 1. Focused auxiliary panes get dedicated navigation hints.
@@ -38,7 +38,7 @@ func buildBottomBarContext() display.BottomBarContext {
 
 	bp := tab.CurPane()
 	if bp == nil || bp.Buf == nil {
-		return genericBottomBarContext(tab, false)
+		return genericBottomBarContext(tab, nil)
 	}
 
 	if bp.Buf.Type.Kind == buffer.BTHelp.Kind {
@@ -53,7 +53,7 @@ func buildBottomBarContext() display.BottomBarContext {
 		return typstBottomBarContext(tab, bp)
 	}
 
-	return genericBottomBarContext(tab, bp.Buf.Modified())
+	return genericBottomBarContext(tab, bp)
 }
 
 func isFileManagerBuffer(b *buffer.Buffer) bool {
@@ -412,24 +412,66 @@ func helpBottomBarContext() display.BottomBarContext {
 	}
 }
 
-func genericBottomBarContext(tab *action.Tab, modified bool) display.BottomBarContext {
+func genericBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBarContext {
 	saveLabel := "Save"
-	if modified {
-		saveLabel = "Save*"
+	isUnnamedBlank := false
+	if bp != nil && bp.Buf != nil {
+		if bp.Buf.Modified() {
+			saveLabel = "Save*"
+		}
+		if bp.Buf.Type.Kind == buffer.BTDefault.Kind && !bp.Buf.Type.Readonly && !bp.Buf.Type.Scratch && bp.Buf.Path == "" && templates.IsBufferBlank(bp.Buf) {
+			isUnnamedBlank = true
+		}
 	}
 	treeOn := hasFileManagerPane(tab)
+	templatesOn := templates.PaneForTab(tab) != nil
+	var hints []display.BottomBarItem
+	if isUnnamedBlank {
+		hints = append(hints,
+			display.BottomBarItem{Key: "Alt+⇧N", Label: "Templates", Action: "ToggleTemplates", Priority: 0, Active: templatesOn},
+		)
+	}
+	hints = append(hints,
+		display.BottomBarItem{Key: "^S", Label: saveLabel, Action: "Save", Priority: 0},
+		display.BottomBarItem{Key: "Alt+T", Label: "Files", Action: "command:tree", Priority: 2, Active: treeOn},
+		display.BottomBarItem{Key: "^O", Label: "Open", Action: "OpenFile", Priority: 3},
+		display.BottomBarItem{Key: "^F", Label: "Find", Action: "Find", Priority: 1},
+		display.BottomBarItem{Key: "^E", Label: "Cmd", Action: "CommandMode", Priority: 0},
+		display.BottomBarItem{Key: "^Z", Label: "Undo", Action: "Undo", Priority: 2},
+		display.BottomBarItem{Key: "^Y", Label: "Redo", Action: "Redo", Priority: 4},
+		display.BottomBarItem{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 0, AlignRight: true},
+		display.BottomBarItem{Key: "^G", Label: "Help", Action: "ToggleHelp", Priority: 3, AlignRight: true},
+		display.BottomBarItem{Key: "^Q", Label: "Quit", Action: "Quit", Priority: 1, AlignRight: true},
+	)
 	return display.BottomBarContext{
-		Hints: []display.BottomBarItem{
-			{Key: "^S", Label: saveLabel, Action: "Save", Priority: 0},
-			{Key: "Alt+T", Label: "Files", Action: "command:tree", Priority: 2, Active: treeOn},
-			{Key: "^O", Label: "Open", Action: "OpenFile", Priority: 3},
-			{Key: "^F", Label: "Find", Action: "Find", Priority: 1},
-			{Key: "^E", Label: "Cmd", Action: "CommandMode", Priority: 0},
-			{Key: "^Z", Label: "Undo", Action: "Undo", Priority: 2},
-			{Key: "^Y", Label: "Redo", Action: "Redo", Priority: 4},
-			{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 0, AlignRight: true},
-			{Key: "^G", Label: "Help", Action: "ToggleHelp", Priority: 3, AlignRight: true},
-			{Key: "^Q", Label: "Quit", Action: "Quit", Priority: 1, AlignRight: true},
+		Hints: hints,
+		MenuRows: []display.BottomBarMenuRow{
+			{
+				Title: "File",
+				Items: []display.BottomBarItem{
+					{Key: "^S", Label: "Save", Action: "Save", Priority: 0},
+					{Key: "^O", Label: "Open", Action: "OpenFile", Priority: 1},
+					{Key: "Alt+T", Label: "Files", Action: "command:tree", Priority: 1, Active: treeOn},
+					{Key: "Alt+⇧N", Label: "Templates", Action: "ToggleTemplates", Priority: 1, Active: templatesOn},
+					{Key: "^F", Label: "Find", Action: "Find", Priority: 1},
+					{Key: "^E", Label: "Command", Action: "CommandMode", Priority: 0},
+					{Key: "^T", Label: "New Tab", Action: "AddTab", Priority: 3},
+					{Key: "^G", Label: "Help", Action: "ToggleHelp", Priority: 2},
+					{Key: "^Q", Label: "Quit", Action: "Quit", Priority: 0},
+				},
+			},
+			{
+				Title: "Edit",
+				Items: []display.BottomBarItem{
+					{Key: "^Z", Label: "Undo", Action: "Undo", Priority: 0},
+					{Key: "^Y", Label: "Redo", Action: "Redo", Priority: 1},
+					{Key: "^C", Label: "Copy", Action: "Copy", Priority: 2},
+					{Key: "^V", Label: "Paste", Action: "Paste", Priority: 2},
+					{Key: "^K", Label: "Cut Line", Action: "CutLine", Priority: 3},
+					{Key: "^D", Label: "Duplicate", Action: "DuplicateLine", Priority: 3},
+					{Key: "^A", Label: "Select All", Action: "SelectAll", Priority: 4},
+				},
+			},
 		},
 		MenuTip: "Click any shortcut or press Alt+G to hide · ^E for commands",
 	}
