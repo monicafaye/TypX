@@ -120,6 +120,18 @@ func RegisterDefaultBinding(pane, key, action string) {
 	paneMap[key] = action
 }
 
+// RegisterDefaultBindingWithFallback registers a buffer/pane default binding
+// that chains onto any pre-existing micro default binding via "|", allowing
+// TypX handlers returning false to fall through to micro's original action.
+func RegisterDefaultBindingWithFallback(pane, key, typxAction string) {
+	defaults := DefaultBindings(pane)
+	if prev := defaults[key]; prev != "" {
+		RegisterDefaultBinding(pane, key, typxAction+"|"+prev)
+		return
+	}
+	RegisterDefaultBinding(pane, key, typxAction)
+}
+
 func mergeExtCommands() {
 	for name, cmd := range extCommands {
 		if _, dup := commands[name]; dup {

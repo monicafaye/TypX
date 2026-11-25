@@ -138,3 +138,17 @@ func TestRegisterDefaultBindingPrecedenceAndDuplicates(t *testing.T) {
 	InitBindings()
 	assert.Equal(t, "Save", config.Bindings["buffer"]["Alt-m"])
 }
+
+func TestRegisterDefaultBindingWithFallback(t *testing.T) {
+	resetExtensionsForTest(t)
+
+	// Alt-b has an existing micro default (WordLeft).
+	RegisterDefaultBindingWithFallback("buffer", "Alt-b", "WrapBold")
+	defaults := DefaultBindings("buffer")
+	assert.Equal(t, "WrapBold|"+bufdefaults["Alt-b"], defaults["Alt-b"])
+
+	// F12 has no existing micro default.
+	RegisterDefaultBindingWithFallback("buffer", "F12", "LspDefinition")
+	defaults = DefaultBindings("buffer")
+	assert.Equal(t, "LspDefinition", defaults["F12"])
+}

@@ -1093,7 +1093,7 @@ func Init() {
 	initOnce.Do(func() {
 		action.RegisterAction("ToggleOutline", NewToggleOutlineAction())
 		action.RegisterCommand("outline", NewOutlineCmd(), outlineCompleter)
-		bindWithFallback("Alt-o", "ToggleOutline")
+		action.RegisterDefaultBindingWithFallback("buffer", "Alt-o", "ToggleOutline")
 
 		buffer.RegisterObserver(defaultManager)
 		action.RegisterPreResizeHook(defaultManager.onPreResize)
@@ -1101,15 +1101,6 @@ func Init() {
 		action.RegisterTabSwitchHook(defaultManager.onTabSwitch)
 		action.RegisterPaneFocusHook(defaultManager.onPaneFocus)
 	})
-}
-
-func bindWithFallback(key, typxAction string) {
-	defaults := action.DefaultBindings("buffer")
-	if prev := defaults[key]; prev != "" {
-		action.RegisterDefaultBinding("buffer", key, typxAction+"|"+prev)
-		return
-	}
-	action.RegisterDefaultBinding("buffer", key, typxAction)
 }
 
 // SetSymbolProvider sets the optional LSP documentSymbol provider used to

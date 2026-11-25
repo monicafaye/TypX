@@ -25,20 +25,11 @@ func RegisterAll() {
 		action.RegisterCommand("insert-"+name, NewInsertTemplateCmd(name), nil)
 	}
 
-	bindWithFallback("Alt-m", "MathInline")
-	bindWithFallback("Alt-M", "MathDisplay")
-	bindWithFallback("Alt-i", "InsertPalette")
-	bindWithFallback("Alt-b", "WrapBold")
-	bindWithFallback("Alt-e", "WrapItalic")
-	bindWithFallback("AltLeft", "HeadingPromote")
-	bindWithFallback("AltRight", "HeadingDemote")
-}
-
-func bindWithFallback(key, typxAction string) {
-	defaults := action.DefaultBindings("buffer")
-	if prev := defaults[key]; prev != "" {
-		action.RegisterDefaultBinding("buffer", key, typxAction+"|"+prev)
-		return
-	}
-	action.RegisterDefaultBinding("buffer", key, typxAction)
+	action.RegisterDefaultBindingWithFallback("buffer", "Alt-m", "MathInline")
+	action.RegisterDefaultBindingWithFallback("buffer", "Alt-M", "MathDisplay")
+	action.RegisterDefaultBindingWithFallback("buffer", "Alt-i", "InsertPalette")
+	action.RegisterDefaultBindingWithFallback("buffer", "Alt-b", "WrapBold")
+	action.RegisterDefaultBindingWithFallback("buffer", "Alt-e", "WrapItalic")
+	action.RegisterDefaultBindingWithFallback("buffer", "AltLeft", "HeadingPromote")
+	action.RegisterDefaultBindingWithFallback("buffer", "AltRight", "HeadingDemote")
 }

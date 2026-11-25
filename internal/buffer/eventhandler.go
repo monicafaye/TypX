@@ -228,6 +228,48 @@ func (eh *EventHandler) MultipleReplace(deltas []Delta) {
 	eh.Execute(e)
 }
 
+// BatchEdit describes a non-overlapping buffer replacement at pre-edit coordinates.
+type BatchEdit struct {
+	Start Loc
+	End   Loc
+	Text  []byte
+}
+
+// ApplyAtomicEdits applies non-overlapping edits sorted in reverse document order
+// (bottom-to-top, right-to-left) and stamps every resulting TextEvent with a
+// single shared timestamp so Undo() and Redo() collapse the entire batch into
+// one step.
+func (eh *EventHandler) ApplyAtomicEdits(edits []BatchEdit) {
+	if len(edits) == 0 {
+		return
+	}
+	stamp := time.Now()
+	for _, edit := range edits {
+		start := clamp(edit.Start, eh.buf.LineArray)
+		end := clamp(edit.End, eh.buf.LineArray)
+		if start != end {
+			e := &TextEvent{
+				C:         *eh.cursors[eh.active],
+				EventType: TextEventRemove,
+				Deltas:    []Delta{{[]byte{}, start, end}},
+				Time:      stamp,
+			}
+			eh.DoTextEvent(e, true)
+		}
+		if len(edit.Text) > 0 {
+			text := make([]byte, len(edit.Text))
+			copy(text, edit.Text)
+			e := &TextEvent{
+				C:         *eh.cursors[eh.active],
+				EventType: TextEventInsert,
+				Deltas:    []Delta{{text, start, Loc{0, 0}}},
+				Time:      stamp,
+			}
+			eh.DoTextEvent(e, true)
+		}
+	}
+}
+
 // Replace deletes from start to end and replaces it with the given string
 func (eh *EventHandler) Replace(start, end Loc, replace string) {
 	eh.Remove(start, end)

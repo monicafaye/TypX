@@ -34,3 +34,31 @@ jobs:
       - name: Test (race)
         if: runner.os == 'Linux'
         run: CGO_ENABLED=1 go test -race ./...
+
+  tinymist-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+
+      - name: Install tinymist
+        env:
+          TINYMIST_VERSION: v0.15.12
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL "https://github.com/Myriad-Dreamin/tinymist/releases/download/${TINYMIST_VERSION}/tinymist-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/tinymist.tar.gz
+          tar -xzf /tmp/tinymist.tar.gz -C /tmp
+          find /tmp -maxdepth 3 -type f -name tinymist -exec install -m 0755 {} "$HOME/.local/bin/tinymist" \;
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/tinymist" --version
+
+      - name: Generate runtime headers
+        run: go generate ./runtime
+
+      - name: Run E2E tests with real tinymist
+        run: go test -v ./tests/e2e/...

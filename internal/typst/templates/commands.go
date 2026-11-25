@@ -20,7 +20,7 @@ func Init() {
 		action.RegisterCommand("template", NewTemplateCmd(), templateNameCompleter)
 		action.RegisterCommand("template-save", NewTemplateSaveCmd(), nil)
 		// Bind uppercase Alt-N (Alt+Shift+N) only; lowercase Alt-n belongs to micro's SpawnMultiCursor.
-		bindWithFallback("Alt-N", "ToggleTemplates")
+		action.RegisterDefaultBindingWithFallback("buffer", "Alt-N", "ToggleTemplates")
 
 		buffer.RegisterObserver(defaultManager)
 		action.RegisterPreResizeHook(defaultManager.onPreResize)
@@ -28,15 +28,6 @@ func Init() {
 		action.RegisterTabSwitchHook(defaultManager.onTabSwitch)
 		action.RegisterPaneFocusHook(defaultManager.onPaneFocus)
 	})
-}
-
-func bindWithFallback(key, typxAction string) {
-	defaults := action.DefaultBindings("buffer")
-	if prev := defaults[key]; prev != "" {
-		action.RegisterDefaultBinding("buffer", key, typxAction+"|"+prev)
-		return
-	}
-	action.RegisterDefaultBinding("buffer", key, typxAction)
 }
 
 // NewToggleTemplatesAction returns the BufKeyAction bound to Alt+Shift+N.

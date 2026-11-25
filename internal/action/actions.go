@@ -973,6 +973,9 @@ func (h *BufPane) SaveAll() bool {
 
 // SaveCB performs a save and does a callback at the very end (after all prompts have been resolved)
 func (h *BufPane) SaveCB(action string, callback func()) bool {
+	if action == "Save" && callback == nil && runPreActionHooks("Save", h) {
+		return false
+	}
 	// If this is an empty buffer, ask for a filename
 	if h.Buf.Path == "" {
 		h.SaveAsCB(action, callback)

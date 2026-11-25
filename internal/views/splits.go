@@ -711,6 +711,95 @@ func (n *Node) DockRight(width int) uint64 {
 	return dockID
 }
 
+// DockBottom docks a fixed-height horizontal split along the full bottom edge
+// of this root node without disturbing existing horizontal or vertical splits
+// above it. The root pointer is mutated in-place so UIWindow.root remains valid.
+// Returns the new leaf's ID, or 0 if n is not a root node or height is invalid.
+func (n *Node) DockBottom(height int) uint64 {
+	if n == nil || n.parent != nil || height <= 0 || n.H <= height {
+		return 0
+	}
+
+	dockID := NewID()
+	remH := n.H - height
+	dock := NewNode(STHoriz, n.X, n.Y+remH, n.W, height, n, dockID)
+	dock.SetResize(false)
+	dock.SetPropScale(false)
+
+	if n.IsLeaf() {
+		existing := NewNode(STHoriz, n.X, n.Y, n.W, remH, n, n.id)
+		n.Kind = STVert
+		n.children = []*Node{existing, dock}
+		n.markResize()
+		return dockID
+	}
+
+	// Capture accurate child proportions relative to current n.W/n.H before mutating.
+	n.markSizes()
+
+	if n.Kind == STVert {
+		fixedSum := 0
+		scalableProp := 0.0
+		scalableCount := 0
+		for _, c := range n.children {
+			if !c.PropScale() {
+				fixedSum += c.H
+			} else {
+				scalableProp += c.propH
+				scalableCount++
+			}
+		}
+		avail := n.H - fixedSum
+		if avail <= 1 {
+			return 0
+		}
+		dockH := height
+		if dockH >= avail {
+			dockH = avail / 2
+		}
+		if dockH <= 0 {
+			return 0
+		}
+		remainForExisting := avail - dockH
+		if scalableCount > 0 {
+			for _, c := range n.children {
+				if !c.PropScale() {
+					continue
+				}
+				if scalableProp > 0 {
+					c.propH = (c.propH / scalableProp) * (float64(remainForExisting) / float64(n.H))
+				} else {
+					c.propH = (float64(remainForExisting) / float64(scalableCount)) / float64(n.H)
+				}
+			}
+		}
+		dock.H = dockH
+		dock.propW = 1
+		dock.propH = float64(dockH) / float64(n.H)
+		n.children = append(n.children, dock)
+		n.Resize(n.W, n.H)
+		n.markSizes()
+		return dockID
+	}
+
+	// n.Kind == STHoriz: wrap existing left-to-right children inside a top subtree.
+	top := NewNode(STHoriz, n.X, n.Y, n.W, remH, n, NewID())
+	top.children = n.children
+	for _, c := range top.children {
+		c.parent = top
+	}
+	top.propW = 1
+	top.propH = float64(remH) / float64(n.H)
+	dock.propW = 1
+	dock.propH = float64(height) / float64(n.H)
+
+	n.Kind = STVert
+	n.children = []*Node{top, dock}
+	n.Resize(n.W, n.H)
+	n.markSizes()
+	return dockID
+}
+
 // unsplits the child of a split
 func (n *Node) unsplit(i int) {
 	copy(n.children[i:], n.children[i+1:])
