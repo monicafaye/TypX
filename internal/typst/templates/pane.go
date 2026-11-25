@@ -113,6 +113,15 @@ type TemplatePane struct {
 	desiredWidth  int
 	clampedByTerm bool
 
+	livePreview          bool
+	lastPreviewKey       string
+	previewMu            sync.Mutex
+	previewGen           uint64
+	previewTimer         *time.Timer
+	previewCancel        context.CancelFunc
+	sourcePreviewBuf     *buffer.Buffer
+	suppressClearOnFocus bool
+
 	closed bool
 }
 
@@ -131,6 +140,7 @@ func newTemplatePane(tab *action.Tab, target *action.BufPane, mgr *Manager, desi
 		mouseReleased: true,
 		selectedIdx:   -1,
 		desiredWidth:  desiredWidth,
+		livePreview:   true,
 	}
 }
 
@@ -177,12 +187,29 @@ func (tp *TemplatePane) SetActive(b bool) {
 			tp.selectFirst()
 		}
 		tp.ensureSelectionVisible()
+		if tp.livePreview {
+			tp.schedulePreview(true)
+		}
 	} else {
 		tp.filtering = false
+		if !tp.suppressClearOnFocus {
+			tp.cancelPendingPreview()
+			tp.clearLivePreview()
+		}
 	}
 }
 
 func (tp *TemplatePane) IsActive() bool { return tp.active }
+
+// IsLivePreview reports whether live visual or source preview is currently active.
+func (tp *TemplatePane) IsLivePreview() bool {
+	if tp.mgr != nil {
+		if p := tp.mgr.getPreviewProvider(); p != nil && p.SupportsVisual() {
+			return tp.livePreview
+		}
+	}
+	return tp.hasOpenSourcePreview()
+}
 
 func (tp *TemplatePane) Clear() {
 	if screen.Screen == nil || tp.view.Width <= 0 || tp.view.Height <= 0 {
@@ -198,6 +225,9 @@ func (tp *TemplatePane) Clear() {
 func (tp *TemplatePane) Close() {
 	already := tp.closed
 	tp.closed = true
+	tp.cancelPendingPreview()
+	tp.clearLivePreview()
+	tp.closeSourcePreview()
 	if !already && tp.mgr != nil && tp.tab != nil {
 		if cur := tp.mgr.panes[tp.tab]; cur == tp {
 			delete(tp.mgr.panes, tp.tab)
@@ -369,6 +399,9 @@ func (tp *TemplatePane) rebuildRows() {
 		tp.selectFirst()
 	}
 	tp.ensureSelectionVisible()
+	if tp.livePreview && tp.active {
+		tp.schedulePreview(false)
+	}
 }
 
 func matchesFilter(t Template, qLower string) bool {
@@ -437,6 +470,9 @@ func (tp *TemplatePane) moveSelection(delta int) {
 	}
 	tp.selectedIdx = idx
 	tp.ensureSelectionVisible()
+	if tp.livePreview && tp.active {
+		tp.schedulePreview(false)
+	}
 }
 
 func (tp *TemplatePane) ensureSelectionVisible() {
@@ -578,9 +614,15 @@ func (tp *TemplatePane) handleKeyEvent(e *tcell.EventKey) {
 	case tcell.KeyHome:
 		tp.selectFirst()
 		tp.ensureSelectionVisible()
+		if tp.livePreview && tp.active {
+			tp.schedulePreview(false)
+		}
 	case tcell.KeyEnd:
 		tp.selectLast()
 		tp.ensureSelectionVisible()
+		if tp.livePreview && tp.active {
+			tp.schedulePreview(false)
+		}
 	case tcell.KeyPgUp:
 		step := tp.listHeight()
 		if step < 1 {
@@ -605,9 +647,15 @@ func (tp *TemplatePane) handleKeyEvent(e *tcell.EventKey) {
 		case 'g':
 			tp.selectFirst()
 			tp.ensureSelectionVisible()
+			if tp.livePreview && tp.active {
+				tp.schedulePreview(false)
+			}
 		case 'G':
 			tp.selectLast()
 			tp.ensureSelectionVisible()
+			if tp.livePreview && tp.active {
+				tp.schedulePreview(false)
+			}
 		case '/':
 			tp.filtering = true
 			tp.filterQuery = ""
@@ -616,6 +664,8 @@ func (tp *TemplatePane) handleKeyEvent(e *tcell.EventKey) {
 			if tp.mgr != nil {
 				tp.mgr.LoadUniverseAsync(tp.mgr.isUniverseLoaded())
 			}
+		case 'v':
+			tp.toggleLivePreview()
 		case 'p':
 			if tmpl, ok := tp.SelectedTemplate(); ok && tp.mgr != nil {
 				tp.mgr.InsertPreamble(tp.resolveTarget(), tp.tab, tmpl)
@@ -688,6 +738,8 @@ func (tp *TemplatePane) handleMouseEvent(e *tcell.EventMouse) {
 				tp.selectedIdx = idx
 				if already || tp.rows[idx].Kind == rowUniverseAction {
 					tp.activateSelected()
+				} else if tp.livePreview && tp.active {
+					tp.schedulePreview(false)
 				}
 			}
 		}
@@ -954,6 +1006,8 @@ type Manager struct {
 	mu              sync.RWMutex
 	backend         ExternalBackend
 	rootResolver    func(string) string
+	previewProvider PreviewProvider
+	previewCacheDir string
 	universeClient  *UniverseClient
 	universeItems   []Template
 	universeLoaded  bool
@@ -987,6 +1041,45 @@ func SetRootResolver(fn func(string) string) {
 // SetUniverseClient overrides the Universe HTTP/cache client (intended for tests).
 func SetUniverseClient(c *UniverseClient) {
 	defaultManager.setUniverseClient(c)
+}
+
+// SetPreviewProvider wires visual preview rendering into templates without importing preview.
+func SetPreviewProvider(p PreviewProvider) {
+	defaultManager.setPreviewProvider(p)
+}
+
+// SetPreviewCacheDir overrides the template preview cache directory (intended for tests).
+func SetPreviewCacheDir(dir string) {
+	defaultManager.setPreviewCacheDir(dir)
+}
+
+func (m *Manager) setPreviewProvider(p PreviewProvider) {
+	m.mu.Lock()
+	m.previewProvider = p
+	m.mu.Unlock()
+}
+
+func (m *Manager) getPreviewProvider() PreviewProvider {
+	m.mu.RLock()
+	p := m.previewProvider
+	m.mu.RUnlock()
+	return p
+}
+
+func (m *Manager) setPreviewCacheDir(dir string) {
+	m.mu.Lock()
+	m.previewCacheDir = dir
+	m.mu.Unlock()
+}
+
+func (m *Manager) getPreviewCacheDir() string {
+	m.mu.RLock()
+	dir := m.previewCacheDir
+	m.mu.RUnlock()
+	if dir != "" {
+		return dir
+	}
+	return DefaultPreviewCacheDir()
 }
 
 func (m *Manager) setExternalBackend(b ExternalBackend) {
@@ -1241,11 +1334,15 @@ func (m *Manager) Open(bp *action.BufPane, focus bool) (*TemplatePane, bool) {
 		existing.target = bp
 		existing.Refresh()
 		if focus {
+			wasActive := existing.active
 			for i, p := range tab.Panes {
 				if p == existing {
 					tab.SetActive(i)
 					break
 				}
+			}
+			if wasActive && existing.livePreview {
+				existing.schedulePreview(true)
 			}
 		}
 		return existing, true
@@ -2002,4 +2099,274 @@ func notifyError(msg string) {
 	if action.InfoBar != nil {
 		action.InfoBar.Error(msg)
 	}
+}
+
+const previewDebounceDelay = 120 * time.Millisecond
+
+func (tp *TemplatePane) cancelPendingPreview() {
+	tp.previewMu.Lock()
+	if tp.previewTimer != nil {
+		tp.previewTimer.Stop()
+		tp.previewTimer = nil
+	}
+	if tp.previewCancel != nil {
+		tp.previewCancel()
+		tp.previewCancel = nil
+	}
+	tp.previewGen++
+	tp.lastPreviewKey = ""
+	tp.previewMu.Unlock()
+}
+
+func (tp *TemplatePane) clearLivePreview() {
+	if tp.mgr == nil || tp.tab == nil {
+		return
+	}
+	if provider := tp.mgr.getPreviewProvider(); provider != nil {
+		provider.Clear(tp.tab)
+	}
+}
+
+func (tp *TemplatePane) schedulePreview(immediate bool) {
+	if tp.closed || tp.mgr == nil {
+		return
+	}
+	provider := tp.mgr.getPreviewProvider()
+	if provider == nil || !provider.SupportsVisual() {
+		if tp.hasOpenSourcePreview() {
+			tp.updateSourcePreview()
+		}
+		return
+	}
+	if immediate {
+		tp.previewMu.Lock()
+		if tp.previewTimer != nil {
+			tp.previewTimer.Stop()
+			tp.previewTimer = nil
+		}
+		tp.lastPreviewKey = ""
+		tp.previewMu.Unlock()
+		tp.runPreviewNow(true)
+		return
+	}
+
+	tp.previewMu.Lock()
+	if tp.previewTimer != nil {
+		tp.previewTimer.Stop()
+	}
+	tp.previewGen++
+	gen := tp.previewGen
+	tp.previewTimer = time.AfterFunc(previewDebounceDelay, func() {
+		action.EnqueueUI(func() {
+			tp.previewMu.Lock()
+			stale := tp.closed || !tp.active || !tp.livePreview || tp.previewGen != gen
+			tp.previewTimer = nil
+			tp.previewMu.Unlock()
+			if !stale {
+				tp.runPreviewNow(false)
+			}
+		})
+	})
+	tp.previewMu.Unlock()
+}
+
+func (tp *TemplatePane) runPreviewNow(force bool) {
+	if tp.closed || !tp.active || !tp.livePreview || tp.mgr == nil || tp.tab == nil {
+		return
+	}
+	provider := tp.mgr.getPreviewProvider()
+	if provider == nil || !provider.SupportsVisual() {
+		return
+	}
+
+	tmpl, ok := tp.SelectedTemplate()
+	if !ok {
+		tp.cancelPendingPreview()
+		provider.Clear(tp.tab)
+		return
+	}
+
+	key := tmpl.ID + "\x00" + tmpl.Version + "\x00" + tmpl.Title
+	tp.previewMu.Lock()
+	if !force && tp.lastPreviewKey == key {
+		tp.previewMu.Unlock()
+		return
+	}
+	tp.lastPreviewKey = key
+	if tp.previewCancel != nil {
+		tp.previewCancel()
+		tp.previewCancel = nil
+	}
+	tp.previewGen++
+	gen := tp.previewGen
+	tp.previewMu.Unlock()
+
+	if !provider.OpenLoading(tp.tab, tp.resolveTarget(), tmpl.DisplayTitle()) {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	tp.previewMu.Lock()
+	if tp.closed || tp.previewGen != gen {
+		tp.previewMu.Unlock()
+		cancel()
+		return
+	}
+	tp.previewCancel = cancel
+	tp.previewMu.Unlock()
+
+	client := tp.mgr.getUniverseClient()
+	cacheDir := tp.mgr.getPreviewCacheDir()
+	tab := tp.tab
+
+	go func() {
+		imgs, err := LoadTemplatePreviewImages(ctx, tmpl, client, cacheDir, provider.CompileTypst)
+		canceled := ctx.Err() == context.Canceled
+		cancel()
+		if canceled {
+			return
+		}
+		action.EnqueueUI(func() {
+			tp.previewMu.Lock()
+			stale := tp.closed || !tp.active || !tp.livePreview || tp.previewGen != gen
+			tp.previewMu.Unlock()
+			if stale {
+				return
+			}
+			if err != nil {
+				provider.ShowError(tab, tmpl.DisplayTitle(), err.Error())
+				return
+			}
+			provider.ShowImages(tab, tmpl.DisplayTitle(), imgs)
+		})
+	}()
+}
+
+func (tp *TemplatePane) toggleLivePreview() {
+	var provider PreviewProvider
+	if tp.mgr != nil {
+		provider = tp.mgr.getPreviewProvider()
+	}
+	if provider != nil && provider.SupportsVisual() {
+		tp.livePreview = !tp.livePreview
+		if tp.livePreview {
+			tp.schedulePreview(true)
+			notifyMessage("Template live preview enabled")
+		} else {
+			tp.cancelPendingPreview()
+			tp.clearLivePreview()
+			notifyMessage("Template live preview disabled")
+		}
+		return
+	}
+	tp.toggleSourcePreview()
+}
+
+func (tp *TemplatePane) hasOpenSourcePreview() bool {
+	if tp.sourcePreviewBuf == nil || tp.tab == nil {
+		return false
+	}
+	for _, p := range tp.tab.Panes {
+		if bp, ok := p.(*action.BufPane); ok && bp.Buf == tp.sourcePreviewBuf {
+			return true
+		}
+	}
+	return false
+}
+
+func (tp *TemplatePane) toggleSourcePreview() {
+	if tp.hasOpenSourcePreview() {
+		tp.closeSourcePreview()
+		return
+	}
+	tp.updateSourcePreview()
+}
+
+func (tp *TemplatePane) updateSourcePreview() {
+	tmpl, ok := tp.SelectedTemplate()
+	if !ok || tp.tab == nil {
+		return
+	}
+	text := renderSourcePreviewText(tmpl)
+
+	for _, p := range tp.tab.Panes {
+		if bp, isBP := p.(*action.BufPane); isBP && tp.sourcePreviewBuf != nil && bp.Buf == tp.sourcePreviewBuf {
+			bp.Buf.Type.Readonly = false
+			bp.Buf.Settings["readonly"] = false
+			bp.Buf.Replace(bp.Buf.Start(), bp.Buf.End(), text)
+			bp.Buf.Type.Readonly = true
+			bp.Buf.Settings["readonly"] = true
+			if c := bp.Buf.GetActiveCursor(); c != nil {
+				c.GotoLoc(buffer.Loc{X: 0, Y: 0})
+			}
+			bp.Relocate()
+			return
+		}
+	}
+
+	target := tp.resolveTarget()
+	if target == nil {
+		return
+	}
+	buf := buffer.NewBufferFromString(text, "template-preview.typ", buffer.BTScratch)
+	buf.Type.Readonly = true
+	buf.Settings["readonly"] = true
+	buf.Settings["filetype"] = "typst"
+	tp.sourcePreviewBuf = buf
+
+	tp.suppressClearOnFocus = true
+	target.VSplitIndex(buf, true)
+	for i, p := range tp.tab.Panes {
+		if p == tp {
+			tp.tab.SetActive(i)
+			break
+		}
+	}
+	tp.suppressClearOnFocus = false
+}
+
+func (tp *TemplatePane) closeSourcePreview() {
+	if tp.sourcePreviewBuf == nil || tp.tab == nil {
+		tp.sourcePreviewBuf = nil
+		return
+	}
+	targetBuf := tp.sourcePreviewBuf
+	tp.sourcePreviewBuf = nil
+	for i, p := range tp.tab.Panes {
+		bp, ok := p.(*action.BufPane)
+		if !ok || bp.Buf != targetBuf {
+			continue
+		}
+		id := bp.ID()
+		bp.Buf.Close()
+		if n := tp.tab.GetNode(id); n != nil {
+			n.Unsplit()
+		}
+		tp.tab.RemovePane(i)
+		tp.tab.Resize()
+		for j, rem := range tp.tab.Panes {
+			if rem == tp {
+				tp.tab.SetActive(j)
+				break
+			}
+		}
+		break
+	}
+}
+
+func renderSourcePreviewText(t Template) string {
+	if t.AssetName != "" || t.FilePath != "" {
+		if rendered, err := RenderEntry(t, TemplateVars{Title: t.DisplayTitle()}); err == nil {
+			return rendered
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "// %s (%s)\n", t.DisplayTitle(), t.Source.String())
+	if t.Description != "" {
+		fmt.Fprintf(&b, "// %s\n", t.Description)
+	}
+	if t.PackageSpec != "" {
+		fmt.Fprintf(&b, "\n#import %q: *\n", t.PackageSpec)
+	}
+	return b.String()
 }

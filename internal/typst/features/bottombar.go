@@ -293,6 +293,7 @@ func templatesBottomBarContext(tp *templates.TemplatePane) display.BottomBarCont
 	} else {
 		hints = []display.BottomBarItem{
 			{Key: "Enter", Label: "Apply", Action: "pane:Enter", Priority: 0},
+			{Key: "v", Label: "Preview", Action: "pane:v", Priority: 1, Active: tp.IsLivePreview()},
 			{Key: "p", Label: "Preamble", Action: "pane:p", Priority: 1},
 			{Key: "n", Label: "Scaffold", Action: "pane:n", Priority: 2},
 			{Key: "/", Label: "Filter", Action: "pane:/", Priority: 0},
@@ -306,7 +307,7 @@ func templatesBottomBarContext(tp *templates.TemplatePane) display.BottomBarCont
 		Badge:    "TEMPLATES",
 		Hints:    hints,
 		MenuRows: typstKeyMenuRows(false, false, true, false, true),
-		MenuTip:  "Templates focused · Enter apply · p preamble · n scaffold · u load Universe · / filter · Esc returns to editor",
+		MenuTip:  "Templates focused · Enter apply · v preview · p preamble · n scaffold · u load Universe · / filter · Esc returns to editor",
 	}
 }
 

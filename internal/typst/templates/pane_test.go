@@ -2,6 +2,7 @@ package templates
 
 import (
 	"context"
+	"image"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -78,6 +79,8 @@ func initPaneTestEnv(t *testing.T, width, height int) {
 	t.Cleanup(func() {
 		SetExternalBackend(nil)
 		SetUniverseClient(nil)
+		SetPreviewProvider(nil)
+		SetPreviewCacheDir("")
 		if tab := action.MainTab(); tab != nil {
 			CloseForTab(tab)
 		}
@@ -221,4 +224,118 @@ func TestTemplatePaneNavigationFilterApplyAndUniverse(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	assert.Contains(t, string(blank.Bytes()), `#import "@preview/charged-ieee:0.1.4": *`)
+}
+
+type fakePreviewProvider struct {
+	mu           sync.Mutex
+	visual       bool
+	loadingCalls []string
+	shownTitles  []string
+	errorCalls   []string
+	clearCount   int
+}
+
+func (f *fakePreviewProvider) SupportsVisual() bool { return f.visual }
+
+func (f *fakePreviewProvider) OpenLoading(tab *action.Tab, bp *action.BufPane, title string) bool {
+	f.mu.Lock()
+	f.loadingCalls = append(f.loadingCalls, title)
+	f.mu.Unlock()
+	return true
+}
+
+func (f *fakePreviewProvider) ShowImages(tab *action.Tab, title string, imgs []*image.RGBA) {
+	f.mu.Lock()
+	f.shownTitles = append(f.shownTitles, title)
+	f.mu.Unlock()
+}
+
+func (f *fakePreviewProvider) ShowError(tab *action.Tab, title, errMsg string) {
+	f.mu.Lock()
+	f.errorCalls = append(f.errorCalls, title+": "+errMsg)
+	f.mu.Unlock()
+}
+
+func (f *fakePreviewProvider) Clear(tab *action.Tab) {
+	f.mu.Lock()
+	f.clearCount++
+	f.mu.Unlock()
+}
+
+func (f *fakePreviewProvider) CompileTypst(ctx context.Context, filePath, rootDir string, content []byte) ([]*image.RGBA, error) {
+	return []*image.RGBA{image.NewRGBA(image.Rect(0, 0, 50, 70))}, nil
+}
+
+func TestTemplatePaneLivePreviewDefaultOnToggleAndCleanup(t *testing.T) {
+	initPaneTestEnv(t, 120, 30)
+
+	SetPreviewCacheDir(filepath.Join(t.TempDir(), "preview-cache"))
+	fp := &fakePreviewProvider{visual: true}
+	SetPreviewProvider(fp)
+
+	b := buffer.NewBufferFromString("", "live.typ", buffer.BTDefault)
+	action.InitTabs([]*buffer.Buffer{b})
+	action.Tabs.Resize()
+	tab := action.MainTab()
+	bp := tab.CurPane()
+
+	// 1. Live preview is on by default and triggers automatically when gallery opens.
+	tp, ok := Open(bp, true)
+	require.True(t, ok)
+	require.True(t, tp.IsLivePreview())
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		action.DrainUIQueue()
+		fp.mu.Lock()
+		n := len(fp.shownTitles)
+		fp.mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	fp.mu.Lock()
+	require.GreaterOrEqual(t, len(fp.shownTitles), 1)
+	firstShown := fp.shownTitles[0]
+	fp.mu.Unlock()
+	assert.Equal(t, "Minimal Document", firstShown)
+
+	// 2. Moving selection updates preview after debounce.
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone, ""))
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		action.DrainUIQueue()
+		fp.mu.Lock()
+		n := len(fp.shownTitles)
+		fp.mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	fp.mu.Lock()
+	require.GreaterOrEqual(t, len(fp.shownTitles), 2)
+	secondShown := fp.shownTitles[len(fp.shownTitles)-1]
+	fp.mu.Unlock()
+	assert.NotEqual(t, firstShown, secondShown)
+
+	// 3. Pressing 'v' toggles live preview off and clears; pressing 'v' again re-enables.
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'v', tcell.ModNone, ""))
+	assert.False(t, tp.IsLivePreview())
+	fp.mu.Lock()
+	clearsAfterOff := fp.clearCount
+	fp.mu.Unlock()
+	assert.GreaterOrEqual(t, clearsAfterOff, 1)
+
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'v', tcell.ModNone, ""))
+	assert.True(t, tp.IsLivePreview())
+
+	// 4. Returning focus to editor clears live gallery preview cleanly.
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone, ""))
+	assert.Equal(t, bp, tab.ActivePane())
+	fp.mu.Lock()
+	clearsAfterEsc := fp.clearCount
+	fp.mu.Unlock()
+	assert.Greater(t, clearsAfterEsc, clearsAfterOff)
 }

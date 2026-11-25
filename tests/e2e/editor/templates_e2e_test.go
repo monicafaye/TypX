@@ -1,6 +1,10 @@
 package editor_test
 
 import (
+	"context"
+	"image"
+	"image/color"
+	"image/draw"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +18,7 @@ import (
 	"github.com/monicafaye/TypX/internal/action"
 	"github.com/monicafaye/TypX/internal/config"
 	"github.com/monicafaye/TypX/internal/lsp"
+	"github.com/monicafaye/TypX/internal/typst/preview"
 	"github.com/monicafaye/TypX/internal/typst/templates"
 	"github.com/monicafaye/TypX/tests/e2e/harness"
 )
@@ -137,4 +142,97 @@ func TestE2E_TemplatesGalleryEmptyHintSaveAndMockTinymistInit(t *testing.T) {
 	traceText := string(traceBytes)
 	assert.Contains(t, traceText, "tinymist.doInitTemplate")
 	assert.Contains(t, traceText, "tinymist.doGetTemplateEntry")
+}
+
+type stubTemplatePreviewCompiler struct{}
+
+func (stubTemplatePreviewCompiler) CompilePages(ctx context.Context, req preview.CompileRequest) (*preview.DocumentDeck, error) {
+	img := image.NewRGBA(image.Rect(0, 0, 220, 300))
+	draw.Draw(img, img.Bounds(), &image.Uniform{C: color.RGBA{255, 255, 255, 255}}, image.Point{}, draw.Src)
+	return preview.NewDocumentDeckFromImages([]*image.RGBA{img}, time.Millisecond), nil
+}
+
+func TestE2E_TemplateGalleryLiveVisualPreview(t *testing.T) {
+	harness.RequirePhase23(t)
+
+	preview.SetCapsForTest(preview.TerminalCaps{Sixel: true, CellW: 10, CellH: 20, Source: "test", Probed: true})
+	preview.SetCompiler(stubTemplatePreviewCompiler{})
+	templates.SetPreviewCacheDir(filepath.Join(t.TempDir(), "preview-cache"))
+
+	ed := harness.NewSimEditor(t, harness.SimOptions{
+		InitialName: "live-gallery.typ",
+		InitialText: "= Existing Doc\n",
+		Settings: map[string]any{
+			"colorscheme":          "typx-dark",
+			"typst.lspEnabled":     false,
+			"typst.keyHints":       true,
+			"typst.templatesWidth": float64(30),
+			"typst.previewWidth":   float64(42),
+		},
+		Width:  130,
+		Height: 32,
+	})
+	t.Cleanup(func() {
+		if tab := action.MainTab(); tab != nil {
+			templates.CloseForTab(tab)
+			preview.CloseForTab(tab)
+		}
+		preview.SetCapsForTest(preview.TerminalCaps{})
+		preview.SetCompiler(&preview.TinymistCompiler{})
+		templates.SetPreviewCacheDir("")
+	})
+
+	tab := action.MainTab()
+	bp := ed.Pane()
+
+	// 1. Opening gallery on Sixel terminal auto-opens PreviewPane in override mode.
+	ed.InjectKey(tcell.KeyRune, 'N', tcell.ModAlt|tcell.ModShift)
+	require.True(t, ed.PumpUntil(3*time.Second, func() bool {
+		pp := preview.PaneForTab(tab)
+		return pp != nil && pp.HasOverride() && !pp.IsCompiling()
+	}), "expected live gallery preview pane to render starter automatically")
+
+	pp := preview.PaneForTab(tab)
+	require.NotNil(t, pp)
+	assert.Equal(t, "Minimal Document", pp.OverrideTitle())
+	assert.Contains(t, ed.InfoBarText(), "v Preview●")
+
+	// 2. Pressing 'j' moves to next starter and updates preview override title.
+	ed.InjectKey(tcell.KeyRune, 'j', tcell.ModNone)
+	require.True(t, ed.PumpUntil(3*time.Second, func() bool {
+		cur := preview.PaneForTab(tab)
+		return cur != nil && cur.HasOverride() && cur.OverrideTitle() == "Academic Article" && !cur.IsCompiling()
+	}), "expected moving down in gallery to update preview to Academic Article")
+
+	// 3. Pressing 'v' toggles live preview off and closes the auto-opened PreviewPane; 'v' again restores it.
+	ed.InjectKey(tcell.KeyRune, 'v', tcell.ModNone)
+	require.Nil(t, preview.PaneForTab(tab), "toggling live preview off should close auto-opened preview pane")
+	assert.NotContains(t, ed.InfoBarText(), "v Preview●")
+
+	ed.InjectKey(tcell.KeyRune, 'v', tcell.ModNone)
+	require.True(t, ed.PumpUntil(3*time.Second, func() bool {
+		cur := preview.PaneForTab(tab)
+		return cur != nil && cur.HasOverride() && !cur.IsCompiling()
+	}), "toggling live preview back on should reopen preview pane")
+
+	// Close gallery cleanly -> auto-opened PreviewPane closes.
+	ed.InjectKey(tcell.KeyRune, 'q', tcell.ModNone)
+	require.Nil(t, preview.PaneForTab(tab))
+	require.Nil(t, templates.PaneForTab(tab))
+
+	// 4. If document PreviewPane was already open before gallery, closing gallery preserves it!
+	docPP, ok := preview.Open(bp, false)
+	require.True(t, ok)
+	require.True(t, ed.PumpUntil(3*time.Second, func() bool {
+		return !docPP.IsCompiling()
+	}))
+
+	ed.InjectKey(tcell.KeyRune, 'N', tcell.ModAlt|tcell.ModShift)
+	require.True(t, ed.PumpUntil(3*time.Second, func() bool {
+		return docPP.HasOverride() && !docPP.IsCompiling()
+	}))
+
+	ed.InjectKey(tcell.KeyRune, 'q', tcell.ModNone)
+	assert.Same(t, docPP, preview.PaneForTab(tab), "pre-existing document preview pane must remain open")
+	assert.False(t, docPP.HasOverride(), "closing gallery must restore underlying document preview deck")
 }

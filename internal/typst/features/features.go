@@ -3,6 +3,7 @@ package features
 import (
 	"context"
 	"fmt"
+	"image"
 	"strings"
 	"sync"
 	"unicode"
@@ -123,11 +124,55 @@ func Init() {
 		preview.Init()
 		lsp.SetInlinePreviewHandler(inlinePreviewAdapter{})
 
-		// 8. Wire Template Gallery & scaffolding with optional tinymist template RPCs.
+		// 8. Wire Template Gallery & scaffolding with optional tinymist template RPCs
+		// and live in-terminal Sixel visual preview.
 		templates.SetExternalBackend(lspTemplateAdapter{})
 		templates.SetRootResolver(lsp.FindProjectRoot)
+		templates.SetPreviewProvider(previewTemplateAdapter{})
 		templates.Init()
 	})
+}
+
+type previewTemplateAdapter struct{}
+
+func (previewTemplateAdapter) SupportsVisual() bool {
+	return preview.SupportsSixel()
+}
+
+func (previewTemplateAdapter) OpenLoading(tab *action.Tab, bp *action.BufPane, title string) bool {
+	if bp == nil && tab != nil {
+		bp = tab.CurPane()
+	}
+	if bp == nil {
+		return false
+	}
+	_, ok := preview.OpenForOverride(bp, title)
+	return ok
+}
+
+func (previewTemplateAdapter) ShowImages(tab *action.Tab, title string, imgs []*image.RGBA) {
+	if pp := preview.PaneForTab(tab); pp != nil {
+		pp.ShowOverrideImages(title, imgs)
+	}
+}
+
+func (previewTemplateAdapter) ShowError(tab *action.Tab, title, errMsg string) {
+	if pp := preview.PaneForTab(tab); pp != nil {
+		pp.ShowOverrideError(title, errMsg)
+	}
+}
+
+func (previewTemplateAdapter) Clear(tab *action.Tab) {
+	preview.ClearOverrideForTab(tab)
+}
+
+func (previewTemplateAdapter) CompileTypst(ctx context.Context, filePath, rootDir string, content []byte) ([]*image.RGBA, error) {
+	return preview.CompileTypstToImages(ctx, preview.CompileRequest{
+		FilePath: filePath,
+		RootDir:  rootDir,
+		Content:  content,
+		Modified: len(content) > 0,
+	}, 1)
 }
 
 type lspTemplateAdapter struct{}
