@@ -38,6 +38,14 @@ TypX includes:
 
 Prebuilt archives for `windows/amd64`, `darwin/arm64`, `darwin/amd64`, `linux/amd64`, and `linux/arm64` with SHA-256 checksums are published on [GitHub Releases](https://github.com/monicafaye/TypX/releases). Extract the archive and place `typx` (`typx.exe` on Windows) on your `PATH`.
 
+### Using Go (`go install`)
+
+Requires Go 1.23 or newer. Installs `typx` into `$GOBIN` or `$GOPATH/bin`:
+
+```bash
+go install github.com/monicafaye/TypX/cmd/typx@latest
+```
+
 ### Building from source
 
 Requires Go 1.23 or newer.

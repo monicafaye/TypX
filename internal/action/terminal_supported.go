@@ -3,7 +3,7 @@
 package action
 
 import (
-	shellquote "github.com/kballard/go-shellquote"
+	shellquote "github.com/micro-editor/go-shellquote"
 	"github.com/monicafaye/TypX/internal/shell"
 )
 

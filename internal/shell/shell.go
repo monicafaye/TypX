@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 
-	shellquote "github.com/kballard/go-shellquote"
+	shellquote "github.com/micro-editor/go-shellquote"
 	"github.com/monicafaye/TypX/internal/screen"
 	"github.com/monicafaye/TypX/internal/util"
 )

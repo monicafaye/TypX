@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	shellquote "github.com/kballard/go-shellquote"
+	shellquote "github.com/micro-editor/go-shellquote"
 	"github.com/micro-editor/tcell/v2"
 	"github.com/monicafaye/TypX/internal/buffer"
 	"github.com/monicafaye/TypX/internal/clipboard"

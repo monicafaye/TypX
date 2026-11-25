@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	shellquote "github.com/kballard/go-shellquote"
+	shellquote "github.com/micro-editor/go-shellquote"
 	"github.com/monicafaye/TypX/internal/buffer"
 	"github.com/monicafaye/TypX/internal/clipboard"
 	"github.com/monicafaye/TypX/internal/config"
