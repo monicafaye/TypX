@@ -41,8 +41,9 @@ var optionValidators = map[string]optionValidator{
 	"typst.debounceMs":   validateNonNegativeValue,
 	"typst.outlineWidth": validatePositiveValue,
 	"typst.previewMode":  validateChoice,
-	"typst.previewPPI":   validatePositiveValue,
-	"typst.previewWidth": validatePositiveValue,
+	"typst.previewPPI":     validatePositiveValue,
+	"typst.previewWidth":   validatePositiveValue,
+	"typst.templatesWidth": validatePositiveValue,
 }
 
 // a list of settings with pre-defined choices
@@ -153,6 +154,7 @@ var DefaultGlobalOnlySettings = map[string]any{
 	"typst.previewPPI":         float64(144),
 	"typst.previewTrimMargins": false,
 	"typst.previewWidth":       float64(48),
+	"typst.templatesWidth":     float64(36),
 	"typst.tinymistPath":       "",
 	"xterm":                    false,
 }

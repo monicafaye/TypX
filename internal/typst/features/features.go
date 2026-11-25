@@ -1,6 +1,7 @@
 package features
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"github.com/monicafaye/TypX/internal/typst/outline"
 	"github.com/monicafaye/TypX/internal/typst/preview"
 	"github.com/monicafaye/TypX/internal/typst/shortcuts"
+	"github.com/monicafaye/TypX/internal/typst/templates"
 	"github.com/monicafaye/TypX/internal/util"
 )
 
@@ -120,7 +122,22 @@ func Init() {
 		preview.SetRootResolver(lsp.FindProjectRoot)
 		preview.Init()
 		lsp.SetInlinePreviewHandler(inlinePreviewAdapter{})
+
+		// 8. Wire Template Gallery & scaffolding with optional tinymist template RPCs.
+		templates.SetExternalBackend(lspTemplateAdapter{})
+		templates.SetRootResolver(lsp.FindProjectRoot)
+		templates.Init()
 	})
+}
+
+type lspTemplateAdapter struct{}
+
+func (lspTemplateAdapter) InitTemplate(ctx context.Context, spec, targetDir string) (string, error) {
+	return lsp.InitTemplate(ctx, spec, targetDir)
+}
+
+func (lspTemplateAdapter) GetTemplateEntry(ctx context.Context, spec string) (string, error) {
+	return lsp.GetTemplateEntry(ctx, spec)
 }
 
 type inlinePreviewAdapter struct{}

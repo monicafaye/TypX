@@ -10,6 +10,7 @@ import (
 	"github.com/monicafaye/TypX/internal/typst"
 	"github.com/monicafaye/TypX/internal/typst/outline"
 	"github.com/monicafaye/TypX/internal/typst/preview"
+	"github.com/monicafaye/TypX/internal/typst/templates"
 )
 
 func buildBottomBarContext() display.BottomBarContext {
@@ -28,6 +29,8 @@ func buildBottomBarContext() display.BottomBarContext {
 			return outlineBottomBarContext(p)
 		case *preview.PreviewPane:
 			return previewBottomBarContext(p)
+		case *templates.TemplatePane:
+			return templatesBottomBarContext(p)
 		}
 	}
 
@@ -80,10 +83,12 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 	previewOn := preview.PaneForTab(tab) != nil || lsp.IsPreviewActive()
 	outlineOn := outline.PaneForTab(tab) != nil
 	treeOn := hasFileManagerPane(tab)
+	templatesOn := templates.PaneForTab(tab) != nil
 	concealOn, _ := b.Settings["typst.conceal"].(bool)
+	isEmpty := templates.IsBufferBlank(b)
 
 	errCount, warnCount := countDiagnostics(b)
-	menuRows := typstKeyMenuRows(previewOn, outlineOn, concealOn, treeOn)
+	menuRows := typstKeyMenuRows(previewOn, outlineOn, concealOn, treeOn, templatesOn)
 	menuTip := "Click any shortcut or press Alt+G to hide · ^E commands (:help typst)"
 
 	var diagItem *display.BottomBarItem
@@ -161,6 +166,11 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 		if diagItem != nil {
 			hints = append(hints, *diagItem)
 		}
+		if isEmpty {
+			hints = append(hints,
+				display.BottomBarItem{Key: "Alt+⇧N", Label: "Templates", Action: "ToggleTemplates", Priority: 0, Active: templatesOn},
+			)
+		}
 		hints = append(hints,
 			display.BottomBarItem{Key: "^S", Label: "Save", Action: "Save", Priority: 0},
 			display.BottomBarItem{Key: "^F", Label: "Find", Action: "Find", Priority: 4},
@@ -187,7 +197,7 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 	}
 }
 
-func typstKeyMenuRows(previewOn, outlineOn, concealOn, treeOn bool) []display.BottomBarMenuRow {
+func typstKeyMenuRows(previewOn, outlineOn, concealOn, treeOn, templatesOn bool) []display.BottomBarMenuRow {
 	return []display.BottomBarMenuRow{
 		{
 			Title: "Editor",
@@ -212,6 +222,7 @@ func typstKeyMenuRows(previewOn, outlineOn, concealOn, treeOn bool) []display.Bo
 				{Key: "Alt+M", Label: "Math", Action: "MathInline", Priority: 1},
 				{Key: "Alt+⇧M", Label: "Display", Action: "MathDisplay", Priority: 3},
 				{Key: "Alt+I", Label: "Insert", Action: "InsertPalette", Priority: 2},
+				{Key: "Alt+⇧N", Label: "Templates", Action: "ToggleTemplates", Priority: 2, Active: templatesOn},
 				{Key: "Alt+B", Label: "Bold", Action: "WrapBold", Priority: 4},
 				{Key: "Alt+E", Label: "Italic", Action: "WrapItalic", Priority: 4},
 				{Key: "Alt+K", Label: "Hover", Action: "LspHover", Priority: 3},
@@ -224,6 +235,7 @@ func typstKeyMenuRows(previewOn, outlineOn, concealOn, treeOn bool) []display.Bo
 func fileManagerBottomBarContext(tab *action.Tab) display.BottomBarContext {
 	previewOn := preview.PaneForTab(tab) != nil || lsp.IsPreviewActive()
 	outlineOn := outline.PaneForTab(tab) != nil
+	templatesOn := templates.PaneForTab(tab) != nil
 	return display.BottomBarContext{
 		Badge: "FILES",
 		Hints: []display.BottomBarItem{
@@ -236,7 +248,7 @@ func fileManagerBottomBarContext(tab *action.Tab) display.BottomBarContext {
 			{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 2, AlignRight: true},
 			{Key: "^Q", Label: "Quit", Action: "Quit", Priority: 1, AlignRight: true},
 		},
-		MenuRows: typstKeyMenuRows(previewOn, outlineOn, true, true),
+		MenuRows: typstKeyMenuRows(previewOn, outlineOn, true, true, templatesOn),
 		MenuTip:  "File tree focused · Enter/Tab/Click open · →/← expand/collapse · ^E touch/mkdir/rename/rm",
 	}
 }
@@ -264,8 +276,37 @@ func outlineBottomBarContext(op *outline.OutlinePane) display.BottomBarContext {
 	return display.BottomBarContext{
 		Badge:    "OUTLINE",
 		Hints:    hints,
-		MenuRows: typstKeyMenuRows(false, true, true, false),
+		MenuRows: typstKeyMenuRows(false, true, true, false, false),
 		MenuTip:  "Outline focused · Enter to jump · / to filter · Esc returns to editor",
+	}
+}
+
+func templatesBottomBarContext(tp *templates.TemplatePane) display.BottomBarContext {
+	var hints []display.BottomBarItem
+	if tp.IsFiltering() {
+		hints = []display.BottomBarItem{
+			{Key: "Enter", Label: "Apply", Action: "pane:Enter", Priority: 0},
+			{Key: "↑/↓", Label: "Select", Priority: 1},
+			{Key: "Esc", Label: "Clear Filter", Action: "pane:Esc", Priority: 0},
+			{Key: "Alt+⇧N", Label: "Close", Action: "ToggleTemplates", Priority: 1, AlignRight: true},
+		}
+	} else {
+		hints = []display.BottomBarItem{
+			{Key: "Enter", Label: "Apply", Action: "pane:Enter", Priority: 0},
+			{Key: "p", Label: "Preamble", Action: "pane:p", Priority: 1},
+			{Key: "n", Label: "Scaffold", Action: "pane:n", Priority: 2},
+			{Key: "/", Label: "Filter", Action: "pane:/", Priority: 0},
+			{Key: "u", Label: "Universe", Action: "pane:u", Priority: 1},
+			{Key: "Esc", Label: "Editor", Action: "pane:Esc", Priority: 0},
+			{Key: "q", Label: "Close", Action: "pane:q", Priority: 1, AlignRight: true},
+			{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 2, AlignRight: true},
+		}
+	}
+	return display.BottomBarContext{
+		Badge:    "TEMPLATES",
+		Hints:    hints,
+		MenuRows: typstKeyMenuRows(false, false, true, false, true),
+		MenuTip:  "Templates focused · Enter apply · p preamble · n scaffold · u load Universe · / filter · Esc returns to editor",
 	}
 }
 
@@ -286,7 +327,7 @@ func previewBottomBarContext(pp *preview.PreviewPane) display.BottomBarContext {
 		Badge:       "PREVIEW",
 		BadgeAccent: "math",
 		Hints:       hints,
-		MenuRows:    typstKeyMenuRows(true, false, true, false),
+		MenuRows:    typstKeyMenuRows(true, false, true, false, false),
 		MenuTip:     "Preview focused · Wheel/j/k scroll · </> width · t invert · m trim · Esc returns to editor",
 	}
 }
