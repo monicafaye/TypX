@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
 	"io"
 	"os"
 	"path/filepath"
@@ -94,6 +95,15 @@ type PreviewPane struct {
 	trimMargins    bool
 	pendingSection *SectionTarget
 
+	// Temporary override deck state (used by Template Gallery live preview).
+	overrideActive   bool
+	overrideTitle    string
+	overrideLoading  bool
+	overrideErr      string
+	overrideDeck     *DocumentDeck
+	openedByOverride bool
+	savedScrollY     int
+
 	compiling     bool
 	compileStart  time.Time
 	lastErr       string
@@ -177,7 +187,7 @@ func (pp *PreviewPane) Resize(w, h int) {
 	changed := pp.view.Width != w || pp.view.Height != h
 	pp.view.Width = w
 	pp.view.Height = h
-	if changed && pp.deck != nil && !pp.isTabResizing() {
+	if changed && pp.activeDeck() != nil && !pp.isTabResizing() {
 		pp.preserveRatioRebuild()
 	}
 }
@@ -214,6 +224,11 @@ func (pp *PreviewPane) Close() {
 		pp.deck.Close()
 		pp.deck = nil
 	}
+	if pp.overrideDeck != nil {
+		pp.overrideDeck.Close()
+		pp.overrideDeck = nil
+	}
+	pp.overrideActive = false
 	pp.viewport = nil
 	pp.pendingSection = nil
 	pp.sixelDirty = false
@@ -239,19 +254,137 @@ func (pp *PreviewPane) MaxScrollY() int {
 // PageRange returns the currently visible 1-based page range and total page count.
 func (pp *PreviewPane) PageRange() (first, last, total int) {
 	if pp.viewport == nil {
-		if pp.deck != nil {
-			return 1, 1, pp.deck.PageCount()
+		if d := pp.activeDeck(); d != nil {
+			return 1, 1, d.PageCount()
 		}
 		return 0, 0, 0
 	}
 	return pp.viewport.FirstPage, pp.viewport.LastPage, pp.viewport.PageCount
 }
 
+// HasOverride reports whether PreviewPane is displaying a temporary gallery override.
+func (pp *PreviewPane) HasOverride() bool { return pp.overrideActive }
+
+// OverrideTitle returns the title of the currently displayed gallery override, if any.
+func (pp *PreviewPane) OverrideTitle() string { return pp.overrideTitle }
+
+// ShowOverrideLoading switches the preview pane into loading state for a template.
+func (pp *PreviewPane) ShowOverrideLoading(title string) {
+	if !pp.overrideActive {
+		pp.savedScrollY = pp.scrollY
+	}
+	if pp.overrideDeck != nil {
+		pp.overrideDeck.Close()
+		pp.overrideDeck = nil
+	}
+	pp.overrideActive = true
+	pp.overrideTitle = title
+	pp.overrideLoading = true
+	pp.overrideErr = ""
+	pp.viewport = nil
+	pp.scrollY = 0
+	pp.sixelDirty = false
+	pp.clearPending = true
+	pp.compileStart = time.Now()
+	pp.startSpinner()
+	screen.Redraw()
+}
+
+// ShowOverrideImages renders in-memory RGBA page images inside PreviewPane without
+// disturbing the underlying document deck.
+func (pp *PreviewPane) ShowOverrideImages(title string, imgs []*image.RGBA) {
+	if !pp.overrideActive {
+		pp.savedScrollY = pp.scrollY
+	}
+	if !pp.compiling {
+		pp.stopSpinner()
+	}
+	if pp.overrideDeck != nil {
+		pp.overrideDeck.Close()
+		pp.overrideDeck = nil
+	}
+	pp.overrideActive = true
+	pp.overrideTitle = title
+	pp.overrideLoading = false
+	pp.overrideErr = ""
+	pp.overrideDeck = NewDocumentDeckFromImages(imgs, 0)
+	pp.scrollY = 0
+	pp.clearPending = true
+	pp.rebuildViewport(true)
+	screen.Redraw()
+}
+
+// ShowOverrideError displays an error message while keeping gallery override active.
+func (pp *PreviewPane) ShowOverrideError(title, errMsg string) {
+	if !pp.overrideActive {
+		pp.savedScrollY = pp.scrollY
+	}
+	if !pp.compiling {
+		pp.stopSpinner()
+	}
+	if pp.overrideDeck != nil {
+		pp.overrideDeck.Close()
+		pp.overrideDeck = nil
+	}
+	pp.overrideActive = true
+	pp.overrideTitle = title
+	pp.overrideLoading = false
+	pp.overrideErr = firstUsefulErrorLine(errMsg)
+	pp.viewport = nil
+	pp.sixelDirty = false
+	pp.clearPending = true
+	screen.Redraw()
+}
+
+// ClearOverride exits temporary override mode and restores the underlying document deck.
+func (pp *PreviewPane) ClearOverride() {
+	if !pp.overrideActive {
+		return
+	}
+	if pp.overrideDeck != nil {
+		pp.overrideDeck.Close()
+		pp.overrideDeck = nil
+	}
+	pp.overrideActive = false
+	pp.overrideTitle = ""
+	pp.overrideLoading = false
+	pp.overrideErr = ""
+	if !pp.compiling {
+		pp.stopSpinner()
+	}
+	pp.scrollY = pp.savedScrollY
+	pp.viewport = nil
+	pp.clearPending = true
+	if pp.deck != nil {
+		if dstW, viewH := pp.targetPixelSize(); dstW > 0 && viewH > 0 {
+			pp.deck.ComputeLayout(dstW, pp.trimMargins)
+		}
+		pp.rebuildViewport(true)
+		pp.sixelDirty = true
+		pp.clearPending = true
+	} else {
+		pp.ScheduleCompile(true)
+	}
+	screen.Redraw()
+}
+
+func (pp *PreviewPane) activeDeck() *DocumentDeck {
+	if pp.overrideActive {
+		return pp.overrideDeck
+	}
+	return pp.deck
+}
+
 // IsCompiling reports whether an async compilation is currently in flight.
-func (pp *PreviewPane) IsCompiling() bool { return pp.compiling }
+func (pp *PreviewPane) IsCompiling() bool { return pp.compiling || pp.overrideLoading }
 
 // LastError returns the most recent compile error message, if any.
-func (pp *PreviewPane) LastError() string { return pp.lastErr }
+func (pp *PreviewPane) LastError() string {
+	if pp.overrideActive {
+		return pp.overrideErr
+	}
+	return pp.lastErr
+}
 
 // Invert reports whether dark-theme tone inversion is enabled.
 func (pp *PreviewPane) Invert() bool { return pp.invert }
@@ -262,7 +395,7 @@ func (pp *PreviewPane) TrimMargins() bool { return pp.trimMargins }
 // ToggleInvert switches dark/light color inversion and re-renders immediately.
 func (pp *PreviewPane) ToggleInvert() {
 	pp.invert = !pp.invert
-	if pp.deck != nil {
+	if pp.activeDeck() != nil {
 		pp.rebuildViewport(false)
 	}
 	screen.Redraw()
@@ -271,7 +404,7 @@ func (pp *PreviewPane) ToggleInvert() {
 // ToggleTrimMargins switches outer whitespace margin trimming and re-renders immediately.
 func (pp *PreviewPane) ToggleTrimMargins() {
 	pp.trimMargins = !pp.trimMargins
-	if pp.deck != nil {
+	if pp.activeDeck() != nil {
 		pp.preserveRatioRebuild()
 	}
 	screen.Redraw()
@@ -321,7 +454,8 @@ func (pp *PreviewPane) targetPixelSize() (dstW, viewH int) {
 }
 
 func (pp *PreviewPane) preserveRatioRebuild() {
-	if pp.deck == nil {
+	deck := pp.activeDeck()
+	if deck == nil {
 		return
 	}
 	var ratio float64
@@ -332,8 +466,8 @@ func (pp *PreviewPane) preserveRatioRebuild() {
 	if dstW <= 0 || viewH <= 0 {
 		return
 	}
-	pp.deck.ComputeLayout(dstW, pp.trimMargins)
-	newMax := pp.deck.TotalHeight() - viewH
+	deck.ComputeLayout(dstW, pp.trimMargins)
+	newMax := deck.TotalHeight() - viewH
 	if newMax < 0 {
 		newMax = 0
 	}
@@ -342,16 +476,21 @@ func (pp *PreviewPane) preserveRatioRebuild() {
 }
 
 func (pp *PreviewPane) rebuildViewport(clearRight bool) bool {
-	if pp.deck == nil {
+	deck := pp.activeDeck()
+	if deck == nil {
 		return false
 	}
 	dstW, viewH := pp.targetPixelSize()
 	if dstW <= 0 || viewH <= 0 {
 		return false
 	}
-	vp, err := pp.deck.RenderViewport(dstW, viewH, pp.scrollY, pp.invert, pp.trimMargins)
+	vp, err := deck.RenderViewport(dstW, viewH, pp.scrollY, pp.invert, pp.trimMargins)
 	if err != nil {
-		pp.lastErr = err.Error()
+		if pp.overrideActive {
+			pp.overrideErr = err.Error()
+		} else {
+			pp.lastErr = err.Error()
+		}
 		return false
 	}
 	pp.scrollY = vp.ScrollY // strictly clamped to [0, MaxScrollY]
@@ -370,7 +509,7 @@ func (pp *PreviewPane) rebuildViewport(clearRight bool) bool {
 // to [0, MaxScrollY] with zero overscroll debt. Returns true if the viewport moved.
 func (pp *PreviewPane) ScrollBy(delta int) bool {
 	pp.pendingSection = nil
-	if pp.viewport == nil || pp.deck == nil {
+	if pp.viewport == nil || pp.activeDeck() == nil {
 		return false
 	}
 	nextY := pp.scrollY + delta
@@ -390,7 +529,8 @@ func (pp *PreviewPane) ScrollBy(delta int) bool {
 // JumpPageDelta jumps directly to the top of the next/previous page.
 func (pp *PreviewPane) JumpPageDelta(delta int) bool {
 	pp.pendingSection = nil
-	if pp.viewport == nil || pp.deck == nil || pp.deck.PageCount() == 0 {
+	deck := pp.activeDeck()
+	if pp.viewport == nil || deck == nil || deck.PageCount() == 0 {
 		return false
 	}
 	curIdx := pp.viewport.FirstPage - 1
@@ -401,10 +541,10 @@ func (pp *PreviewPane) JumpPageDelta(delta int) bool {
 	if targetIdx < 0 {
 		targetIdx = 0
 	}
-	if targetIdx >= pp.deck.PageCount() {
-		targetIdx = pp.deck.PageCount() - 1
+	if targetIdx >= deck.PageCount() {
+		targetIdx = deck.PageCount() - 1
 	}
-	nextY := pp.deck.PageTop(targetIdx)
+	nextY := deck.PageTop(targetIdx)
 	if nextY > pp.viewport.MaxScrollY {
 		nextY = pp.viewport.MaxScrollY
 	}
@@ -534,6 +674,9 @@ func (pp *PreviewPane) stopSpinner() {
 
 // ScheduleCompile schedules a debounced background compile of the target Typst buffer.
 func (pp *PreviewPane) ScheduleCompile(immediate bool) {
+	if pp.overrideActive {
+		return
+	}
 	pp.mu.Lock()
 	if pp.closed {
 		pp.mu.Unlock()
@@ -674,8 +817,18 @@ func (pp *PreviewPane) startCompileNow() {
 				return
 			}
 
+		if pp.overrideActive {
 			oldDeck := pp.deck
 			pp.deck = deck
+			pp.lastErr = ""
+			if oldDeck != nil {
+				oldDeck.Close()
+			}
+			pp.compiling = false
+			return
+		}
+		oldDeck := pp.deck
+		pp.deck = deck
 			pp.lastErr = ""
 			if oldDeck != nil {
 				oldDeck.Close()
@@ -744,7 +897,7 @@ func (pp *PreviewPane) Display() {
 			// re-emitting the relocated preview.
 			pp.mgr.pendingSync = true
 		}
-		if pp.deck != nil {
+		if pp.activeDeck() != nil {
 			dstW, viewH := pp.targetPixelSize()
 			if pp.viewport == nil || pp.vpTargetW != dstW || pp.vpTargetH != viewH {
 				pp.preserveRatioRebuild()
@@ -777,7 +930,17 @@ func (pp *PreviewPane) drawPlaceholder(imgRows int) {
 
 	var msg string
 	var sub string
-	if pp.compiling {
+	if pp.overrideActive {
+		if pp.overrideLoading {
+			spin := spinnerFrames[int(pp.spinTick.Load())%len(spinnerFrames)]
+			msg = fmt.Sprintf("%s Loading preview for %s...", spin, pp.overrideTitle)
+		} else if pp.overrideErr != "" {
+			msg = "Template preview unavailable:"
+			sub = pp.overrideErr
+		} else {
+			msg = fmt.Sprintf("Template: %s", pp.overrideTitle)
+		}
+	} else if pp.compiling {
 		spin := spinnerFrames[int(pp.spinTick.Load())%len(spinnerFrames)]
 		elapsed := ""
 		if d := time.Since(pp.compileStart); d >= 200*time.Millisecond {
@@ -884,6 +1047,18 @@ func (pp *PreviewPane) drawFooter(y int) {
 	}
 
 	switch {
+	case pp.overrideActive:
+		switch {
+		case pp.overrideLoading:
+			spin := spinnerFrames[int(pp.spinTick.Load())%len(spinnerFrames)]
+			left = fmt.Sprintf(" Template: %s | %s loading...", pp.overrideTitle, spin)
+		case pp.overrideErr != "":
+			left = fmt.Sprintf(" Template: %s | ERR: %s", pp.overrideTitle, pp.overrideErr)
+		case pp.viewport != nil:
+			left = fmt.Sprintf(" Template: %s | %s", pp.overrideTitle, pp.pageLabel())
+		default:
+			left = fmt.Sprintf(" Template: %s", pp.overrideTitle)
+		}
 	case pp.compiling:
 		spin := spinnerFrames[int(pp.spinTick.Load())%len(spinnerFrames)]
 		if pp.viewport != nil {
@@ -1169,7 +1344,12 @@ func (pp *PreviewPane) HandleEvent(event tcell.Event) {
 			case 'r', 'R':
 				pp.sixelDirty = true
 				pp.clearPending = true
-				pp.ScheduleCompile(true)
+				if pp.overrideActive {
+					pp.rebuildViewport(true)
+					screen.Redraw()
+				} else {
+					pp.ScheduleCompile(true)
+				}
 			case '<':
 				pp.ResizePaneBy(resizeStepCols)
 			case '>':
@@ -1312,9 +1492,18 @@ func Toggle(bp *action.BufPane) bool {
 	return defaultManager.Toggle(bp)
 }
 
-// CloseForTab closes the inline preview pane on tab if open.
-func CloseForTab(tab *action.Tab) bool {
-	return defaultManager.CloseForTab(tab)
+// OpenForOverride opens (or reuses) the right-docked Sixel PreviewPane in
+// temporary gallery override mode. Returns (nil, false) silently when inline
+// Sixel preview is unsupported or the terminal is too narrow.
+func OpenForOverride(bp *action.BufPane, title string) (*PreviewPane, bool) {
+	return defaultManager.OpenForOverride(bp, title)
+}
+
+// ClearOverrideForTab exits gallery override mode on tab: if PreviewPane was
+// opened solely for the gallery, closes it cleanly; otherwise restores the
+// pre-existing document preview.
+func ClearOverrideForTab(tab *action.Tab) {
+	defaultManager.ClearOverrideForTab(tab)
 }
 
 func (m *Manager) setCompiler(c Compiler) {
@@ -1470,6 +1659,62 @@ func (m *Manager) Open(bp *action.BufPane, focus bool) (*PreviewPane, bool) {
 		tab.SetActive(idx)
 	}
 	return pp, true
+}
+
+// CloseForTab closes the inline preview pane on tab if open.
+func CloseForTab(tab *action.Tab) bool {
+	return defaultManager.CloseForTab(tab)
+}
+
+func (m *Manager) OpenForOverride(bp *action.BufPane, title string) (*PreviewPane, bool) {
+	if !SupportsSixel() || bp == nil || bp.Tab() == nil {
+		return nil, false
+	}
+	m.pruneStaleTabs()
+	tab := bp.Tab()
+
+	if existing := m.paneForTab(tab); existing != nil {
+		existing.ShowOverrideLoading(title)
+		return existing, true
+	}
+
+	termW := tabTerminalWidth(tab)
+	if termW < MinTerminalWidth {
+		return nil, false
+	}
+	cfgPct := readGlobalInt("typst.previewWidth", DefaultPreviewWidthPct)
+	effW := EffectiveWidth(termW, cfgPct)
+	if effW <= 0 {
+		return nil, false
+	}
+	dockID := tab.Node.DockRight(effW)
+	if dockID == 0 {
+		return nil, false
+	}
+
+	delete(m.autoHidden, tab)
+	pp := newPreviewPane(tab, bp, m)
+	pp.SetID(dockID)
+	pp.openedByOverride = true
+	m.panes[tab] = pp
+
+	idx := len(tab.Panes)
+	tab.AddPane(pp, idx)
+	tab.Resize()
+	pp.ShowOverrideLoading(title)
+	return pp, true
+}
+
+func (m *Manager) ClearOverrideForTab(tab *action.Tab) {
+	pp := m.paneForTab(tab)
+	if pp == nil || !pp.HasOverride() {
+		return
+	}
+	if pp.openedByOverride {
+		m.CloseForTab(tab)
+		return
+	}
+	pp.ClearOverride()
 }
 
 // CloseForTab closes and unsplits the inline preview pane on tab if open.
@@ -1643,6 +1888,11 @@ func (m *Manager) onTabSwitch(tab *action.Tab) {
 	if pp == nil {
 		return
 	}
+	if pp.overrideActive {
+		pp.sixelDirty = true
+		pp.clearPending = true
+		return
+	}
 	target := pp.resolveTarget()
 	if target == nil || target.Buf == nil || !target.Buf.IsTypst() {
 		m.CloseForTab(tab)
@@ -1657,7 +1907,7 @@ func (m *Manager) onTabSwitch(tab *action.Tab) {
 
 func (m *Manager) onPaneFocus(tab *action.Tab, pane action.Pane) {
 	pp := m.paneForTab(tab)
-	if pp == nil || pane == nil || pane == pp {
+	if pp == nil || pp.overrideActive || pane == nil || pane == pp {
 		return
 	}
 	bp, ok := pane.(*action.BufPane)

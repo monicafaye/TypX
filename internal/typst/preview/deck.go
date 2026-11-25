@@ -261,6 +261,64 @@ func NewDocumentDeckFromImages(imgs []*image.RGBA, compileDur time.Duration) *Do
 	}
 }
 
+// DecodePageRGBA returns the decoded RGBA image for 0-based page index idx.
+func (d *DocumentDeck) DecodePageRGBA(idx int) (*image.RGBA, error) {
+	if d == nil || idx < 0 || idx >= len(d.pages) {
+		return nil, fmt.Errorf("page index %d out of range", idx)
+	}
+	raw, err := d.pages[idx].ensureRaw()
+	if err != nil {
+		return nil, err
+	}
+	b := raw.Bounds()
+	cp := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(cp, cp.Bounds(), raw, b.Min, draw.Src)
+	return cp, nil
+}
+
+// CompileTypstToImages compiles a Typst document via the active preview Compiler
+// and decodes up to maxPages (defaulting to 1) as RGBA images.
+func CompileTypstToImages(ctx context.Context, req CompileRequest, maxPages int) ([]*image.RGBA, error) {
+	if maxPages <= 0 {
+		maxPages = 1
+	}
+	compiler := defaultManager.getCompiler()
+	if compiler == nil {
+		return nil, fmt.Errorf("preview compiler unavailable")
+	}
+	if req.PPI <= 0 {
+		req.PPI = readGlobalInt("typst.previewPPI", 144)
+		if req.PPI < 72 {
+			req.PPI = 144
+		}
+	}
+	deck, err := compiler.CompilePages(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if deck == nil {
+		return nil, fmt.Errorf("preview compiler returned empty deck")
+	}
+	defer deck.Close()
+
+	n := deck.PageCount()
+	if n > maxPages {
+		n = maxPages
+	}
+	imgs := make([]*image.RGBA, 0, n)
+	for i := 0; i < n; i++ {
+		img, err := deck.DecodePageRGBA(i)
+		if err != nil {
+			return nil, err
+		}
+		imgs = append(imgs, img)
+	}
+	if len(imgs) == 0 {
+		return nil, fmt.Errorf("compiled document produced zero pages")
+	}
+	return imgs, nil
+}
+
 // LoadDocumentDeckFromDir scans tmpDir for `page-<N>.png` files, reading only
 // PNG headers up front so layout is instant and decoding stays lazy.
 func LoadDocumentDeckFromDir(tmpDir string, compileDur time.Duration) (*DocumentDeck, error) {
