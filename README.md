@@ -28,7 +28,7 @@ TypX includes:
 - **Document Outline sidebar.** Press `Alt+O` or run `:outline` to toggle a docked sidebar powered by an incremental Go parser, with optional `tinymist` `textDocument/documentSymbol` enrichment, live cursor tracking, keyboard or mouse jump, and `/` filtering.
 - **File Manager sidebar.** Press `Alt+T` or run `:tree` to browse directories, expand folders inline, open files in splits, and run `:touch`, `:mkdir`, `:rename`, and `:rm`.
 - **In-terminal Sixel and browser preview.** Press `Alt+P` or run `:preview inline` for a right-docked Sixel preview in Sixel-capable terminals with zoom, color inversion, and margin trimming, or run `:preview browser` for an auto-reloading browser preview with cursor sync.
-- **`tinymist` LSP and multi-file projects.** TypX resolves project roots from `typst.toml`, root-relative `/...` imports, `.git`, or `../` imports, and provides `:pin [path]`/`:unpin` main-file pinning (`PIN:` statusline indicator), `:export [pdf|png|svg|html]` (`typst.exportOnSave`), `:format` (`typst.formatOnSave`), go-to-definition across `.typ`/`.bib`/packages (`F12`, `Alt+U` back), interactive `:diagnostics` drawer (`F8`/`Shift+F8` jump), completion (`Ctrl+Space`), and hover docs (`Alt+K` or `:hover`). Pass `--no-lsp` to run offline without `tinymist`.
+- **`tinymist` LSP and multi-file projects.** TypX resolves project roots from `typst.toml`, root-relative `/...` imports, `.git`, or `../` imports, and provides `:pin [path]`/`:unpin` main-file pinning (`PIN:` statusline indicator), `:export [pdf|png|svg|html]` (`typst.exportOnSave`), `:format` (`typst.formatOnSave`), go-to-definition across `.typ`/`.bib`/packages (`F12`, `Alt+U` back), find references (`Shift+F12`), cross-file symbol rename (`F2` / `:lsp-rename`), code actions (`Alt+A`), workspace symbol search (`Alt+S`), interactive `:diagnostics` drawer (`F8`/`Shift+F8` jump, `/` filter), completion (`Ctrl+Space`), and hover docs (`Alt+K` or `:hover`). Pass `--no-lsp` to run offline without `tinymist`.
 
 ---
 
@@ -187,9 +187,13 @@ Press `Ctrl+E` to open the command bar (`>` prompt). All TypX keybindings apply 
 | LSP Completion | `:lsp-complete` | `Ctrl+Space` | Trigger `tinymist` autocomplete popup. |
 | LSP Hover | `:hover` | `Alt+K` | Show `tinymist` documentation or type info at cursor. |
 | Go to Definition | `:definition` | `F12` | Jump to definition across `.typ`, `.bib`, and read-only `@preview` packages. |
+| Find References | `:references` | `Shift+F12` | List and jump to symbol references across the workspace (`/` filters). |
 | Jump Back | `:jump-back` | `Alt+U` | Return to the previous location on the tab's definition jump stack. |
+| Rename Symbol | `:lsp-rename [new]` | `F2` | Rename the symbol at cursor across open and workspace `.typ` files (with `prepareRename`). |
+| Code Actions | `:code-action` | `Alt+A` | List and apply `tinymist` quickfixes, refactors, and server commands. |
+| Workspace Symbols | `:symbols [query]` | `Alt+S` | Search and jump to symbols across the Typst workspace (`/` filters live). |
 | Next / Prev Diagnostic | `:diag-next`, `:diag-prev` | `F8`, `Shift+F8` | Cycle across diagnostics in the current buffer with wrap-around. |
-| Diagnostics Drawer | `:diagnostics` | None | Open the bottom interactive diagnostics drawer (`f` filters errors only, `Enter` jumps). |
+| Diagnostics Drawer | `:diagnostics` | None | Open the bottom interactive diagnostics drawer (`f` filters errors only, `/` filters text, `Enter` jumps). |
 | Pin / Unpin Main | `:pin [path]`, `:unpin` | None | Pin or unpin the project's main `.typ` file for LSP, preview, and `:export`. |
 | Export Document | `:export [pdf\|png\|svg\|html] [output]` | None | Export the active or pinned document via `tinymist compile`. |
 | Format Document | `:format` | None | Format the active `.typ` buffer via `tinymist` with single-step undo. |

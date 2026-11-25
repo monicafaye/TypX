@@ -79,15 +79,30 @@ See `> help typst` for a walkthrough of Typst authoring workflows.
    via `tinymist` (supports `.typ`, `.bib`, and read-only `@preview` packages;
    opens a bottom picker when multiple locations match; default key: `F12`).
 
+* `references`: lists references to the symbol at the cursor across the
+   workspace in the bottom `ListPane` (`/` filters, `Enter` jumps; default key:
+   `Shift-F12`).
+
 * `jump-back`: returns to the previous cursor location in the tab's definition
-   jump stack (default key: `Alt-u`).
+   and reference jump stack (default key: `Alt-u`).
+
+* `lsp-rename ['new']`: renames the symbol at the cursor across open buffers
+   and workspace files using `prepareRename` and an `InfoBar` prompt if no name
+   is supplied (default key: `F2` in `.typ` buffers).
+
+* `code-action`: requests quickfixes, refactors, and server commands at the
+   cursor or selection in a bottom `ListPane` (default key: `Alt-a`).
+
+* `symbols ['query']`: searches workspace symbols and headings via `tinymist`
+   in the bottom `ListPane` (`/` filters live, `Enter` jumps; default key:
+   `Alt-s`).
 
 * `diag-next` / `diag-prev`: jumps to the next or previous diagnostic in the
    current buffer with wrap-around (default keys: `F8`, `Shift-F8`).
 
 * `diagnostics`: opens the interactive bottom-docked `ListPane` showing
    `tinymist` diagnostics for the active buffer and project (`Enter` jumps,
-   `f` toggles errors only, `Esc`/`q` closes).
+   `/` filters text, `f` toggles errors only, `Esc`/`q` closes).
 
 * `pin ['path']`: pins `path` (or the current `.typ` buffer) as the project's
    main file for `tinymist`, live preview, and `:export` (persisted per root).

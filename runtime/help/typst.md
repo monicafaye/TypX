@@ -171,12 +171,20 @@ offline editing.
 - `:definition` (`F12`): Jump to the definition of the symbol or citation under
   the cursor (supports `.typ`, `.bib`, and read-only `@preview` packages; opens
   a bottom `ListPane` picker when multiple targets exist).
-- `:jump-back` (`Alt-u`): Jump back through the tab's definition jump stack.
+- `:references` (`Shift-F12`): List references across the workspace in the
+  bottom `ListPane` (`/` filters live, `Enter` jumps and pushes to jump stack).
+- `:jump-back` (`Alt-u`): Jump back through the tab's definition/reference jump stack.
+- `:lsp-rename [new]` (`F2`): Rename the symbol under the cursor across open
+  buffers and workspace files (uses `textDocument/prepareRename`).
+- `:code-action` (`Alt-a`): Open available quickfixes and refactorings at the
+  cursor or selection.
+- `:symbols [query]` (`Alt-s`): Search workspace symbols and headings (`/`
+  filters live, `Enter` jumps).
 - `:diag-next` (`F8`) / `:diag-prev` (`Shift-F8`): Jump to the next or previous
   diagnostic in the current buffer (wraps around).
 - `:diagnostics`: Open the interactive bottom-docked diagnostics drawer across
-  the active file and workspace (`Enter` jumps, `f` toggles errors only,
-  `Esc`/`q` closes).
+  the active file and workspace (`Enter` jumps, `/` filters text, `f` toggles
+  errors only, `Esc`/`q` closes).
 - `:pin [path]` / `:unpin`: Pin or unpin the project's main `.typ` file for
   `tinymist`, Sixel/browser live preview, and `:export` (shown as `PIN: <file>`
   in the statusline and persisted per project root).

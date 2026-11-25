@@ -29,7 +29,11 @@ editor defaults.
 | Ctrl-Space    | `> lsp-complete`   | Trigger `tinymist` LSP completion                                         |
 | Alt-k         | `> hover`          | Show `tinymist` LSP hover documentation                                   |
 | F12           | `> definition`     | Jump to definition across `.typ`, `.bib`, and `@preview` packages         |
+| Shift-F12     | `> references`     | Find symbol references across the workspace                               |
 | Alt-u         | `> jump-back`      | Return to the previous location in the tab's jump stack                   |
+| F2            | `> lsp-rename`     | Rename symbol across workspace (falls back to Save outside `.typ`)        |
+| Alt-a         | `> code-action`    | Open quickfixes and code actions at cursor (StartOfText outside `.typ`)   |
+| Alt-s         | `> symbols`        | Search workspace symbols and headings (`/` filters live)                  |
 | F8            | `> diag-next`      | Jump to next diagnostic in buffer (wraps around)                          |
 | Shift-F8      | `> diag-prev`      | Jump to previous diagnostic in buffer (wraps around)                      |
 
