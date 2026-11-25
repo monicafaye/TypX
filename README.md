@@ -34,7 +34,25 @@ TypX includes:
 
 ## Installation
 
-### Homebrew (macOS / Linux)
+### Linux
+
+Install the latest release (verifies SHA-256 and installs to `~/.local/bin`, override with `TYPX_INSTALL_DIR`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/monicafaye/TypX/main/scripts/install.sh | sh
+```
+
+Native `.deb` (Debian/Ubuntu) and `.rpm` (Fedora/RHEL/openSUSE) packages for `amd64` and `arm64` are also attached to [GitHub Releases](https://github.com/monicafaye/TypX/releases):
+
+```bash
+# Debian / Ubuntu
+sudo apt install ./typx_*_amd64.deb
+
+# Fedora / RHEL / openSUSE
+sudo dnf install ./typx-*.x86_64.rpm
+```
+
+### Homebrew (macOS)
 
 ```bash
 brew install monicafaye/tap/typx
@@ -49,7 +67,7 @@ scoop install monicafaye/typx
 
 ### Prebuilt binaries
 
-Prebuilt archives for `windows/amd64`, `windows/arm64`, `darwin/arm64`, `darwin/amd64`, `linux/amd64`, and `linux/arm64` with SHA-256 checksums are published on [GitHub Releases](https://github.com/monicafaye/TypX/releases). Extract the archive and place `typx` (`typx.exe` on Windows) on your `PATH`. Package manager manifests for Scoop, Homebrew, and AUR live in [packaging/](packaging/README.md).
+Prebuilt archives for `windows/amd64`, `windows/arm64`, `darwin/arm64`, `darwin/amd64`, `linux/amd64`, and `linux/arm64` (plus Linux `.deb`/`.rpm` packages and `SHA256SUMS.txt`) are published on [GitHub Releases](https://github.com/monicafaye/TypX/releases). Extract the archive and place `typx` (`typx.exe` on Windows) on your `PATH`. Package manager manifests for Scoop, Homebrew, `.deb`/`.rpm`, and AUR live in [packaging/](packaging/README.md).
 
 ### Using Go (`go install`)
 

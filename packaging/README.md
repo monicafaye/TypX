@@ -4,7 +4,7 @@ This directory holds package manager manifests and the deterministic generator u
 
 ## Release Archive Contract
 
-Tagged releases publish 6 targets plus `SHA256SUMS.txt`:
+Tagged releases publish 6 archives, 4 native Linux packages, and `SHA256SUMS.txt`:
 
 - `typx-<version>-windows-amd64.zip` (flattened: `typx.exe`, `LICENSE*`, and `README.md` at archive root)
 - `typx-<version>-windows-arm64.zip` (flattened)
@@ -12,6 +12,10 @@ Tagged releases publish 6 targets plus `SHA256SUMS.txt`:
 - `typx-<version>-darwin-amd64.tar.gz`
 - `typx-<version>-linux-amd64.tar.gz`
 - `typx-<version>-linux-arm64.tar.gz`
+- `typx_<version>_amd64.deb` and `typx_<version>_arm64.deb` (built via `nfpm` from `packaging/nfpm.yaml`)
+- `typx-<version>-1.x86_64.rpm` and `typx-<version>-1.aarch64.rpm` (built via `nfpm` from `packaging/nfpm.yaml`)
+
+Linux and macOS users can also install directly from GitHub Releases with SHA-256 verification via `scripts/install.sh`.
 
 ## Enabling Automated Publishing
 
