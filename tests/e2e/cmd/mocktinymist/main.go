@@ -185,6 +185,8 @@ func runLSP() {
 	docs := make(map[string]string)
 	pinnedMain := ""
 	shutdownSeen := false
+	nextSrvID := int64(9002)
+	pendingApplyCmds := make(map[string]json.RawMessage)
 	var previewListeners []net.Listener
 	defer func() {
 		for _, ln := range previewListeners {
@@ -211,6 +213,16 @@ func runLSP() {
 			continue
 		}
 
+		if msg.Method == "" {
+			idKey := strings.TrimSpace(string(msg.ID))
+			appendTrace(traceRecord{Event: "client_response", ID: msg.ID, Note: idKey})
+			if cmdID, ok := pendingApplyCmds[idKey]; ok {
+				delete(pendingApplyCmds, idKey)
+				writeRPCResponse(cmdID, nil, nil)
+			}
+			continue
+		}
+
 		switch msg.Method {
 		case "initialize":
 			appendTrace(traceRecord{
@@ -227,6 +239,10 @@ func runLSP() {
 					"hoverProvider":              true,
 					"documentSymbolProvider":     true,
 					"definitionProvider":         true,
+					"referencesProvider":         true,
+					"renameProvider":             map[string]any{"prepareProvider": true},
+					"codeActionProvider":         true,
+					"workspaceSymbolProvider":    true,
 					"documentFormattingProvider": true,
 					"executeCommandProvider": map[string]any{
 						"commands": []string{
@@ -509,6 +525,136 @@ func runLSP() {
 			}
 			writeRPCResponse(msg.ID, edits, nil)
 
+		case "textDocument/references":
+			var p struct {
+				TextDocument struct {
+					URI string `json:"uri"`
+				} `json:"textDocument"`
+				Position struct {
+					Line      int `json:"line"`
+					Character int `json:"character"`
+				} `json:"position"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			appendTrace(traceRecord{Method: msg.Method, ID: msg.ID, URI: p.TextDocument.URI, Params: msg.Params})
+			tok, _, _, ok := tokenSpanAtUTF16(lineAtOffset(docs[p.TextDocument.URI], p.Position.Line), p.Position.Character)
+			if !ok {
+				writeRPCResponse(msg.ID, nil, nil)
+				break
+			}
+			writeRPCResponse(msg.ID, findTokenLocationsAcrossWorkspace(p.TextDocument.URI, docs, tok), nil)
+
+		case "textDocument/prepareRename":
+			var p struct {
+				TextDocument struct {
+					URI string `json:"uri"`
+				} `json:"textDocument"`
+				Position struct {
+					Line      int `json:"line"`
+					Character int `json:"character"`
+				} `json:"position"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			appendTrace(traceRecord{Method: msg.Method, ID: msg.ID, URI: p.TextDocument.URI, Params: msg.Params})
+			line := lineAtOffset(docs[p.TextDocument.URI], p.Position.Line)
+			if strings.Contains(line, "NO_RENAME") {
+				writeRPCResponse(msg.ID, nil, nil)
+				break
+			}
+			tok, startU16, endU16, ok := tokenSpanAtUTF16(line, p.Position.Character)
+			if !ok {
+				writeRPCResponse(msg.ID, nil, nil)
+				break
+			}
+			writeRPCResponse(msg.ID, map[string]any{
+				"range": map[string]any{
+					"start": map[string]any{"line": p.Position.Line, "character": startU16},
+					"end":   map[string]any{"line": p.Position.Line, "character": endU16},
+				},
+				"placeholder": tok,
+			}, nil)
+
+		case "textDocument/rename":
+			var p struct {
+				TextDocument struct {
+					URI string `json:"uri"`
+				} `json:"textDocument"`
+				Position struct {
+					Line      int `json:"line"`
+					Character int `json:"character"`
+				} `json:"position"`
+				NewName string `json:"newName"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			appendTrace(traceRecord{Method: msg.Method, ID: msg.ID, URI: p.TextDocument.URI, Params: msg.Params})
+			tok, _, _, ok := tokenSpanAtUTF16(lineAtOffset(docs[p.TextDocument.URI], p.Position.Line), p.Position.Character)
+			if !ok {
+				writeRPCResponse(msg.ID, map[string]any{}, nil)
+				break
+			}
+			changes := make(map[string][]map[string]any)
+			for _, loc := range findTokenLocationsAcrossWorkspace(p.TextDocument.URI, docs, tok) {
+				u := loc["uri"].(string)
+				changes[u] = append(changes[u], map[string]any{
+					"range":   loc["range"],
+					"newText": p.NewName,
+				})
+			}
+			writeRPCResponse(msg.ID, map[string]any{"changes": changes}, nil)
+
+		case "textDocument/codeAction":
+			var p struct {
+				TextDocument struct {
+					URI string `json:"uri"`
+				} `json:"textDocument"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			appendTrace(traceRecord{Method: msg.Method, ID: msg.ID, URI: p.TextDocument.URI, Params: msg.Params})
+			fixRange := map[string]any{
+				"start": map[string]any{"line": 0, "character": 0},
+				"end":   map[string]any{"line": 0, "character": 0},
+			}
+			fixNew := "// fixed\n"
+			fixTitle := "Insert fix header"
+			if locs := findTokenLocationsInText(p.TextDocument.URI, docs[p.TextDocument.URI], "FIXME"); len(locs) > 0 {
+				fixRange = locs[0]["range"].(map[string]any)
+				fixNew = "DONE"
+				fixTitle = "Replace FIXME with DONE"
+			}
+			actions := []map[string]any{
+				{
+					"title":       fixTitle,
+					"kind":        "quickfix",
+					"isPreferred": true,
+					"edit": map[string]any{
+						"changes": map[string]any{
+							p.TextDocument.URI: []map[string]any{{
+								"range":   fixRange,
+								"newText": fixNew,
+							}},
+						},
+					},
+				},
+				{
+					"title": "Apply edit via server command",
+					"kind":  "refactor",
+					"command": map[string]any{
+						"title":     "Apply edit",
+						"command":   "mock.applyCommandEdit",
+						"arguments": []any{p.TextDocument.URI},
+					},
+				},
+			}
+			writeRPCResponse(msg.ID, actions, nil)
+
+		case "workspace/symbol":
+			var p struct {
+				Query string `json:"query"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			appendTrace(traceRecord{Method: msg.Method, ID: msg.ID, Note: p.Query})
+			writeRPCResponse(msg.ID, collectWorkspaceSymbols(docs, p.Query), nil)
+
 		case "workspace/executeCommand":
 			var p struct {
 				Command   string            `json:"command"`
@@ -595,6 +741,38 @@ func runLSP() {
 				}
 				appendTrace(traceRecord{Event: "pinMain", Note: pinnedMain})
 				writeRPCResponse(msg.ID, nil, nil)
+
+			case p.Command == "mock.applyCommandEdit":
+				targetURI := ""
+				if len(p.Arguments) > 0 {
+					_ = json.Unmarshal(p.Arguments[0], &targetURI)
+				}
+				editRange := map[string]any{
+					"start": map[string]any{"line": 0, "character": 0},
+					"end":   map[string]any{"line": 0, "character": 0},
+				}
+				editNew := "// cmd-applied\n"
+				if targetURI != "" {
+					if locs := findTokenLocationsInText(targetURI, docs[targetURI], "CMD_TARGET"); len(locs) > 0 {
+						editRange = locs[0]["range"].(map[string]any)
+						editNew = "CMD_APPLIED"
+					}
+				}
+				srvID := nextSrvID
+				nextSrvID++
+				pendingApplyCmds[fmt.Sprintf("%d", srvID)] = msg.ID
+				writeRPCRequest(srvID, "workspace/applyEdit", map[string]any{
+					"label": "Apply mock edit",
+					"edit": map[string]any{
+						"changes": map[string]any{
+							targetURI: []map[string]any{{
+								"range":   editRange,
+								"newText": editNew,
+							}},
+						},
+					},
+				})
+				continue
 
 			default:
 				writeRPCResponse(msg.ID, nil, nil)
@@ -697,6 +875,16 @@ func writeRPCNotification(method string, params any) {
 		"params":  params,
 	}
 	writeRPCFrame(notif)
+}
+
+func writeRPCRequest(id int64, method string, params any) {
+	req := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  method,
+		"params":  params,
+	}
+	writeRPCFrame(req)
 }
 
 func publishDiagsForText(uri string, version int, text string, forceDefault bool) {
@@ -901,6 +1089,159 @@ func pathToFileURI(p string) string {
 		slashed = "/" + slashed
 	}
 	return (&url.URL{Scheme: "file", Path: slashed}).String()
+}
+
+func isMockIdentRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-'
+}
+
+func utf16Units(s string) int {
+	return len(utf16.Encode([]rune(s)))
+}
+
+func tokenSpanAtUTF16(line string, utf16Col int) (token string, startU16, endU16 int, ok bool) {
+	runes := []rune(line)
+	if len(runes) == 0 {
+		return "", 0, 0, false
+	}
+	idx := utf16OffsetToRune(runes, utf16Col)
+	if idx >= len(runes) {
+		idx = len(runes) - 1
+	}
+	if !isMockIdentRune(runes[idx]) {
+		if idx > 0 && isMockIdentRune(runes[idx-1]) {
+			idx--
+		} else {
+			return "", 0, 0, false
+		}
+	}
+	start := idx
+	for start > 0 && isMockIdentRune(runes[start-1]) {
+		start--
+	}
+	end := idx + 1
+	for end < len(runes) && isMockIdentRune(runes[end]) {
+		end++
+	}
+	return string(runes[start:end]), utf16Units(string(runes[:start])), utf16Units(string(runes[:end])), true
+}
+
+func findTokenLocationsAcrossWorkspace(originURI string, docs map[string]string, token string) []map[string]any {
+	sources := make(map[string]string, len(docs)+2)
+	for uri, content := range docs {
+		sources[uri] = content
+	}
+	srcDir := filepath.Dir(uriToLocalPath(originURI))
+	for _, sib := range []string{"sub.typ", "helper.typ"} {
+		p := filepath.Join(srcDir, sib)
+		u := pathToFileURI(p)
+		if _, exists := sources[u]; !exists {
+			if raw, err := os.ReadFile(p); err == nil {
+				sources[u] = string(raw)
+			}
+		}
+	}
+	var out []map[string]any
+	for uri, content := range sources {
+		out = append(out, findTokenLocationsInText(uri, content, token)...)
+	}
+	return out
+}
+
+func findTokenLocationsInText(uri, content, token string) []map[string]any {
+	if token == "" {
+		return nil
+	}
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	var out []map[string]any
+	for y, line := range lines {
+		off := 0
+		for off < len(line) {
+			idx := strings.Index(line[off:], token)
+			if idx < 0 {
+				break
+			}
+			absStart := off + idx
+			absEnd := absStart + len(token)
+			leftOK := absStart == 0 || !isMockIdentRune(rune(line[absStart-1]))
+			rightOK := absEnd == len(line) || !isMockIdentRune(rune(line[absEnd]))
+			if leftOK && rightOK {
+				out = append(out, map[string]any{
+					"uri": uri,
+					"range": map[string]any{
+						"start": map[string]any{"line": y, "character": utf16Units(line[:absStart])},
+						"end":   map[string]any{"line": y, "character": utf16Units(line[:absEnd])},
+					},
+				})
+			}
+			off = absEnd
+		}
+	}
+	return out
+}
+
+func collectWorkspaceSymbols(docs map[string]string, query string) []map[string]any {
+	q := strings.ToLower(strings.TrimSpace(query))
+	sources := make(map[string]string, len(docs)+2)
+	var firstDir string
+	for uri, content := range docs {
+		sources[uri] = content
+		if firstDir == "" {
+			firstDir = filepath.Dir(uriToLocalPath(uri))
+		}
+	}
+	if firstDir != "" {
+		for _, sib := range []string{"sub.typ", "helper.typ"} {
+			p := filepath.Join(firstDir, sib)
+			u := pathToFileURI(p)
+			if _, exists := sources[u]; !exists {
+				if raw, err := os.ReadFile(p); err == nil {
+					sources[u] = string(raw)
+				}
+			}
+		}
+	}
+	var out []map[string]any
+	for uri, content := range sources {
+		lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+		base := filepath.Base(uriToLocalPath(uri))
+		for y, line := range lines {
+			trim := strings.TrimSpace(line)
+			var symName string
+			kind := 13
+			switch {
+			case strings.HasPrefix(trim, "= "):
+				symName = strings.TrimSpace(strings.TrimLeft(trim, "= "))
+				kind = 15
+			case strings.HasPrefix(trim, "#let "):
+				rest := strings.TrimSpace(strings.TrimPrefix(trim, "#let "))
+				symName = rest
+				if i := strings.IndexAny(rest, "=("); i >= 0 {
+					symName = strings.TrimSpace(rest[:i])
+				}
+				kind = 12
+			}
+			if symName == "" {
+				continue
+			}
+			if q != "" && !strings.Contains(strings.ToLower(symName), q) {
+				continue
+			}
+			out = append(out, map[string]any{
+				"name":          symName,
+				"kind":          kind,
+				"containerName": base,
+				"location": map[string]any{
+					"uri": uri,
+					"range": map[string]any{
+						"start": map[string]any{"line": y, "character": 0},
+						"end":   map[string]any{"line": y, "character": utf16Units(line)},
+					},
+				},
+			})
+		}
+	}
+	return out
 }
 
 func tokenAtUTF16(text string, lineIdx, utf16Col int) string {

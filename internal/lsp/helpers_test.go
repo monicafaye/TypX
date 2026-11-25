@@ -107,6 +107,8 @@ func runMockTinymist() int {
 	}
 
 	docs := make(map[string]string)
+	nextSrvID := int64(9002)
+	pendingApplyCmds := make(map[string]json.RawMessage)
 	br := bufio.NewReaderSize(os.Stdin, 64*1024)
 	for {
 		payload, err := readFrame(br)
@@ -121,9 +123,18 @@ func runMockTinymist() int {
 			continue
 		}
 
-		// Handle response to server-initiated request (e.g. workspace/configuration).
+		// Handle response to server-initiated request (e.g. workspace/configuration, workspace/applyEdit).
 		if msg.Method == "" {
-			appendLog("resp:" + string(msg.ID))
+			idKey := strings.TrimSpace(string(msg.ID))
+			appendLog("resp:" + idKey)
+			if cmdID, ok := pendingApplyCmds[idKey]; ok {
+				delete(pendingApplyCmds, idKey)
+				writeFrame(rpcResponse{
+					JSONRPC: "2.0",
+					ID:      cmdID,
+					Result:  nil,
+				})
+			}
 			continue
 		}
 
@@ -151,6 +162,10 @@ func runMockTinymist() int {
 						CompletionProvider:         map[string]any{},
 						HoverProvider:              true,
 						DefinitionProvider:         true,
+						ReferencesProvider:         true,
+						RenameProvider:             map[string]any{"prepareProvider": true},
+						CodeActionProvider:         true,
+						WorkspaceSymbolProvider:    true,
 						DocumentFormattingProvider: true,
 					},
 					ServerInfo: &ServerInfo{Name: "tinymist", Version: "0.13.0-mock"},
@@ -328,6 +343,120 @@ func runMockTinymist() int {
 				writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: links})
 			}
 
+		case "textDocument/references":
+			var p ReferenceParams
+			_ = json.Unmarshal(msg.Params, &p)
+			appendLog(fmt.Sprintf("references:%s:%d:%d", p.TextDocument.URI, p.Position.Line, p.Position.Character))
+			tok, _, _, ok := mockTokenSpanAtUTF16(mockLineAt(docs[p.TextDocument.URI], p.Position.Line), p.Position.Character)
+			if !ok {
+				writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: nil})
+				continue
+			}
+			locs := mockFindTokenLocations(p.TextDocument.URI, docs, tok)
+			writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: locs})
+
+		case "textDocument/prepareRename":
+			var p TextDocumentPositionParams
+			_ = json.Unmarshal(msg.Params, &p)
+			appendLog(fmt.Sprintf("prepareRename:%s:%d:%d", p.TextDocument.URI, p.Position.Line, p.Position.Character))
+			if strings.Contains(docs[p.TextDocument.URI], "PREPARE_UNSUPPORTED") {
+				writeFrame(rpcResponse{
+					JSONRPC: "2.0",
+					ID:      msg.ID,
+					Error:   &RPCError{Code: -32601, Message: "Method not found"},
+				})
+				continue
+			}
+			line := mockLineAt(docs[p.TextDocument.URI], p.Position.Line)
+			if strings.Contains(line, "NO_RENAME") {
+				writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: nil})
+				continue
+			}
+			tok, startU16, endU16, ok := mockTokenSpanAtUTF16(line, p.Position.Character)
+			if !ok {
+				writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: nil})
+				continue
+			}
+			writeFrame(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      msg.ID,
+				Result: map[string]any{
+					"range": Range{
+						Start: Position{Line: p.Position.Line, Character: startU16},
+						End:   Position{Line: p.Position.Line, Character: endU16},
+					},
+					"placeholder": tok,
+				},
+			})
+
+		case "textDocument/rename":
+			var p RenameParams
+			_ = json.Unmarshal(msg.Params, &p)
+			appendLog(fmt.Sprintf("rename:%s:%s", p.TextDocument.URI, p.NewName))
+			tok, _, _, ok := mockTokenSpanAtUTF16(mockLineAt(docs[p.TextDocument.URI], p.Position.Line), p.Position.Character)
+			if !ok {
+				writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: WorkspaceEdit{}})
+				continue
+			}
+			changes := make(map[string][]TextEdit)
+			for _, loc := range mockFindTokenLocations(p.TextDocument.URI, docs, tok) {
+				changes[loc.URI] = append(changes[loc.URI], TextEdit{
+					Range:   loc.Range,
+					NewText: p.NewName,
+				})
+			}
+			writeFrame(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      msg.ID,
+				Result:  WorkspaceEdit{Changes: changes},
+			})
+
+		case "textDocument/codeAction":
+			var p CodeActionParams
+			_ = json.Unmarshal(msg.Params, &p)
+			appendLog("codeAction:" + p.TextDocument.URI)
+			if strings.Contains(docs[p.TextDocument.URI], "NO_ACTIONS") {
+				writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: []CodeAction{}})
+				continue
+			}
+			fixRange := Range{Start: Position{0, 0}, End: Position{0, 0}}
+			fixNew := "// fixed\n"
+			fixTitle := "Insert fix header"
+			if locs := mockFindTokenLocationsInText(p.TextDocument.URI, docs[p.TextDocument.URI], "FIXME"); len(locs) > 0 {
+				fixRange = locs[0].Range
+				fixNew = "DONE"
+				fixTitle = "Replace FIXME with DONE"
+			}
+			actions := []CodeAction{
+				{
+					Title:       fixTitle,
+					Kind:        "quickfix",
+					IsPreferred: true,
+					Edit: &WorkspaceEdit{
+						Changes: map[string][]TextEdit{
+							p.TextDocument.URI: {{Range: fixRange, NewText: fixNew}},
+						},
+					},
+				},
+				{
+					Title: "Apply edit via server command",
+					Kind:  "refactor",
+					Command: &LSPCommand{
+						Title:     "Apply edit",
+						Command:   "mock.applyCommandEdit",
+						Arguments: []any{p.TextDocument.URI},
+					},
+				},
+			}
+			writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: actions})
+
+		case "workspace/symbol":
+			var p WorkspaceSymbolParams
+			_ = json.Unmarshal(msg.Params, &p)
+			appendLog("workspaceSymbol:" + p.Query)
+			syms := mockCollectWorkspaceSymbols(docs, p.Query)
+			writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: syms})
+
 		case "workspace/executeCommand":
 			var p ExecuteCommandParams
 			_ = json.Unmarshal(msg.Params, &p)
@@ -336,6 +465,39 @@ func runMockTinymist() int {
 				appendLog("executeCommand:" + p.Command + ":" + string(rawArgs))
 			} else {
 				appendLog("executeCommand:" + p.Command)
+			}
+			if p.Command == "mock.applyCommandEdit" {
+				targetURI := ""
+				if len(p.Arguments) > 0 {
+					if s, ok := p.Arguments[0].(string); ok {
+						targetURI = s
+					}
+				}
+				editRange := Range{Start: Position{0, 0}, End: Position{0, 0}}
+				editNew := "// cmd-applied\n"
+				if targetURI != "" {
+					if locs := mockFindTokenLocationsInText(targetURI, docs[targetURI], "CMD_TARGET"); len(locs) > 0 {
+						editRange = locs[0].Range
+						editNew = "CMD_APPLIED"
+					}
+				}
+				srvID := nextSrvID
+				nextSrvID++
+				pendingApplyCmds[fmt.Sprintf("%d", srvID)] = msg.ID
+				writeFrame(rpcRequest{
+					JSONRPC: "2.0",
+					ID:      &srvID,
+					Method:  "workspace/applyEdit",
+					Params: ApplyWorkspaceEditParams{
+						Label: "Apply mock edit",
+						Edit: WorkspaceEdit{
+							Changes: map[string][]TextEdit{
+								targetURI: {{Range: editRange, NewText: editNew}},
+							},
+						},
+					},
+				})
+				continue
 			}
 			if p.Command == "tinymist.startDefaultPreview" && os.Getenv("TYPX_MOCK_PREVIEW_FALLBACK") == "1" {
 				writeFrame(rpcResponse{
@@ -484,4 +646,155 @@ func mockLineAt(text string, line int) string {
 		return ""
 	}
 	return lines[line]
+}
+
+func isMockIdentRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-'
+}
+
+func mockTokenSpanAtUTF16(line string, utf16Col int) (token string, startU16, endU16 int, ok bool) {
+	runes := []rune(line)
+	if len(runes) == 0 {
+		return "", 0, 0, false
+	}
+	idx := UTF16ToRuneCol([]byte(line), utf16Col)
+	if idx >= len(runes) {
+		idx = len(runes) - 1
+	}
+	if !isMockIdentRune(runes[idx]) {
+		if idx > 0 && isMockIdentRune(runes[idx-1]) {
+			idx--
+		} else {
+			return "", 0, 0, false
+		}
+	}
+	start := idx
+	for start > 0 && isMockIdentRune(runes[start-1]) {
+		start--
+	}
+	end := idx + 1
+	for end < len(runes) && isMockIdentRune(runes[end]) {
+		end++
+	}
+	return string(runes[start:end]), RuneColToUTF16([]byte(line), start), RuneColToUTF16([]byte(line), end), true
+}
+
+func mockFindTokenLocations(originURI string, docs map[string]string, token string) []Location {
+	sources := make(map[string]string, len(docs)+2)
+	for uri, content := range docs {
+		sources[uri] = content
+	}
+	srcDir := filepath.Dir(URIToPath(originURI))
+	for _, sib := range []string{"sub.typ", "helper.typ"} {
+		p := filepath.Join(srcDir, sib)
+		u := PathToURI(p)
+		if _, exists := sources[u]; !exists {
+			if raw, err := os.ReadFile(p); err == nil {
+				sources[u] = string(raw)
+			}
+		}
+	}
+	var out []Location
+	for uri, content := range sources {
+		out = append(out, mockFindTokenLocationsInText(uri, content, token)...)
+	}
+	return out
+}
+
+func mockFindTokenLocationsInText(uri, content, token string) []Location {
+	if token == "" {
+		return nil
+	}
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	var out []Location
+	for y, line := range lines {
+		off := 0
+		for off < len(line) {
+			idx := strings.Index(line[off:], token)
+			if idx < 0 {
+				break
+			}
+			absStart := off + idx
+			absEnd := absStart + len(token)
+			leftOK := absStart == 0 || !isMockIdentRune(rune(line[absStart-1]))
+			rightOK := absEnd == len(line) || !isMockIdentRune(rune(line[absEnd]))
+			if leftOK && rightOK {
+				startRune := len([]rune(line[:absStart]))
+				endRune := len([]rune(line[:absEnd]))
+				out = append(out, Location{
+					URI: uri,
+					Range: Range{
+						Start: Position{Line: y, Character: RuneColToUTF16([]byte(line), startRune)},
+						End:   Position{Line: y, Character: RuneColToUTF16([]byte(line), endRune)},
+					},
+				})
+			}
+			off = absEnd
+		}
+	}
+	return out
+}
+
+func mockCollectWorkspaceSymbols(docs map[string]string, query string) []WorkspaceSymbol {
+	q := strings.ToLower(strings.TrimSpace(query))
+	sources := make(map[string]string, len(docs)+2)
+	var firstDir string
+	for uri, content := range docs {
+		sources[uri] = content
+		if firstDir == "" {
+			firstDir = filepath.Dir(URIToPath(uri))
+		}
+	}
+	if firstDir != "" {
+		for _, sib := range []string{"sub.typ", "helper.typ"} {
+			p := filepath.Join(firstDir, sib)
+			u := PathToURI(p)
+			if _, exists := sources[u]; !exists {
+				if raw, err := os.ReadFile(p); err == nil {
+					sources[u] = string(raw)
+				}
+			}
+		}
+	}
+	var out []WorkspaceSymbol
+	for uri, content := range sources {
+		lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+		base := filepath.Base(URIToPath(uri))
+		for y, line := range lines {
+			trim := strings.TrimSpace(line)
+			var symName string
+			kind := SymbolKindVariable
+			switch {
+			case strings.HasPrefix(trim, "= "):
+				symName = strings.TrimSpace(strings.TrimLeft(trim, "= "))
+				kind = SymbolKindString
+			case strings.HasPrefix(trim, "#let "):
+				rest := strings.TrimSpace(strings.TrimPrefix(trim, "#let "))
+				symName = rest
+				if i := strings.IndexAny(rest, "=("); i >= 0 {
+					symName = strings.TrimSpace(rest[:i])
+				}
+				kind = SymbolKindFunction
+			}
+			if symName == "" {
+				continue
+			}
+			if q != "" && !strings.Contains(strings.ToLower(symName), q) {
+				continue
+			}
+			out = append(out, WorkspaceSymbol{
+				Name:          symName,
+				Kind:          kind,
+				ContainerName: base,
+				Location: Location{
+					URI: uri,
+					Range: Range{
+						Start: Position{Line: y, Character: 0},
+						End:   Position{Line: y, Character: len([]rune(line))},
+					},
+				},
+			})
+		}
+	}
+	return out
 }

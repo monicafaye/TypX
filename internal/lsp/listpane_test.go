@@ -65,3 +65,62 @@ func TestListPaneDockNavigateFilterSelectAndClose(t *testing.T) {
 	assert.Len(t, tab.Panes, 1)
 	assert.Equal(t, bp, tab.ActivePane())
 }
+
+func TestListPaneTextFilter(t *testing.T) {
+	setupLSPEnv(t, 0)
+	Init(Options{})
+	action.InitBindings()
+	action.InitCommands()
+	action.InitGlobals()
+
+	b := buffer.NewBufferFromString("hello\n", "main.typ", buffer.BTDefault)
+	action.InitTabs([]*buffer.Buffer{b})
+	tab := action.MainTab()
+	bp := tab.CurPane()
+
+	var picked []string
+	items := []ListItem{
+		{Badge: "FN", Primary: "computeAlpha", Secondary: "main.typ:1:1", OnSelect: func() { picked = append(picked, "computeAlpha") }},
+		{Badge: "VAR", Primary: "betaWeight", Secondary: "sub.typ:4:3", OnSelect: func() { picked = append(picked, "betaWeight") }},
+		{Badge: "FN", Primary: "formatSummary", Secondary: "main.typ:10:1", OnSelect: func() { picked = append(picked, "formatSummary") }},
+	}
+
+	lp := OpenListPane(bp, "Workspace Symbols", false, items)
+	require.NotNil(t, lp)
+	assert.False(t, lp.IsFiltering())
+
+	// Press '/' -> enter filter mode, type "beta", backspace -> "bet", verify 1 match.
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, '/', tcell.ModNone, ""))
+	assert.True(t, lp.IsFiltering())
+	for _, ch := range "betz" {
+		lp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, ch, tcell.ModNone, ""))
+	}
+	assert.Len(t, lp.VisibleItems(), 0)
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyBackspace2, 0, tcell.ModNone, ""))
+	assert.Equal(t, "bet", lp.FilterQuery())
+	require.Len(t, lp.VisibleItems(), 1)
+	assert.Equal(t, "betaWeight", lp.VisibleItems()[0].Primary)
+
+	// Enter selects filtered item cleanly.
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, ""))
+	assert.Equal(t, []string{"betaWeight"}, picked)
+
+	// Re-enter filter, Esc clears filter query without closing ListPane, second Esc closes.
+	for i, p := range tab.Panes {
+		if p == lp {
+			tab.SetActive(i)
+			break
+		}
+	}
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, '/', tcell.ModNone, ""))
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'x', tcell.ModNone, ""))
+	assert.Len(t, lp.VisibleItems(), 0)
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone, ""))
+	assert.False(t, lp.IsFiltering())
+	assert.Equal(t, "", lp.FilterQuery())
+	assert.Len(t, lp.VisibleItems(), 3)
+	require.NotNil(t, ListPaneForTab(tab))
+
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone, ""))
+	assert.Nil(t, ListPaneForTab(tab))
+}

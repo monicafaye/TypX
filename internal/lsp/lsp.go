@@ -116,6 +116,10 @@ func Init(opts Options) {
 		action.RegisterAction("LspFormat", LspFormatAction())
 		action.RegisterAction("LspDefinition", LspDefinitionAction())
 		action.RegisterAction("LspJumpBack", LspJumpBackAction())
+		action.RegisterAction("LspReferences", LspReferencesAction())
+		action.RegisterAction("LspRename", LspRenameAction())
+		action.RegisterAction("LspCodeAction", LspCodeActionAction())
+		action.RegisterAction("LspWorkspaceSymbols", LspWorkspaceSymbolsAction())
 		action.RegisterAction("NextDiagnostic", NextDiagnosticAction())
 		action.RegisterAction("PrevDiagnostic", PrevDiagnosticAction())
 
@@ -131,6 +135,10 @@ func Init(opts Options) {
 		action.RegisterCommand("format", FormatCommand(), nil)
 		action.RegisterCommand("definition", DefinitionCommand(), nil)
 		action.RegisterCommand("jump-back", JumpBackCommand(), nil)
+		action.RegisterCommand("references", ReferencesCommand(), nil)
+		action.RegisterCommand("lsp-rename", LspRenameCommand(), nil)
+		action.RegisterCommand("code-action", CodeActionCommand(), nil)
+		action.RegisterCommand("symbols", WorkspaceSymbolsCommand(), nil)
 		action.RegisterCommand("diag-next", DiagNextCommand(), nil)
 		action.RegisterCommand("diag-prev", DiagPrevCommand(), nil)
 
@@ -140,7 +148,11 @@ func Init(opts Options) {
 		action.RegisterDefaultBinding("buffer", "Alt-k", "LspHover")
 		action.RegisterDefaultBinding("buffer", "Alt-p", "TogglePreview|RemoveMultiCursor")
 		action.RegisterDefaultBindingWithFallback("buffer", "F12", "LspDefinition")
+		action.RegisterDefaultBindingWithFallback("buffer", "Shift-F12", "LspReferences")
 		action.RegisterDefaultBindingWithFallback("buffer", "Alt-u", "LspJumpBack")
+		action.RegisterDefaultBindingWithFallback("buffer", "F2", "LspRename")
+		action.RegisterDefaultBindingWithFallback("buffer", "Alt-a", "LspCodeAction")
+		action.RegisterDefaultBindingWithFallback("buffer", "Alt-s", "LspWorkspaceSymbols")
 		action.RegisterDefaultBindingWithFallback("buffer", "F8", "NextDiagnostic")
 		action.RegisterDefaultBindingWithFallback("buffer", "Shift-F8", "PrevDiagnostic")
 
@@ -490,5 +502,66 @@ func DiagNextCommand() func(*action.BufPane, []string) {
 func DiagPrevCommand() func(*action.BufPane, []string) {
 	return func(bp *action.BufPane, args []string) {
 		defaultManager.jumpDiagnostic(bp, -1)
+	}
+}
+
+// LspReferencesAction returns the BufKeyAction for finding references (Shift-F12).
+func LspReferencesAction() action.BufKeyAction {
+	return func(bp *action.BufPane) bool {
+		return defaultManager.triggerReferences(bp, false)
+	}
+}
+
+// ReferencesCommand returns the :references command handler.
+func ReferencesCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		defaultManager.triggerReferences(bp, true)
+	}
+}
+
+// LspRenameAction returns the BufKeyAction for LSP symbol rename (F2).
+func LspRenameAction() action.BufKeyAction {
+	return func(bp *action.BufPane) bool {
+		return defaultManager.triggerRename(bp, "", false)
+	}
+}
+
+// LspRenameCommand returns the :lsp-rename [newName] command handler.
+func LspRenameCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		newName := ""
+		if len(args) > 0 {
+			newName = strings.TrimSpace(args[0])
+		}
+		defaultManager.triggerRename(bp, newName, true)
+	}
+}
+
+// LspCodeActionAction returns the BufKeyAction for LSP code actions (Alt-a).
+func LspCodeActionAction() action.BufKeyAction {
+	return func(bp *action.BufPane) bool {
+		return defaultManager.triggerCodeAction(bp, false)
+	}
+}
+
+// CodeActionCommand returns the :code-action command handler.
+func CodeActionCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		defaultManager.triggerCodeAction(bp, true)
+	}
+}
+
+// LspWorkspaceSymbolsAction returns the BufKeyAction for workspace symbol search (Alt-s).
+func LspWorkspaceSymbolsAction() action.BufKeyAction {
+	return func(bp *action.BufPane) bool {
+		return defaultManager.triggerWorkspaceSymbols(bp, "", false)
+	}
+}
+
+// WorkspaceSymbolsCommand returns the :symbols [query] command handler.
+func WorkspaceSymbolsCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		query := strings.TrimSpace(strings.Join(args, " "))
+		defaultManager.triggerWorkspaceSymbols(bp, query, true)
 	}
 }

@@ -238,6 +238,10 @@ func typstKeyMenuRows(previewOn, outlineOn, concealOn, treeOn, templatesOn bool)
 				{Key: "Alt+E", Label: "Italic", Action: "WrapItalic", Priority: 4},
 				{Key: "Alt+K", Label: "Hover", Action: "LspHover", Priority: 3},
 				{Key: "F12", Label: "Def", Action: "LspDefinition", Priority: 3},
+				{Key: "⇧F12", Label: "Refs", Action: "LspReferences", Priority: 4},
+				{Key: "F2", Label: "Rename", Action: "LspRename", Priority: 3},
+				{Key: "Alt+A", Label: "Fix", Action: "LspCodeAction", Priority: 3},
+				{Key: "Alt+S", Label: "Sym", Action: "LspWorkspaceSymbols", Priority: 4},
 				{Key: "F8", Label: "Next Err", Action: "NextDiagnostic", Priority: 4},
 				{Key: "^Space", Label: "Complete", Action: "LspComplete", Priority: 2},
 			},
@@ -326,14 +330,31 @@ func templatesBottomBarContext(tp *templates.TemplatePane) display.BottomBarCont
 
 func listPaneBottomBarContext(lp *lsp.ListPane) display.BottomBarContext {
 	badge := "LIST"
-	tip := "List focused · Enter to jump · Esc closes"
+	tip := "List focused · Enter to jump · / to filter · Esc closes"
+	if lp.IsFilterable() {
+		badge = "DIAGNOSTICS"
+		tip = "Diagnostics focused · Enter to jump · / to filter · f toggles errors only · Esc closes"
+	}
+	if lp.IsFiltering() {
+		return display.BottomBarContext{
+			Badge: badge,
+			Hints: []display.BottomBarItem{
+				{Key: "Enter", Label: "Jump", Action: "pane:Enter", Priority: 0},
+				{Key: "↑/↓", Label: "Select", Priority: 1},
+				{Key: "Esc", Label: "Clear Filter", Action: "pane:Esc", Priority: 0},
+				{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 2, AlignRight: true},
+			},
+			MenuRows: typstKeyMenuRows(false, false, true, false, false),
+			MenuTip:  tip,
+		}
+	}
+
 	hints := []display.BottomBarItem{
 		{Key: "↑/↓", Label: "Navigate", Priority: 1},
 		{Key: "Enter", Label: "Jump", Action: "pane:Enter", Priority: 0},
+		{Key: "/", Label: "Filter", Action: "pane:/", Priority: 1},
 	}
 	if lp.IsFilterable() {
-		badge = "DIAGNOSTICS"
-		tip = "Diagnostics focused · Enter to jump · f toggles errors only · Esc closes"
 		hints = append(hints, display.BottomBarItem{
 			Key:      "f",
 			Label:    "Errors",

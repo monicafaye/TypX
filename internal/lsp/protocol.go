@@ -3,9 +3,12 @@ package lsp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/url"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -147,8 +150,20 @@ type ClientCapabilities struct {
 // WorkspaceClientCapabilities describes workspace-level capabilities.
 type WorkspaceClientCapabilities struct {
 	ApplyEdit      bool                              `json:"applyEdit"`
+	WorkspaceEdit  *WorkspaceEditClientCapabilities  `json:"workspaceEdit,omitempty"`
 	Configuration  bool                              `json:"configuration,omitempty"`
 	ExecuteCommand *ExecuteCommandClientCapabilities `json:"executeCommand,omitempty"`
+	Symbol         *WorkspaceSymbolClientCapabilities `json:"symbol,omitempty"`
+}
+
+// WorkspaceEditClientCapabilities describes workspace/applyEdit document change support.
+type WorkspaceEditClientCapabilities struct {
+	DocumentChanges bool `json:"documentChanges,omitempty"`
+}
+
+// WorkspaceSymbolClientCapabilities describes workspace/symbol support.
+type WorkspaceSymbolClientCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
 }
 
 // ExecuteCommandClientCapabilities describes workspace/executeCommand support.
@@ -164,7 +179,37 @@ type TextDocumentClientCapabilities struct {
 	PublishDiagnostics *PublishDiagnosticsClientCapabilities `json:"publishDiagnostics,omitempty"`
 	DocumentSymbol     *DocumentSymbolClientCapabilities     `json:"documentSymbol,omitempty"`
 	Definition         *DefinitionClientCapabilities         `json:"definition,omitempty"`
+	References         *ReferenceClientCapabilities          `json:"references,omitempty"`
+	Rename             *RenameClientCapabilities             `json:"rename,omitempty"`
+	CodeAction         *CodeActionClientCapabilities         `json:"codeAction,omitempty"`
 	Formatting         *FormattingClientCapabilities         `json:"formatting,omitempty"`
+}
+
+// ReferenceClientCapabilities describes textDocument/references capabilities.
+type ReferenceClientCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+}
+
+// RenameClientCapabilities describes textDocument/rename capabilities.
+type RenameClientCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+	PrepareSupport      bool `json:"prepareSupport,omitempty"`
+}
+
+// CodeActionLiteralKindSupport configures supported codeAction kinds.
+type CodeActionLiteralKindSupport struct {
+	ValueSet []string `json:"valueSet"`
+}
+
+// CodeActionLiteralSupport describes literal CodeAction support.
+type CodeActionLiteralSupport struct {
+	CodeActionKind CodeActionLiteralKindSupport `json:"codeActionKind"`
+}
+
+// CodeActionClientCapabilities describes textDocument/codeAction capabilities.
+type CodeActionClientCapabilities struct {
+	DynamicRegistration      bool                      `json:"dynamicRegistration,omitempty"`
+	CodeActionLiteralSupport *CodeActionLiteralSupport `json:"codeActionLiteralSupport,omitempty"`
 }
 
 // DefinitionClientCapabilities describes textDocument/definition capabilities.
@@ -246,6 +291,10 @@ type ServerCapabilities struct {
 	HoverProvider          any                    `json:"hoverProvider,omitempty"`
 	DocumentSymbolProvider     any                    `json:"documentSymbolProvider,omitempty"`
 	DefinitionProvider         any                    `json:"definitionProvider,omitempty"`
+	ReferencesProvider         any                    `json:"referencesProvider,omitempty"`
+	RenameProvider             any                    `json:"renameProvider,omitempty"`
+	CodeActionProvider         any                    `json:"codeActionProvider,omitempty"`
+	WorkspaceSymbolProvider    any                    `json:"workspaceSymbolProvider,omitempty"`
 	DocumentFormattingProvider any                    `json:"documentFormattingProvider,omitempty"`
 	ExecuteCommandProvider     *ExecuteCommandOptions `json:"executeCommandProvider,omitempty"`
 }
@@ -412,6 +461,106 @@ type CancelParams struct {
 	ID any `json:"id"`
 }
 
+// ReferenceContext configures textDocument/references behavior.
+type ReferenceContext struct {
+	IncludeDeclaration bool `json:"includeDeclaration"`
+}
+
+// ReferenceParams is sent with textDocument/references.
+type ReferenceParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+	Context      ReferenceContext       `json:"context"`
+}
+
+// RenameParams is sent with textDocument/rename.
+type RenameParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+	NewName      string                 `json:"newName"`
+}
+
+// OptionalVersionedTextDocumentIdentifier identifies a versioned or unversioned document.
+type OptionalVersionedTextDocumentIdentifier struct {
+	URI     string `json:"uri"`
+	Version *int   `json:"version,omitempty"`
+}
+
+// TextDocumentEdit describes edits targeting one text document inside WorkspaceEdit.
+type TextDocumentEdit struct {
+	TextDocument OptionalVersionedTextDocumentIdentifier `json:"textDocument"`
+	Edits        []TextEdit                              `json:"edits"`
+}
+
+// WorkspaceEdit represents edits across one or more workspace resources.
+type WorkspaceEdit struct {
+	Changes         map[string][]TextEdit `json:"changes,omitempty"`
+	DocumentChanges []json.RawMessage     `json:"documentChanges,omitempty"`
+}
+
+// ApplyWorkspaceEditParams is received from server-initiated workspace/applyEdit.
+type ApplyWorkspaceEditParams struct {
+	Label string        `json:"label,omitempty"`
+	Edit  WorkspaceEdit `json:"edit"`
+}
+
+// ApplyWorkspaceEditResult is returned for workspace/applyEdit.
+type ApplyWorkspaceEditResult struct {
+	Applied       bool   `json:"applied"`
+	FailureReason string `json:"failureReason,omitempty"`
+}
+
+// CodeActionContext carries diagnostics and kind filters for textDocument/codeAction.
+type CodeActionContext struct {
+	Diagnostics []Diagnostic `json:"diagnostics"`
+	Only        []string     `json:"only,omitempty"`
+	TriggerKind int          `json:"triggerKind,omitempty"`
+}
+
+// CodeActionParams is sent with textDocument/codeAction.
+type CodeActionParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Range        Range                  `json:"range"`
+	Context      CodeActionContext      `json:"context"`
+}
+
+// LSPCommand represents an LSP Command object.
+type LSPCommand struct {
+	Title     string `json:"title"`
+	Command   string `json:"command"`
+	Arguments []any  `json:"arguments,omitempty"`
+}
+
+// CodeActionDisabled explains why a code action is currently disabled.
+type CodeActionDisabled struct {
+	Reason string `json:"reason"`
+}
+
+// CodeAction represents a quickfix, refactor, or source action returned by LSP.
+type CodeAction struct {
+	Title       string              `json:"title"`
+	Kind        string              `json:"kind,omitempty"`
+	Diagnostics []Diagnostic        `json:"diagnostics,omitempty"`
+	IsPreferred bool                `json:"isPreferred,omitempty"`
+	Disabled    *CodeActionDisabled `json:"disabled,omitempty"`
+	Edit        *WorkspaceEdit      `json:"edit,omitempty"`
+	Command     *LSPCommand         `json:"command,omitempty"`
+}
+
+// WorkspaceSymbolParams is sent with workspace/symbol.
+type WorkspaceSymbolParams struct {
+	Query string `json:"query"`
+}
+
+// WorkspaceSymbol represents a symbol entry returned by workspace/symbol.
+type WorkspaceSymbol struct {
+	Name          string   `json:"name"`
+	Kind          int      `json:"kind"`
+	Tags          []int    `json:"tags,omitempty"`
+	ContainerName string   `json:"containerName,omitempty"`
+	Location      Location `json:"location"`
+}
+
 // ConfigurationItem is one item of workspace/configuration params.
 type ConfigurationItem struct {
 	ScopeURI string `json:"scopeUri,omitempty"`
@@ -427,9 +576,15 @@ type ConfigurationParams struct {
 func DefaultClientCapabilities() ClientCapabilities {
 	return ClientCapabilities{
 		Workspace: &WorkspaceClientCapabilities{
-			ApplyEdit:     false,
+			ApplyEdit: true,
+			WorkspaceEdit: &WorkspaceEditClientCapabilities{
+				DocumentChanges: true,
+			},
 			Configuration: true,
 			ExecuteCommand: &ExecuteCommandClientCapabilities{
+				DynamicRegistration: false,
+			},
+			Symbol: &WorkspaceSymbolClientCapabilities{
 				DynamicRegistration: false,
 			},
 		},
@@ -462,6 +617,28 @@ func DefaultClientCapabilities() ClientCapabilities {
 			Definition: &DefinitionClientCapabilities{
 				DynamicRegistration: false,
 				LinkSupport:         true,
+			},
+			References: &ReferenceClientCapabilities{
+				DynamicRegistration: false,
+			},
+			Rename: &RenameClientCapabilities{
+				DynamicRegistration: false,
+				PrepareSupport:      true,
+			},
+			CodeAction: &CodeActionClientCapabilities{
+				DynamicRegistration: false,
+				CodeActionLiteralSupport: &CodeActionLiteralSupport{
+					CodeActionKind: CodeActionLiteralKindSupport{
+						ValueSet: []string{
+							"quickfix",
+							"refactor",
+							"refactor.extract",
+							"refactor.inline",
+							"refactor.rewrite",
+							"source",
+						},
+					},
+				},
 			},
 			Formatting: &FormattingClientCapabilities{
 				DynamicRegistration: false,
@@ -618,6 +795,165 @@ func ParseLocations(raw json.RawMessage) ([]Location, error) {
 			return nil, err
 		}
 		out = append(out, parsed...)
+	}
+	return out, nil
+}
+
+// ParsePrepareRename parses textDocument/prepareRename supporting null, Range,
+// {range, placeholder}, and {defaultBehavior: true}.
+func ParsePrepareRename(raw json.RawMessage) (placeholder string, rng *Range, ok bool, err error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return "", nil, false, nil
+	}
+	var obj struct {
+		DefaultBehavior bool      `json:"defaultBehavior"`
+		Placeholder     string    `json:"placeholder"`
+		Range           *Range    `json:"range"`
+		Start           *Position `json:"start"`
+		End             *Position `json:"end"`
+	}
+	if uerr := json.Unmarshal(trimmed, &obj); uerr != nil {
+		return "", nil, false, uerr
+	}
+	if obj.Range != nil {
+		return obj.Placeholder, obj.Range, true, nil
+	}
+	if obj.DefaultBehavior {
+		return "", nil, true, nil
+	}
+	if obj.Start != nil && obj.End != nil {
+		r := Range{Start: *obj.Start, End: *obj.End}
+		return "", &r, true, nil
+	}
+	return "", nil, false, nil
+}
+
+// WorkspaceEditFileEdits merges WorkspaceEdit.Changes and DocumentChanges
+// (TextDocumentEdit) into a per-URI edit map plus sorted deterministic URI list.
+// Returns an error if an unsupported resource operation (create/rename/delete)
+// appears in DocumentChanges.
+func WorkspaceEditFileEdits(we WorkspaceEdit) (map[string][]TextEdit, []string, error) {
+	out := make(map[string][]TextEdit)
+	seenInDocChanges := make(map[string]bool)
+
+	for i, raw := range we.DocumentChanges {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+			continue
+		}
+		var kindProbe struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal(trimmed, &kindProbe); err != nil {
+			return nil, nil, fmt.Errorf("invalid documentChanges[%d]: %w", i, err)
+		}
+		if kindProbe.Kind != "" {
+			return nil, nil, fmt.Errorf("unsupported resource operation %q in workspace edit", kindProbe.Kind)
+		}
+		var tde TextDocumentEdit
+		if err := json.Unmarshal(trimmed, &tde); err != nil {
+			return nil, nil, fmt.Errorf("invalid TextDocumentEdit[%d]: %w", i, err)
+		}
+		if tde.TextDocument.URI == "" {
+			return nil, nil, errors.New("workspace edit documentChanges entry missing URI")
+		}
+		seenInDocChanges[tde.TextDocument.URI] = true
+		out[tde.TextDocument.URI] = append(out[tde.TextDocument.URI], tde.Edits...)
+	}
+
+	for uri, edits := range we.Changes {
+		if uri == "" {
+			return nil, nil, errors.New("workspace edit changes entry missing URI")
+		}
+		if seenInDocChanges[uri] {
+			continue
+		}
+		out[uri] = append(out[uri], edits...)
+	}
+
+	uris := make([]string, 0, len(out))
+	for uri, edits := range out {
+		if len(edits) == 0 {
+			delete(out, uri)
+			continue
+		}
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+	return out, uris, nil
+}
+
+// ParseCodeActions parses textDocument/codeAction responses supporting null,
+// []CodeAction, legacy []Command, and mixed arrays, filtering out disabled items.
+func ParseCodeActions(raw json.RawMessage) ([]CodeAction, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	var elems []json.RawMessage
+	if err := json.Unmarshal(trimmed, &elems); err != nil {
+		return nil, err
+	}
+	if len(elems) == 0 {
+		return nil, nil
+	}
+
+	out := make([]CodeAction, 0, len(elems))
+	for _, elem := range elems {
+		et := bytes.TrimSpace(elem)
+		if len(et) == 0 || bytes.Equal(et, []byte("null")) {
+			continue
+		}
+		var probe struct {
+			Command json.RawMessage `json:"command,omitempty"`
+		}
+		if err := json.Unmarshal(et, &probe); err != nil {
+			return nil, err
+		}
+		cmdTrim := bytes.TrimSpace(probe.Command)
+		if len(cmdTrim) > 0 && cmdTrim[0] == '"' {
+			var cmd LSPCommand
+			if err := json.Unmarshal(et, &cmd); err != nil {
+				return nil, err
+			}
+			out = append(out, CodeAction{
+				Title:   cmd.Title,
+				Command: &cmd,
+			})
+			continue
+		}
+		var ca CodeAction
+		if err := json.Unmarshal(et, &ca); err != nil {
+			return nil, err
+		}
+		if ca.Disabled != nil {
+			continue
+		}
+		out = append(out, ca)
+	}
+	return out, nil
+}
+
+// ParseWorkspaceSymbols parses workspace/symbol responses supporting null and []WorkspaceSymbol.
+func ParseWorkspaceSymbols(raw json.RawMessage) ([]WorkspaceSymbol, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	var syms []WorkspaceSymbol
+	if err := json.Unmarshal(trimmed, &syms); err != nil {
+		return nil, err
+	}
+	if len(syms) == 0 {
+		return nil, nil
+	}
+	out := make([]WorkspaceSymbol, 0, len(syms))
+	for _, s := range syms {
+		if s.Location.URI == "" {
+			continue
+		}
+		out = append(out, s)
 	}
 	return out, nil
 }

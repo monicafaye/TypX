@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -188,6 +189,132 @@ func (m *Manager) triggerDefinition(bp *action.BufPane, explicitCmd bool) bool {
 				return
 			}
 			OpenListPane(bp, "Definitions", false, items)
+		})
+	}()
+	return true
+}
+
+func (m *Manager) triggerReferences(bp *action.BufPane, explicitCmd bool) bool {
+	if bp == nil || bp.Buf == nil || bp.Cursor == nil || !bp.Buf.IsTypst() {
+		if explicitCmd {
+			setInfoMessage("References are only available for .typ buffers")
+		}
+		return false
+	}
+	if bp.Buf.AbsPath == "" {
+		setInfoMessage("Save buffer before finding references")
+		return true
+	}
+
+	m.mu.Lock()
+	state := m.State()
+	c := m.client
+	gen := m.gen
+	m.mu.Unlock()
+
+	if state != StateReady || c == nil {
+		setInfoMessage("LSP is not ready")
+		return true
+	}
+
+	targetBuf := bp.Buf
+	m.flushDocChangeNow(targetBuf)
+
+	absPath := targetBuf.AbsPath
+	activeKey := canonicalDocKey(absPath)
+	uri := PathToURI(absPath)
+	reqVer := targetBuf.Version()
+	cursorLoc := bp.Cursor.Loc
+	rawLine := targetBuf.LineBytes(cursorLoc.Y)
+	utf16Col := RuneColToUTF16(rawLine, locXToRuneCol(rawLine, cursorLoc.X))
+	shared := targetBuf.SharedBuffer
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		var raw json.RawMessage
+		err := c.Call(ctx, "textDocument/references", ReferenceParams{
+			TextDocument: TextDocumentIdentifier{URI: uri},
+			Position:     Position{Line: cursorLoc.Y, Character: utf16Col},
+			Context:      ReferenceContext{IncludeDeclaration: true},
+		}, &raw)
+		canceled := ctx.Err() == context.Canceled
+		cancel()
+
+		if err != nil {
+			if canceled {
+				return
+			}
+			notifyInfoError(fmt.Sprintf("References failed: %v", err))
+			return
+		}
+
+		locs, parseErr := ParseLocations(raw)
+		if parseErr != nil {
+			notifyInfoError(fmt.Sprintf("References parse failed: %v", parseErr))
+			return
+		}
+		locs = dedupeLocations(locs)
+
+		action.EnqueueUI(func() {
+			m.mu.Lock()
+			stale := m.shuttingDown || m.gen != gen
+			m.mu.Unlock()
+			if stale {
+				return
+			}
+			if !isBufferStillOpenAtVersion(targetBuf, reqVer) || targetBuf.SharedBuffer != shared {
+				return
+			}
+
+			if len(locs) == 0 {
+				setInfoMessage("No references found")
+				return
+			}
+
+			sort.SliceStable(locs, func(i, j int) bool {
+				pi := URIToPath(locs[i].URI)
+				pj := URIToPath(locs[j].URI)
+				ki := canonicalDocKey(pi) == activeKey
+				kj := canonicalDocKey(pj) == activeKey
+				if ki != kj {
+					return ki
+				}
+				if pi != pj {
+					return pi < pj
+				}
+				if locs[i].Range.Start.Line != locs[j].Range.Start.Line {
+					return locs[i].Range.Start.Line < locs[j].Range.Start.Line
+				}
+				return locs[i].Range.Start.Character < locs[j].Range.Start.Character
+			})
+
+			items := make([]ListItem, 0, len(locs))
+			for _, loc := range locs {
+				targetLoc := loc
+				targetPath := URIToPath(targetLoc.URI)
+				if targetPath == "" {
+					continue
+				}
+				preview := readLocationLinePreview(targetPath, targetLoc.Range.Start.Line)
+				items = append(items, ListItem{
+					FilePath:  targetPath,
+					Line:      targetLoc.Range.Start.Line,
+					Col:       targetLoc.Range.Start.Character,
+					Badge:     "REF",
+					Primary:   preview,
+					Secondary: fmt.Sprintf("%s:%d:%d", filepath.Base(targetPath), targetLoc.Range.Start.Line+1, targetLoc.Range.Start.Character+1),
+					OnSelect: func() {
+						if destBP := m.jumpToLocation(bp, targetLoc); destBP != nil {
+							m.pushJumpOrigin(destBP.Tab(), absPath, cursorLoc)
+						}
+					},
+				})
+			}
+			if len(items) == 0 {
+				setInfoMessage("No references found")
+				return
+			}
+			OpenListPane(bp, "References", false, items)
 		})
 	}()
 	return true

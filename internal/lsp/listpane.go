@@ -45,6 +45,8 @@ type ListPane struct {
 	title         string
 	filterable    bool
 	errorsOnly    bool
+	filtering     bool
+	filterQuery   string
 	items         []ListItem
 	visible       []ListItem
 	selectedIdx   int
@@ -99,6 +101,8 @@ func OpenListPane(bp *action.BufPane, title string, filterable bool, items []Lis
 		existing.title = title
 		existing.filterable = filterable
 		existing.errorsOnly = false
+		existing.filtering = false
+		existing.filterQuery = ""
 		existing.setItems(items)
 		for i, p := range tab.Panes {
 			if p == existing {
@@ -211,6 +215,8 @@ func (lp *ListPane) GetView() *display.View     { return lp.view }
 func (lp *ListPane) IsActive() bool             { return lp.active }
 func (lp *ListPane) IsFilterable() bool         { return lp.filterable }
 func (lp *ListPane) IsErrorsOnly() bool         { return lp.errorsOnly }
+func (lp *ListPane) IsFiltering() bool          { return lp.filtering }
+func (lp *ListPane) FilterQuery() string        { return lp.filterQuery }
 func (lp *ListPane) VisibleItems() []ListItem   { return append([]ListItem(nil), lp.visible...) }
 func (lp *ListPane) SelectedIndex() int         { return lp.selectedIdx }
 func (lp *ListPane) LocFromVisual(v buffer.Loc) buffer.Loc { return v }
@@ -274,14 +280,19 @@ func (lp *ListPane) setItems(items []ListItem) {
 }
 
 func (lp *ListPane) rebuildVisible() {
-	if !lp.errorsOnly {
+	q := strings.ToLower(strings.TrimSpace(lp.filterQuery))
+	if !lp.errorsOnly && q == "" {
 		lp.visible = lp.items
 	} else {
 		filtered := make([]ListItem, 0, len(lp.items))
 		for _, it := range lp.items {
-			if it.Severity == SeverityError || it.Severity == 0 {
-				filtered = append(filtered, it)
+			if lp.errorsOnly && it.Severity != SeverityError && it.Severity != 0 {
+				continue
 			}
+			if q != "" && !matchesListItemQuery(it, q) {
+				continue
+			}
+			filtered = append(filtered, it)
 		}
 		lp.visible = filtered
 	}
@@ -296,6 +307,13 @@ func (lp *ListPane) rebuildVisible() {
 		lp.selectedIdx = len(lp.visible) - 1
 	}
 	lp.ensureSelectionVisible()
+}
+
+func matchesListItemQuery(it ListItem, q string) bool {
+	return strings.Contains(strings.ToLower(it.Primary), q) ||
+		strings.Contains(strings.ToLower(it.Secondary), q) ||
+		strings.Contains(strings.ToLower(it.Badge), q) ||
+		strings.Contains(strings.ToLower(it.FilePath), q)
 }
 
 func (lp *ListPane) hasFooter() bool {
@@ -463,6 +481,65 @@ func (lp *ListPane) handleKeyEvent(e *tcell.EventKey) {
 		return
 	}
 
+	if lp.filtering {
+		switch key {
+		case tcell.KeyEscape:
+			lp.filtering = false
+			lp.filterQuery = ""
+			lp.rebuildVisible()
+			return
+		case tcell.KeyEnter:
+			lp.activateSelected()
+			return
+		case tcell.KeyBackspace, tcell.KeyBackspace2:
+			runes := []rune(lp.filterQuery)
+			if len(runes) > 0 {
+				lp.filterQuery = string(runes[:len(runes)-1])
+				lp.rebuildVisible()
+			}
+			return
+		case tcell.KeyUp:
+			lp.moveSelection(-1)
+			return
+		case tcell.KeyDown:
+			lp.moveSelection(1)
+			return
+		case tcell.KeyHome:
+			if len(lp.visible) > 0 {
+				lp.selectedIdx = 0
+				lp.ensureSelectionVisible()
+			}
+			return
+		case tcell.KeyEnd:
+			if len(lp.visible) > 0 {
+				lp.selectedIdx = len(lp.visible) - 1
+				lp.ensureSelectionVisible()
+			}
+			return
+		case tcell.KeyPgUp:
+			step := lp.listHeight()
+			if step < 1 {
+				step = 1
+			}
+			lp.moveSelection(-step)
+			return
+		case tcell.KeyPgDn:
+			step := lp.listHeight()
+			if step < 1 {
+				step = 1
+			}
+			lp.moveSelection(step)
+			return
+		case tcell.KeyRune:
+			if mod&(tcell.ModAlt|tcell.ModCtrl) == 0 && r != 0 {
+				lp.filterQuery += string(r)
+				lp.rebuildVisible()
+			}
+			return
+		}
+		return
+	}
+
 	switch key {
 	case tcell.KeyEscape:
 		CloseListPaneForTab(lp.tab)
@@ -520,6 +597,8 @@ func (lp *ListPane) handleKeyEvent(e *tcell.EventKey) {
 				lp.errorsOnly = !lp.errorsOnly
 				lp.rebuildVisible()
 			}
+		case '/':
+			lp.filtering = true
 		case 'q':
 			CloseListPaneForTab(lp.tab)
 		}
@@ -570,13 +649,18 @@ func (lp *ListPane) Display() {
 	} else {
 		headerText += fmt.Sprintf(" (%d)", len(lp.visible))
 	}
+	if lp.filtering || lp.filterQuery != "" {
+		headerText += fmt.Sprintf(" [/%s]", lp.filterQuery)
+	}
 	drawListClippedRow(lp.view.X, lp.view.Y, lp.view.Width, headerText, headerStyle)
 
 	lh := lp.listHeight()
 	if lh > 0 {
 		if len(lp.visible) == 0 {
 			emptyMsg := " (empty)"
-			if lp.errorsOnly {
+			if lp.filterQuery != "" {
+				emptyMsg = " (no matches)"
+			} else if lp.errorsOnly {
 				emptyMsg = " (no errors — press 'f' to show all)"
 			}
 			dimStyle := lookupListStyle("comment", config.DefStyle)
@@ -603,12 +687,14 @@ func (lp *ListPane) Display() {
 
 	if lp.hasFooter() {
 		footerY := lp.view.Y + lp.view.Height - 1
-		footerText := " Enter:jump  Esc/q:close"
-		if lp.filterable {
+		footerText := " Enter:jump  /:filter  Esc/q:close"
+		if lp.filtering {
+			footerText = " Type to filter  ↑/↓:select  Enter:jump  Esc:clear"
+		} else if lp.filterable {
 			if lp.errorsOnly {
-				footerText = " Enter:jump  f:show all  Esc/q:close"
+				footerText = " Enter:jump  f:show all  /:filter  Esc/q:close"
 			} else {
-				footerText = " Enter:jump  f:errors only  Esc/q:close"
+				footerText = " Enter:jump  f:errors only  /:filter  Esc/q:close"
 			}
 		}
 		drawListClippedRow(lp.view.X, footerY, lp.view.Width, footerText, headerStyle)

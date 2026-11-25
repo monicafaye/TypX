@@ -20,11 +20,24 @@ type resolvedEdit struct {
 // overlap, and applies them in reverse document order as a single atomic undo
 // step. Returns the number of non-empty edits applied.
 func ApplyTextEdits(b *buffer.Buffer, edits []TextEdit) (int, error) {
+	batch, err := prepareTextEdits(b, edits)
+	if err != nil {
+		return 0, err
+	}
+	if len(batch) == 0 {
+		return 0, nil
+	}
+	b.EventHandler.ApplyAtomicEdits(batch)
+	b.RelocateCursors()
+	return len(batch), nil
+}
+
+func prepareTextEdits(b *buffer.Buffer, edits []TextEdit) ([]buffer.BatchEdit, error) {
 	if b == nil || b.EventHandler == nil {
-		return 0, errors.New("buffer unavailable")
+		return nil, errors.New("buffer unavailable")
 	}
 	if len(edits) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 
 	resolved := make([]resolvedEdit, 0, len(edits))
@@ -32,7 +45,7 @@ func ApplyTextEdits(b *buffer.Buffer, edits []TextEdit) (int, error) {
 		start := lspPositionToLoc(b, ed.Range.Start)
 		end := lspPositionToLoc(b, ed.Range.End)
 		if end.LessThan(start) {
-			return 0, fmt.Errorf("invalid text edit %d: end before start", i)
+			return nil, fmt.Errorf("invalid text edit %d: end before start", i)
 		}
 		norm := strings.ReplaceAll(ed.NewText, "\r\n", "\n")
 		norm = strings.ReplaceAll(norm, "\r", "")
@@ -46,7 +59,7 @@ func ApplyTextEdits(b *buffer.Buffer, edits []TextEdit) (int, error) {
 		})
 	}
 	if len(resolved) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 
 	// Sort in reverse document order (bottom-to-top, right-to-left).
@@ -67,7 +80,7 @@ func ApplyTextEdits(b *buffer.Buffer, edits []TextEdit) (int, error) {
 		later := resolved[i]
 		earlier := resolved[i+1]
 		if later.start.LessThan(earlier.end) {
-			return 0, errors.New("overlapping LSP text edits")
+			return nil, errors.New("overlapping LSP text edits")
 		}
 	}
 
@@ -79,10 +92,7 @@ func ApplyTextEdits(b *buffer.Buffer, edits []TextEdit) (int, error) {
 			Text:  r.text,
 		}
 	}
-
-	b.EventHandler.ApplyAtomicEdits(batch)
-	b.RelocateCursors()
-	return len(batch), nil
+	return batch, nil
 }
 
 func lspPositionToLoc(b *buffer.Buffer, pos Position) buffer.Loc {

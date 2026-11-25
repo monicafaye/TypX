@@ -114,10 +114,20 @@ func TestParseCompletionResultAndExtractHoverText(t *testing.T) {
 
 func TestDefaultClientCapabilitiesDisablesSnippetsAndRequestsUTF16(t *testing.T) {
 	caps := DefaultClientCapabilities()
+	require.NotNil(t, caps.Workspace)
+	assert.True(t, caps.Workspace.ApplyEdit)
+	require.NotNil(t, caps.Workspace.WorkspaceEdit)
+	assert.True(t, caps.Workspace.WorkspaceEdit.DocumentChanges)
 	require.NotNil(t, caps.TextDocument)
 	require.NotNil(t, caps.TextDocument.Completion)
 	require.NotNil(t, caps.TextDocument.Completion.CompletionItem)
 	assert.False(t, caps.TextDocument.Completion.CompletionItem.SnippetSupport)
+	require.NotNil(t, caps.TextDocument.References)
+	require.NotNil(t, caps.TextDocument.Rename)
+	assert.True(t, caps.TextDocument.Rename.PrepareSupport)
+	require.NotNil(t, caps.TextDocument.CodeAction)
+	require.NotNil(t, caps.TextDocument.CodeAction.CodeActionLiteralSupport)
+	assert.Contains(t, caps.TextDocument.CodeAction.CodeActionLiteralSupport.CodeActionKind.ValueSet, "quickfix")
 	require.NotNil(t, caps.General)
 	assert.Equal(t, []string{"utf-16"}, caps.General.PositionEncodings)
 }
@@ -198,4 +208,95 @@ func TestParseLocations(t *testing.T) {
 	assert.Equal(t, "file:///lib.typ", locs[0].URI)
 	assert.Equal(t, 5, locs[0].Range.Start.Line)
 	assert.Equal(t, 5, locs[0].Range.Start.Character)
+}
+
+func TestParsePrepareRename(t *testing.T) {
+	ph, r, ok, err := ParsePrepareRename(json.RawMessage(`null`))
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Nil(t, r)
+	assert.Equal(t, "", ph)
+
+	ph, r, ok, err = ParsePrepareRename(json.RawMessage(`{"defaultBehavior":true}`))
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Nil(t, r)
+	assert.Equal(t, "", ph)
+
+	ph, r, ok, err = ParsePrepareRename(json.RawMessage(`{"range":{"start":{"line":1,"character":2},"end":{"line":1,"character":7}},"placeholder":"greet"}`))
+	require.NoError(t, err)
+	assert.True(t, ok)
+	require.NotNil(t, r)
+	assert.Equal(t, "greet", ph)
+	assert.Equal(t, 2, r.Start.Character)
+
+	ph, r, ok, err = ParsePrepareRename(json.RawMessage(`{"start":{"line":0,"character":1},"end":{"line":0,"character":4}}`))
+	require.NoError(t, err)
+	assert.True(t, ok)
+	require.NotNil(t, r)
+	assert.Equal(t, "", ph)
+	assert.Equal(t, 4, r.End.Character)
+}
+
+func TestWorkspaceEditFileEdits(t *testing.T) {
+	// Resource operation in documentChanges must return explicit error.
+	_, _, err := WorkspaceEditFileEdits(WorkspaceEdit{
+		DocumentChanges: []json.RawMessage{
+			json.RawMessage(`{"kind":"rename","oldUri":"file:///a.typ","newUri":"file:///b.typ"}`),
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported resource operation")
+
+	// Merging Changes and DocumentChanges produces sorted deterministic URI list.
+	we := WorkspaceEdit{
+		Changes: map[string][]TextEdit{
+			"file:///z.typ": {{Range: Range{Start: Position{0, 0}, End: Position{0, 1}}, NewText: "Z"}},
+			"file:///a.typ": {{Range: Range{Start: Position{0, 0}, End: Position{0, 1}}, NewText: "ignored-dup"}},
+		},
+		DocumentChanges: []json.RawMessage{
+			json.RawMessage(`{"textDocument":{"uri":"file:///a.typ","version":1},"edits":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":2}},"newText":"A"}]}`),
+		},
+	}
+	byURI, uris, err := WorkspaceEditFileEdits(we)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"file:///a.typ", "file:///z.typ"}, uris)
+	require.Len(t, byURI["file:///a.typ"], 1)
+	assert.Equal(t, "A", byURI["file:///a.typ"][0].NewText)
+	require.Len(t, byURI["file:///z.typ"], 1)
+}
+
+func TestParseCodeActionsAndWorkspaceSymbols(t *testing.T) {
+	actions, err := ParseCodeActions(json.RawMessage(`null`))
+	require.NoError(t, err)
+	assert.Nil(t, actions)
+
+	mixed := `[
+		{"title":"Fix import","kind":"quickfix","isPreferred":true,"edit":{"changes":{"file:///a.typ":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"newText":"X"}]}}},
+		{"title":"Disabled fix","kind":"quickfix","disabled":{"reason":"stale"}},
+		{"title":"Run command","command":"tinymist.doSomething","arguments":["arg1"]}
+	]`
+	actions, err = ParseCodeActions(json.RawMessage(mixed))
+	require.NoError(t, err)
+	require.Len(t, actions, 2)
+	assert.Equal(t, "Fix import", actions[0].Title)
+	assert.True(t, actions[0].IsPreferred)
+	require.NotNil(t, actions[0].Edit)
+	assert.Equal(t, "Run command", actions[1].Title)
+	require.NotNil(t, actions[1].Command)
+	assert.Equal(t, "tinymist.doSomething", actions[1].Command.Command)
+
+	syms, err := ParseWorkspaceSymbols(json.RawMessage(`null`))
+	require.NoError(t, err)
+	assert.Nil(t, syms)
+
+	syms, err = ParseWorkspaceSymbols(json.RawMessage(`[
+		{"name":"Introduction","kind":3,"containerName":"main.typ","location":{"uri":"file:///main.typ","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":14}}}},
+		{"name":"Helper","kind":12,"location":{"uri":"file:///lib.typ"}}
+	]`))
+	require.NoError(t, err)
+	require.Len(t, syms, 2)
+	assert.Equal(t, "Introduction", syms[0].Name)
+	assert.Equal(t, "Helper", syms[1].Name)
+	assert.Equal(t, 0, syms[1].Location.Range.Start.Line)
 }

@@ -415,6 +415,13 @@ func (m *Manager) startAsync(gen uint64) {
 			m.handleNotification(gen, method, params)
 		},
 		OnRequest: func(ctx context.Context, method string, params json.RawMessage) (any, error) {
+			if method == "workspace/applyEdit" {
+				var p ApplyWorkspaceEditParams
+				if err := json.Unmarshal(params, &p); err != nil {
+					return ApplyWorkspaceEditResult{Applied: false, FailureReason: err.Error()}, nil
+				}
+				return m.handleApplyWorkspaceEdit(ctx, gen, p.Edit), nil
+			}
 			return defaultServerRequestResult(method, params), nil
 		},
 	}
