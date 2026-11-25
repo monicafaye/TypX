@@ -36,7 +36,7 @@ TypX includes:
 
 ### Prebuilt binaries
 
-Prebuilt archives for `windows/amd64`, `darwin/arm64`, `darwin/amd64`, `linux/amd64`, and `linux/arm64` with SHA-256 checksums are published on [GitHub Releases](https://github.com/monicafaye/TypX/releases). Extract the archive and place `typx` (`typx.exe` on Windows) on your `PATH`.
+Prebuilt archives for `windows/amd64`, `windows/arm64`, `darwin/arm64`, `darwin/amd64`, `linux/amd64`, and `linux/arm64` with SHA-256 checksums are published on [GitHub Releases](https://github.com/monicafaye/TypX/releases). Extract the archive and place `typx` (`typx.exe` on Windows) on your `PATH`. Package manager manifests for Scoop, Homebrew, and AUR live in [packaging/](packaging/README.md).
 
 ### Using Go (`go install`)
 
@@ -71,18 +71,20 @@ TypX embeds all runtime assets (syntax grammars, colorschemes, help files, and c
 ```bash
 go generate ./runtime
 
-# Windows (amd64)
+# Windows (amd64 / arm64)
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o binaries/typx-windows-amd64.exe ./cmd/typx
+GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o binaries/typx-windows-arm64.exe ./cmd/typx
 
-# Linux (amd64)
+# Linux (amd64 / arm64)
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o binaries/typx-linux-amd64 ./cmd/typx
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o binaries/typx-linux-arm64 ./cmd/typx
 
 # macOS (Apple Silicon / Intel)
 GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o binaries/typx-darwin-arm64 ./cmd/typx
 GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o binaries/typx-darwin-amd64 ./cmd/typx
 ```
 
-Or build all four targets at once with `make build-cross`.
+Or build all six targets at once with `make build-cross`.
 
 ---
 
@@ -305,7 +307,7 @@ When editing `.typ` files, TypX applies these defaults unless overridden globall
 - `softwrap: true`, `wordwrap: true`
 - `tabstospaces: true`, `tabsize: 2`
 - `autoindent: true`, `ruler: true`
-- TypX statusline showing Typst lexical mode (`MARKUP`, `MATH`, `CODE`, or `RAW`), word count, and `tinymist` LSP or Preview status (`LSP: ready`, `LSP: off`, `PREVIEW: ON`).
+- TypX statusline showing Typst lexical mode (`MARKUP`, `MATH`, `CODE`, or `RAW`), word count, and `tinymist` LSP or Preview status (`LSP: ready`, `LSP: no tinymist`, `LSP: off`, `PREVIEW: ON`).
 
 ### Colorschemes
 
