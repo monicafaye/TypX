@@ -367,6 +367,10 @@ func ProbeVersion(ctx context.Context, binPath string) (string, error) {
 	case <-ctx.Done():
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
+			select {
+			case <-done:
+			case <-time.After(500 * time.Millisecond):
+			}
 		}
 		return "", fmt.Errorf("version probe timed out: %w", ctx.Err())
 	}

@@ -1,6 +1,8 @@
 package lsp
 
 import (
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -532,4 +534,123 @@ func TestScrollPreviewToSendsImmediateScrollCommand(t *testing.T) {
 	waitForCondition(t, 5*time.Second, func() bool {
 		return strings.Contains(readMockLog(logPath), "tinymist.scrollPreview")
 	}, "expected ScrollPreviewTo to dispatch tinymist.scrollPreview immediately")
+}
+
+func TestShutdownWaitsForInFlightStartAsync(t *testing.T) {
+	t.Run("waits for mid-spawn client to close before returning", func(t *testing.T) {
+		setupLSPEnv(t, 0)
+
+		m := newManager()
+		startedCh := make(chan struct{})
+		releaseCh := make(chan struct{})
+		var spawnedClient *Client
+
+		m.discoverFn = func(string) DiscoveryResult {
+			return DiscoveryResult{Path: "fake-tinymist", Source: "test"}
+		}
+		m.probeFn = nil
+		m.startClientFn = func(ctx context.Context, bin string, h Handlers) (*Client, error) {
+			close(startedCh)
+			<-releaseCh
+			sr, cw := io.Pipe()
+			cr, sw := io.Pipe()
+			go func() {
+				_, _ = io.Copy(io.Discard, sr)
+				_ = sw.Close()
+			}()
+			c := NewPipeClient(cr, cw, h)
+			spawnedClient = c
+			return c, nil
+		}
+
+		m.Init(Options{})
+		<-startedCh
+
+		shutdownDone := make(chan struct{})
+		go func() {
+			m.Shutdown()
+			close(shutdownDone)
+		}()
+
+		select {
+		case <-shutdownDone:
+			t.Fatal("Shutdown returned while startAsync was still in flight")
+		case <-time.After(40 * time.Millisecond):
+		}
+
+		close(releaseCh)
+
+		select {
+		case <-shutdownDone:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Shutdown did not finish after startAsync completed")
+		}
+
+		require.NotNil(t, spawnedClient)
+		select {
+		case <-spawnedClient.Done():
+		default:
+			t.Fatal("spawned client was not closed before Shutdown returned")
+		}
+	})
+
+	t.Run("cancels hanging handshake promptly", func(t *testing.T) {
+		setupLSPEnv(t, 0)
+
+		m := newManager()
+		handshakeStarted := make(chan struct{})
+		var spawnedClient *Client
+
+		m.discoverFn = func(string) DiscoveryResult {
+			return DiscoveryResult{Path: "fake-tinymist", Source: "test"}
+		}
+		m.probeFn = nil
+		m.startClientFn = func(ctx context.Context, bin string, h Handlers) (*Client, error) {
+			sr, cw := io.Pipe()
+			cr, sw := io.Pipe()
+			go func() {
+				// Drain client writes (initialize) without ever replying until closed.
+				buf := make([]byte, 1024)
+				if _, err := sr.Read(buf); err == nil {
+					close(handshakeStarted)
+					_, _ = io.Copy(io.Discard, sr)
+				}
+				_ = sw.Close()
+			}()
+			c := NewPipeClient(cr, cw, h)
+			spawnedClient = c
+			return c, nil
+		}
+
+		m.Init(Options{})
+		select {
+		case <-handshakeStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("handshake never sent initialize")
+		}
+
+		start := time.Now()
+		m.Shutdown()
+		elapsed := time.Since(start)
+		assert.Truef(t, elapsed < 3*time.Second, "Shutdown took %v; should cancel handshake instead of waiting 5s", elapsed)
+
+		require.NotNil(t, spawnedClient)
+		select {
+		case <-spawnedClient.Done():
+		default:
+			t.Fatal("spawned client was not closed before Shutdown returned")
+		}
+	})
+
+	t.Run("reaps mock subprocess before tempdir removal", func(t *testing.T) {
+		setupLSPEnv(t, 0)
+		for i := 0; i < 6; i++ {
+			subDir := t.TempDir()
+			t.Setenv("TYPX_MOCK_LOG", filepath.Join(subDir, "mock-rpc.log"))
+			Init(Options{})
+			time.Sleep(time.Duration(i*3) * time.Millisecond)
+			Shutdown()
+			require.NoError(t, os.RemoveAll(subDir))
+		}
+	})
 }

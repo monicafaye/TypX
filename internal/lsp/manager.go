@@ -96,6 +96,9 @@ type Manager struct {
 	shuttingDown       bool
 	stopCh             chan struct{}
 	readyCh            chan struct{}
+	sessionCtx         context.Context
+	sessionCancel      context.CancelFunc
+	lifecycleWG        sync.WaitGroup
 	client             *Client
 	autoRestarts       int
 	restartBackoff     time.Duration
@@ -213,6 +216,7 @@ func (m *Manager) Init(opts Options) {
 	m.shuttingDown = false
 	m.stopCh = make(chan struct{})
 	m.readyCh = make(chan struct{})
+	m.sessionCtx, m.sessionCancel = context.WithCancel(context.Background())
 	m.gen++
 	gen := m.gen
 	m.autoRestarts = 0
@@ -258,9 +262,13 @@ func (m *Manager) Init(opts Options) {
 	}
 
 	m.setStateLocked(StateStarting)
+	m.lifecycleWG.Add(1)
 	m.mu.Unlock()
 
-	go m.startAsync(gen)
+	go func() {
+		defer m.lifecycleWG.Done()
+		m.startAsync(gen)
+	}()
 }
 
 // Shutdown cleanly terminates any active tinymist LSP or preview subprocesses
@@ -269,6 +277,8 @@ func (m *Manager) Shutdown() {
 	m.mu.Lock()
 	m.shuttingDown = true
 	m.gen++
+	cancelSession := m.sessionCancel
+	m.sessionCancel = nil
 	if m.stopCh != nil {
 		select {
 		case <-m.stopCh:
@@ -331,6 +341,9 @@ func (m *Manager) Shutdown() {
 	m.setStateLocked(StateOff)
 	m.mu.Unlock()
 
+	if cancelSession != nil {
+		cancelSession()
+	}
 	if unreg != nil {
 		unreg()
 	}
@@ -360,6 +373,7 @@ func (m *Manager) Shutdown() {
 		_ = c.Close(ctx)
 		cancel()
 	}
+	m.lifecycleWG.Wait()
 }
 
 func (m *Manager) startAsync(gen uint64) {
@@ -373,6 +387,10 @@ func (m *Manager) startAsync(gen uint64) {
 	probeFn := m.probeFn
 	startClientFn := m.startClientFn
 	stopCh := m.stopCh
+	sessionCtx := m.sessionCtx
+	if sessionCtx == nil {
+		sessionCtx = context.Background()
+	}
 	m.mu.Unlock()
 
 	res := discoverFn(configuredPath)
@@ -426,7 +444,7 @@ func (m *Manager) startAsync(gen uint64) {
 		},
 	}
 
-	startCtx, cancelStart := context.WithTimeout(context.Background(), 5*time.Second)
+	startCtx, cancelStart := context.WithTimeout(sessionCtx, 5*time.Second)
 	client, err := startClientFn(startCtx, res.Path, handlers)
 	cancelStart()
 	if err != nil {
@@ -452,7 +470,7 @@ func (m *Manager) startAsync(gen uint64) {
 	default:
 	}
 
-	if err := m.handshake(gen, client); err != nil {
+	if err := m.handshake(gen, sessionCtx, client); err != nil {
 		tail := client.StderrTail()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		_ = client.Close(ctx)
@@ -545,10 +563,14 @@ func (m *Manager) startAsync(gen uint64) {
 	if probeFn != nil {
 		m.mu.Lock()
 		needProbe := m.binVersion == "" && !m.shuttingDown && m.gen == gen
+		if needProbe {
+			m.lifecycleWG.Add(1)
+		}
 		m.mu.Unlock()
 		if needProbe {
 			go func(path string) {
-				probeCtx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+				defer m.lifecycleWG.Done()
+				probeCtx, cancel := context.WithTimeout(sessionCtx, probeTimeout)
 				v, perr := probeFn(probeCtx, path)
 				cancel()
 				if perr != nil || v == "" {
@@ -563,10 +585,18 @@ func (m *Manager) startAsync(gen uint64) {
 		}
 	}
 
-	go m.watchClient(gen, client)
+	m.mu.Lock()
+	if !m.shuttingDown && m.gen == gen && m.client == client {
+		m.lifecycleWG.Add(1)
+		go func() {
+			defer m.lifecycleWG.Done()
+			m.watchClient(gen, client)
+		}()
+	}
+	m.mu.Unlock()
 }
 
-func (m *Manager) handshake(gen uint64, client *Client) error {
+func (m *Manager) handshake(gen uint64, sessionCtx context.Context, client *Client) error {
 	m.mu.Lock()
 	rootURI := m.rootURI
 	if rootURI == "" {
@@ -607,7 +637,10 @@ func (m *Manager) handshake(gen uint64, client *Client) error {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if sessionCtx == nil {
+		sessionCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(sessionCtx, 5*time.Second)
 	defer cancel()
 
 	var res InitializeResult
@@ -938,6 +971,8 @@ func (m *Manager) restart() {
 	m.gen++
 	gen := m.gen
 	m.shuttingDown = false
+	oldCancel := m.sessionCancel
+	m.sessionCtx, m.sessionCancel = context.WithCancel(context.Background())
 	if m.stopCh != nil {
 		select {
 		case <-m.stopCh:
@@ -979,11 +1014,18 @@ func (m *Manager) restart() {
 	m.serverCommands = make(map[string]bool)
 	m.rootURI = ""
 	if !lspEnabled {
+		if oldClient != nil {
+			m.lifecycleWG.Add(1)
+		}
 		m.setStateLocked(StateOff)
 		m.mu.Unlock()
+		if oldCancel != nil {
+			oldCancel()
+		}
 		clearAllTinymistDiagnostics()
 		if oldClient != nil {
 			go func() {
+				defer m.lifecycleWG.Done()
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				_ = oldClient.Close(ctx)
 				cancel()
@@ -993,7 +1035,11 @@ func (m *Manager) restart() {
 		return
 	}
 	m.setStateLocked(StateStarting)
+	m.lifecycleWG.Add(1)
 	m.mu.Unlock()
+	if oldCancel != nil {
+		oldCancel()
+	}
 
 	clearAllTinymistDiagnostics()
 
@@ -1005,6 +1051,7 @@ func (m *Manager) restart() {
 	}
 
 	go func() {
+		defer m.lifecycleWG.Done()
 		if oldClient != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			_ = oldClient.Close(ctx)
