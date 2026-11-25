@@ -111,6 +111,22 @@ func TestDiscoverOSCandidatesAndVSCodeSorting(t *testing.T) {
 	assert.Equal(t, `C:\Users\Alice\.vscode\extensions\myriad-dreamin.tinymist-0.12.10\out\tinymist.exe`, res.Path)
 	assert.Equal(t, "vscode", res.Source)
 
+	// Windows ~/.local/bin (tinymist-installer.ps1)
+	res = discoverWithDeps("", discoverDeps{
+		goos:     "windows",
+		lookPath: func(string) (string, error) { return "", errors.New("not found") },
+		stat: func(p string) (os.FileInfo, error) {
+			if p == `C:\Users\Alice\.local\bin\tinymist.exe` {
+				return fakeFileInfo{name: "tinymist.exe", mode: 0755}, nil
+			}
+			return nil, os.ErrNotExist
+		},
+		userHomeDir: func() (string, error) { return `C:\Users\Alice`, nil },
+		getenv:      func(string) string { return "" },
+	})
+	assert.Equal(t, `C:\Users\Alice\.local\bin\tinymist.exe`, res.Path)
+	assert.Equal(t, "local-bin", res.Source)
+
 	// macOS Homebrew
 	res = discoverWithDeps("", discoverDeps{
 		goos:     "darwin",

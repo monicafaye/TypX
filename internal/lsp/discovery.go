@@ -136,10 +136,16 @@ func osCandidatePaths(goos, home string, getenv func(string) string, glob func(s
 			localAppData = join(userProfile, "AppData", "Local")
 		}
 		if userProfile != "" {
-			out = append(out, candidatePath{
-				path:   join(userProfile, ".cargo", "bin", "tinymist.exe"),
-				source: "cargo",
-			})
+			out = append(out,
+				candidatePath{
+					path:   join(userProfile, ".local", "bin", "tinymist.exe"),
+					source: "local-bin",
+				},
+				candidatePath{
+					path:   join(userProfile, ".cargo", "bin", "tinymist.exe"),
+					source: "cargo",
+				},
+			)
 		}
 		if localAppData != "" {
 			out = append(out, candidatePath{
