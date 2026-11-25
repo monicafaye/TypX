@@ -428,20 +428,51 @@ func (t *Tab) SetActive(i int) {
 	} else if i >= len(t.Panes) {
 		i = len(t.Panes) - 1
 	}
+	target := t.Panes[i]
 	t.active = i
-	for j, p := range t.Panes {
-		if j == i {
+	panes := make([]Pane, len(t.Panes))
+	copy(panes, t.Panes)
+	for _, p := range panes {
+		if p == nil || !t.containsPane(p) {
+			continue
+		}
+		if p == target {
 			p.SetActive(true)
 		} else {
 			p.SetActive(false)
 		}
 	}
-	if bp, ok := t.Panes[i].(*BufPane); ok {
+	activeIdx := -1
+	for j, p := range t.Panes {
+		if p == target {
+			activeIdx = j
+			break
+		}
+	}
+	if activeIdx >= 0 {
+		t.active = activeIdx
+	} else if len(t.Panes) == 0 {
+		t.active = 0
+		return
+	} else if t.active >= len(t.Panes) {
+		t.active = len(t.Panes) - 1
+	}
+	activePane := t.Panes[t.active]
+	if bp, ok := activePane.(*BufPane); ok {
 		t.lastBufPane = bp
 	}
 	for _, fn := range paneFocusHooks {
-		fn(t, t.Panes[i])
+		fn(t, activePane)
 	}
+}
+
+func (t *Tab) containsPane(target Pane) bool {
+	for _, p := range t.Panes {
+		if p == target {
+			return true
+		}
+	}
+	return false
 }
 
 // ActivePane returns the literally focused pane in this tab (including auxiliary panes).
