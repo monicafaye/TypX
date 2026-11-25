@@ -77,7 +77,7 @@ func InitFlags() {
 		fmt.Println("-no-lsp")
 		fmt.Println("    \tLaunch without starting the tinymist LSP server")
 		fmt.Println("-preview")
-		fmt.Println("    \tImmediately start companion live preview on the opened .typ file")
+		fmt.Println("    \tImmediately start live preview (inline Sixel or browser) on the opened .typ file")
 		fmt.Println("-new template")
 		fmt.Println("    \tCreate a new .typ file or project from a template (use `-new list` to list)")
 

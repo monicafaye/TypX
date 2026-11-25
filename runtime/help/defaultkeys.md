@@ -14,13 +14,13 @@ editor defaults.
 
 | Key           | Command            | Description of function                                                   |
 |---------------|--------------------|---------------------------------------------------------------------------|
-| Alt-p         | `> preview`        | Toggle `tinymist` live browser preview with cursor sync                   |
+| Alt-p         | `> preview`        | Toggle live preview (in-terminal Sixel pane or browser preview)           |
 | Alt-o         | `> outline`        | Toggle docked Document Outline sidebar                                    |
 | Alt-t         | `> tree`           | Toggle built-in File Manager sidebar (see `> help filemanager`)           |
 | Alt-c         | `> conceal`        | Toggle live Unicode math/typography concealment                           |
 | Alt-m         | `> math-inline`    | Insert inline math `$|$`, wrap selection, or exit inline math             |
 | Alt-M         | `> math-display`   | Insert multi-line display math block (`Alt-Shift-m`)                      |
-| Alt-i         | `> insert`         | Open LyX-style template insert palette                                    |
+| Alt-i         | `> insert`         | Open Typst snippet insert palette                                         |
 | Alt-N         | `> templates`      | Toggle docked Template Gallery sidebar (`Alt-Shift-n`)                    |
 | Alt-b         | `> wrap-bold`      | Wrap selection or insert `*bold*`                                         |
 | Alt-e         | `> wrap-italic`    | Wrap selection or insert `_italic_`                                       |
@@ -28,6 +28,24 @@ editor defaults.
 | Alt-Right     | `> heading-demote` | Demote heading level (`= ` -> `== `)                                      |
 | Ctrl-Space    | `> lsp-complete`   | Trigger `tinymist` LSP completion                                         |
 | Alt-k         | `> hover`          | Show `tinymist` LSP hover documentation                                   |
+
+### In-Terminal Sixel Preview (when focused)
+
+Open with `:preview inline` or focus with `:preview focus`:
+
+| Key                              | Description of function                               |
+|----------------------------------|-------------------------------------------------------|
+| Up / Down, k / j, w / s, Wheel   | Scroll up / down through pages                        |
+| PgUp / PgDn, Ctrl-u / Ctrl-d, Space | Page up / down through the document                |
+| [ / ] or Left / Right            | Jump to previous / next page                          |
+| g / G or Home / End              | Jump to top / bottom of document                      |
+| + / -                            | Zoom preview in / out                                 |
+| < / >                            | Widen / narrow the docked preview pane                |
+| t                                | Toggle dark-mode color inversion (`typst.previewInvert`) |
+| m                                | Toggle page margin trimming (`typst.previewTrimMargins`) |
+| r                                | Force recompile and redraw preview                    |
+| Esc / Enter / Tab / Ctrl-w       | Return focus to the editor pane                       |
+| q / Alt-p                        | Close the preview pane                                |
 
 ### Document Outline Sidebar (when focused)
 

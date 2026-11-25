@@ -1,7 +1,7 @@
 # TypX help text
 
-TypX (`typx`) is a standalone, lightweight terminal editor for Typst, forked
-from `micro` and inspired by LyX's WYSIWYM authoring workflow.
+TypX (`typx`) is a standalone terminal editor for Typst, forked from `micro`
+for a zero-config terminal Typst workflow with standard keybindings.
 
 TypX can be controlled by commands entered on the command bar, or with
 keybindings. To open the command bar, press `Ctrl-e`: the `>` prompt will
@@ -9,7 +9,7 @@ display. From now on, when the documentation shows a command to run (such as
 `> help`), press `Ctrl-e` and type the command followed by enter.
 
 For Typst-specific authoring features (`tinymist`, `:preview`, `:outline`,
-`:conceal`, LyX shortcuts, and `typst.*` options), run `> help typst`.
+`:conceal`, Typst shortcuts, and `typst.*` options), run `> help typst`.
 For a list of the default keybindings, run `> help defaultkeys`.
 For more information on keybindings, see `> help keybindings`.
 To toggle a short list of important keybindings, press `Alt-g`.
@@ -22,11 +22,11 @@ prompt, press tab, or view the help topic with `> help commands`.
 
 Key Typst authoring shortcuts in `.typ` buffers:
 
-* `Alt-p` (`> preview`): Toggle `tinymist` live browser preview
+* `Alt-p` (`> preview`): Toggle live preview (in-terminal Sixel pane or `tinymist` browser preview)
 * `Alt-o` (`> outline`): Toggle the docked Document Outline sidebar
 * `Alt-c` (`> conceal`): Toggle live Unicode math concealment
 * `Alt-m` / `Alt-M`: Insert inline (`$...$`) or display math block
-* `Alt-i` (`> insert`): Open the LyX-style template insert palette
+* `Alt-i` (`> insert`): Open the Typst snippet insert palette
 * `Ctrl-Space` / `Alt-k`: `tinymist` completion and hover documentation
 
 Move the cursor around with the mouse or with the arrow keys. Enter text simply
@@ -50,7 +50,7 @@ this page.
 Here are the available help topics:
 
 * `typst`: TypX's Typst authoring guide (`tinymist`, `:preview`, `:outline`,
-   `:conceal`, LyX shortcuts, templates, and `typst.*` options)
+   `:conceal`, Typst shortcuts, templates, and `typst.*` options)
 * `tutorial`: A brief tutorial which gives an overview of all the other help
    topics
 * `keybindings`: Gives a full list of the default keybindings as well as how to

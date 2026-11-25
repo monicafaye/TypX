@@ -247,6 +247,7 @@ TypX resolves its configuration directory in this order:
 | `typst.conceal` | local/global | `true` | Enable live Unicode math and typography concealment in `.typ` buffers. |
 | `typst.concealMode` | local/global | `"line"` | Unconceal policy: `"line"` unconceals the active cursor line, and `"token"` unconceals only the token under the cursor. |
 | `typst.smartPairs` | local/global | `true` | Typst-aware smart pairing, skip-over, and pair-backspace for `$`, `[`, `(`, `{`, `"`. |
+| `typst.keyHints` | global | `true` | Show the context-aware, clickable shortcut hint bar on the bottom row and prompt helper hints. |
 | `typst.lspEnabled` | global | `true` | Enable `tinymist` LSP integration (`false` is equivalent to `--no-lsp`). |
 | `typst.tinymistPath` | global | `""` | Explicit path to `tinymist` or `tinymist.exe` (empty uses auto-discovery). |
 | `typst.debounceMs` | global | `150` | Debounce interval in milliseconds for `textDocument/didChange` updates. |

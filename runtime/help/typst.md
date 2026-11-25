@@ -1,8 +1,9 @@
 # TypX — Typst Authoring Guide
 
-TypX (`typx`) is a Typst-focused terminal editor built on `micro`, combining
-fast terminal editing with LyX-inspired math/structure ergonomics, a docked
-Document Outline sidebar, and first-class `tinymist` LSP + live browser preview.
+TypX (`typx`) is a terminal editor for Typst forked from `micro`, combining
+standard keybindings and live math concealment with structural/math shortcuts, a
+docked Document Outline sidebar, a Template Gallery, and `tinymist` LSP +
+side-by-side Sixel and browser live preview.
 
 ---
 
@@ -35,7 +36,7 @@ Key UX guarantees:
 
 ---
 
-## 2. LyX-Style Structural & Math Shortcuts
+## 2. Structural & Math Shortcuts
 
 All TypX shortcuts apply in `.typ` buffers and fall back cleanly in other files:
 
@@ -47,7 +48,7 @@ All TypX shortcuts apply in `.typ` buffers and fall back cleanly in other files:
 - `Alt-e` (`:wrap-italic`): Wrap selection or insert `_..._`.
 - `Alt-Left` (`:heading-promote`): Promote heading (`== ` -> `= `).
 - `Alt-Right` (`:heading-demote`): Demote heading (`= ` -> `== `).
-- `Alt-i` (`:insert`): Open the interactive template insert palette.
+- `Alt-i` (`:insert`): Open the interactive snippet insert palette.
 
 ### Built-in Snippets (`:insert <name>` or `:insert-<name>`)
 
@@ -129,10 +130,12 @@ typx --new @preview/charged-ieee my-paper
 
 ---
 
-## 5. `tinymist` LSP & Companion Live Preview
+## 5. `tinymist` LSP & Live Preview (Sixel & Browser)
 
-TypX integrates with `tinymist` over stdio JSON-RPC 2.0 for diagnostics,
-completion, hover docs, document symbols, and live browser preview.
+TypX integrates with `tinymist` for diagnostics, completion, hover docs,
+document symbols, and live preview—either as a docked in-terminal Sixel pane
+in Sixel-capable terminals or an auto-reloading browser preview with cursor
+synchronization.
 
 ### Installing `tinymist`
 
@@ -149,19 +152,43 @@ If `tinymist` is installed in a non-standard path, set:
 > set typst.tinymistPath /path/to/tinymist
 ```
 
-Run `typx --check` from your shell to verify discovery and version probing, or
-run `typx --no-lsp file.typ` for offline editing.
+Run `typx --check` from your shell to verify Sixel terminal detection and
+`tinymist` discovery/version probing, or run `typx --no-lsp file.typ` for
+offline editing.
 
 ### LSP & Preview Commands
 
-- `:preview` (`Alt-p`): Start or stop `tinymist` live browser preview with
-  debounced cursor synchronization. Opens the OS default browser automatically
-  when `typst.previewOpenBrowser` is `true`.
+- `:preview [inline|browser|focus|invert|trim|stop]` (`Alt-p`): Toggle live
+  preview. With no arguments, `typst.previewMode` (`"auto"` by default) uses
+  the right-docked Sixel pane when Sixel is supported and otherwise launches
+  `tinymist` browser preview (auto-opening the OS browser when
+  `typst.previewOpenBrowser` is `true`). Use `inline` or `browser` to toggle
+  a specific mode, `focus` to focus the inline Sixel pane, `invert` / `trim` to
+  toggle dark-mode inversion or margin trimming, and `stop` to close any active
+  preview.
 - `:lsp-complete` (`Ctrl-Space`): Trigger `tinymist` autocompletion.
 - `:hover` (`Alt-k`): Display `tinymist` hover documentation at the cursor.
 - `:diagnostics`: Display all diagnostics for the current `.typ` buffer.
 - `:tinymist-status`: Show binary path, LSP status, preview URL, and stderr log.
 - `:tinymist-restart`: Restart the `tinymist` subprocess.
+
+### In-Terminal Sixel Preview Controls
+
+When the right-docked Sixel preview pane is opened with `:preview inline` or
+focused with `:preview focus` (jumping from Document Outline also syncs the
+preview scroll position):
+
+- `Up` / `Down`, `k` / `j`, `w` / `s`, or Mouse Wheel: Scroll through pages.
+- `PgUp` / `PgDn`, `Ctrl-u` / `Ctrl-d`, or `Space`: Page up or down.
+- `[` / `]` or `Left` / `Right`: Jump to previous or next page.
+- `g` / `G` or `Home` / `End`: Jump to top or bottom of document.
+- `+` / `-`: Zoom preview in or out.
+- `<` / `>`: Widen or narrow the docked preview pane.
+- `t`: Toggle dark-mode color inversion (`typst.previewInvert`).
+- `m`: Toggle page margin trimming (`typst.previewTrimMargins`).
+- `r`: Force recompile and redraw preview.
+- `Esc`, `Enter`, `Tab`, or `Ctrl-w`: Return focus to the editor pane.
+- `q` or `Alt-p`: Close the preview pane.
 
 ---
 
@@ -176,7 +203,12 @@ See `> help options` for the full list of editor options. TypX-specific keys:
 - `typst.lspEnabled` (default `true`): Enable `tinymist` LSP integration.
 - `typst.tinymistPath` (default `""`): Custom path to `tinymist` binary.
 - `typst.debounceMs` (default `150`): Debounce delay (ms) for LSP edits.
-- `typst.previewOpenBrowser` (default `true`): Auto-open preview URL in browser.
+- `typst.previewMode` (default `"auto"`): Live preview mode (`"auto"`, `"inline"`, or `"browser"`).
+- `typst.previewWidth` (default `48`): Preferred width percentage (`20`–`80`) for the docked Sixel preview pane.
+- `typst.previewPPI` (default `144`): Render resolution in PPI (`72`–`300`) for Sixel preview pages.
+- `typst.previewInvert` (default `false`): Invert colors in the in-terminal Sixel preview for dark terminals.
+- `typst.previewTrimMargins` (default `false`): Trim excess outer page margins in the in-terminal Sixel preview.
+- `typst.previewOpenBrowser` (default `true`): Auto-open preview URL in browser when browser preview starts.
 - `typst.outlineWidth` (default `30`): Preferred Outline sidebar width (columns).
 - `typst.outlineShowLabels` (default `false`): Show standalone `<labels>` in Outline.
 - `typst.templatesWidth` (default `36`): Preferred Template Gallery sidebar width (columns).

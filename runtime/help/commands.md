@@ -20,8 +20,13 @@ quotes here but these are not necessary when entering the command in TypX.
 
 See `> help typst` for a walkthrough of Typst authoring workflows.
 
-* `preview`: toggles `tinymist` live browser preview for the active `.typ`
-   buffer (default key: `Alt-p`) with debounced cursor synchronization.
+* `preview ['inline'|'browser'|'focus'|'invert'|'trim'|'stop']`: toggles live
+   preview for the active `.typ` buffer (default key: `Alt-p`). Without
+   arguments, `typst.previewMode` (`auto` by default) opens a right-docked
+   in-terminal Sixel preview when supported, otherwise `tinymist` browser
+   preview with debounced cursor synchronization. Subcommands toggle the
+   `inline` Sixel pane or `browser` preview, `focus` the inline pane, toggle
+   `invert` (dark mode) or `trim` (margins), or `stop` any active preview.
 
 * `outline ['on'|'off'|'open'|'close'|'toggle']`: toggles or controls the
    docked Document Outline sidebar (default key: `Alt-o`).
@@ -57,7 +62,7 @@ See `> help typst` for a walkthrough of Typst authoring workflows.
 * `heading-demote`: demotes a Typst heading by one level (`= ` -> `== `,
    default key: `Alt-Right`).
 
-* `insert ['template']`: opens the LyX-style insert palette (default key:
+* `insert ['template']`: opens the Typst snippet insert palette (default key:
    `Alt-i`), or directly expands a built-in template (`figure`, `table`, `frac`,
    `matrix`, `cases`, `code`, `callout`, `vec`, `hat`, `bar`). Each template
    is also available directly as `insert-<template>` (e.g., `insert-figure`,

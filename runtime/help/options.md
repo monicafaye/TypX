@@ -57,8 +57,38 @@ globally, via CLI flag, or in an `"ft:typst"` block in `settings.json`.
 
     default value: `150`
 
+* `typst.previewMode`: `global only`. Controls which live preview mode `:preview`
+   (`Alt-p`) and `--preview` launch:
+   * `auto`: use the docked in-terminal Sixel preview pane when supported by the
+     terminal, otherwise use `tinymist` browser preview.
+   * `inline`: use the docked in-terminal Sixel preview pane.
+   * `browser`: use `tinymist` browser preview.
+
+    default value: `"auto"`
+
+* `typst.previewWidth`: `global only`. Preferred width percentage (`20`–`80`)
+   for the docked in-terminal Sixel preview pane (requires terminal width >= 60
+   columns).
+
+    default value: `48`
+
+* `typst.previewPPI`: `global only`. Render resolution in pixels per inch (PPI,
+   clamped to `72`–`300`) for in-terminal Sixel preview pages.
+
+    default value: `144`
+
+* `typst.previewInvert`: `global only`. Invert page colors by default in the
+   in-terminal Sixel preview for dark terminal backgrounds.
+
+    default value: `false`
+
+* `typst.previewTrimMargins`: `global only`. Trim excess outer page margins by
+   default in the in-terminal Sixel preview.
+
+    default value: `false`
+
 * `typst.previewOpenBrowser`: `global only`. Automatically open the local
-   `tinymist` preview URL in the OS default browser when `:preview` (`Alt-p`)
+   `tinymist` preview URL in the OS default browser when browser preview
    starts.
 
     default value: `true`
@@ -706,10 +736,16 @@ options in JSON format:
     "typst.conceal": true,
     "typst.concealMode": "line",
     "typst.debounceMs": 150,
+    "typst.keyHints": true,
     "typst.lspEnabled": true,
     "typst.outlineShowLabels": false,
     "typst.outlineWidth": 30,
+    "typst.previewInvert": false,
+    "typst.previewMode": "auto",
     "typst.previewOpenBrowser": true,
+    "typst.previewPPI": 144,
+    "typst.previewTrimMargins": false,
+    "typst.previewWidth": 48,
     "typst.smartPairs": true,
     "typst.templatesWidth": 36,
     "typst.tinymistPath": "",
