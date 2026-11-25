@@ -8,7 +8,7 @@ import (
 
 //go:generate go run syntax/make_headers.go syntax
 
-//go:embed colorschemes help plugins syntax templates
+//go:embed colorschemes help plugins syntax
 var runtime embed.FS
 
 func fixPath(name string) string {

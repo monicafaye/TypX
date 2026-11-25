@@ -77,7 +77,9 @@ func TestScaffoldAndSavePersonalTemplate(t *testing.T) {
 	_, err = SavePersonalTemplate(cfgDir, "../evil", sample, false, false)
 	assert.Error(t, err)
 
-	// Scaffold built-in single-file template to file and check non-clobbering.
+	// Seed and scaffold personal single-file template to file and check non-clobbering.
+	notesPath := filepath.Join(cfgDir, "templates", "notes.typ")
+	require.NoError(t, os.WriteFile(notesPath, []byte("// @title: Study Notes\n// @desc: Two-column study notes\n= {{title}}\n// {{author}} {{date}}\n"), 0o644))
 	all := DiscoverOffline(DiscoverOptions{ConfigDir: cfgDir})
 	notes, ok := ResolveByName(all, "notes")
 	require.True(t, ok)

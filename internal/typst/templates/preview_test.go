@@ -157,7 +157,10 @@ func TestLoadTemplatePreviewImagesLocalUniverseAndCompiledCache(t *testing.T) {
 	require.Len(t, imgs, 1)
 	assert.Equal(t, image.Rect(0, 0, 16, 24), imgs[0].Bounds())
 
-	// 2. Built-in starter compiles once via compileFn, writes SHA-256 PNG cache, then hits cache.
+	// 2. Personal template compiles once via compileFn, writes SHA-256 PNG cache, then hits cache.
+	persDir := filepath.Join(tmp, "cfg", "templates")
+	require.NoError(t, os.MkdirAll(persDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "notes.typ"), []byte("#let note(title, body) = []\n= {{title}}\n"), 0o644))
 	all := DiscoverOffline(DiscoverOptions{ConfigDir: filepath.Join(tmp, "cfg")})
 	notes, ok := ResolveByName(all, "notes")
 	require.True(t, ok)

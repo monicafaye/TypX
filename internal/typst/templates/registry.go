@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/monicafaye/TypX/internal/config"
-	rt "github.com/monicafaye/TypX/runtime"
 )
 
 // PackageDirs returns Typst's (localDataDir, cacheDir) honoring environment
@@ -63,7 +62,7 @@ func packageDirsForOS(goos string, getenv func(string) string, home string) (loc
 	return localDir, cacheDir
 }
 
-// DiscoverOffline scans project-local, personal, embedded starter, @local, and
+// DiscoverOffline scans project-local, personal, @local, and
 // cached @preview templates in precedence order without any network calls.
 func DiscoverOffline(opts DiscoverOptions) []Template {
 	cfgDir := opts.ConfigDir
@@ -92,10 +91,7 @@ func DiscoverOffline(opts DiscoverOptions) []Template {
 		out = append(out, scanTemplateDir(persDir, SourcePersonal, "personal/")...)
 	}
 
-	// 3. Embedded built-in starters (runtime/templates/*.typ).
-	out = append(out, scanBuiltinTemplates()...)
-
-	// 4. Local @local packages.
+	// 3. Local @local packages.
 	if localPkgDir != "" {
 		out = append(out, scanPackageNamespace(filepath.Join(localPkgDir, "local"), "local", SourceLocalPkg)...)
 	}
@@ -208,53 +204,6 @@ func scanTemplateDir(dir string, source SourceKind, idPrefix string) []Template 
 	}
 
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].Name < out[j].Name
-	})
-	return out
-}
-
-func scanBuiltinTemplates() []Template {
-	names, err := rt.AssetDir("templates")
-	if err != nil {
-		return nil
-	}
-	var out []Template
-	for _, file := range names {
-		if strings.ToLower(filepath.Ext(file)) != ".typ" {
-			continue
-		}
-		assetPath := "templates/" + file
-		raw, err := rt.Asset(assetPath)
-		if err != nil {
-			continue
-		}
-		stem := strings.TrimSuffix(file, filepath.Ext(file))
-		title, desc, cat, _ := ParseCommentMetadata(string(raw))
-		if title == "" {
-			title = humanizeSlug(stem)
-		}
-		if cat == "" {
-			cat = "Starter"
-		}
-		out = append(out, Template{
-			ID:          stem,
-			Name:        stem,
-			Title:       title,
-			Description: desc,
-			Category:    cat,
-			Source:      SourceBuiltin,
-			Entrypoint:  file,
-			AssetName:   assetPath,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		// Keep minimal first, then alphabetical.
-		if out[i].Name == "minimal" && out[j].Name != "minimal" {
-			return true
-		}
-		if out[j].Name == "minimal" && out[i].Name != "minimal" {
-			return false
-		}
 		return out[i].Name < out[j].Name
 	})
 	return out
@@ -401,7 +350,7 @@ func parseSemverParts(v string) [3]int {
 }
 
 // ResolveByName finds the best matching template for query following precedence:
-// Project > Personal > Built-in > @local > Cached @preview > Typst Universe.
+// Project > Personal > @local > Cached @preview > Typst Universe.
 func ResolveByName(all []Template, query string) (Template, bool) {
 	q := strings.TrimSpace(query)
 	if q == "" {
@@ -421,14 +370,6 @@ func ResolveByName(all []Template, query string) (Template, bool) {
 		for _, t := range ordered {
 			if strings.ToLower(t.ID) == qLower {
 				return t, true
-			}
-		}
-		if strings.HasPrefix(qLower, "builtin/") {
-			stem := strings.TrimPrefix(qLower, "builtin/")
-			for _, t := range ordered {
-				if t.Source == SourceBuiltin && strings.ToLower(t.Name) == stem {
-					return t, true
-				}
 			}
 		}
 		return Template{}, false
@@ -462,7 +403,7 @@ func ResolveByName(all []Template, query string) (Template, bool) {
 		return Template{}, false
 	}
 
-	// 3. Unqualified match respecting Source precedence (Project > Personal > Built-in > ...).
+	// 3. Unqualified match respecting Source precedence (Project > Personal > @local > ...).
 	for _, t := range ordered {
 		if strings.ToLower(t.ID) == qLower || strings.ToLower(t.Name) == qLower ||
 			(t.PackageSpec != "" && strings.ToLower(t.PackageSpec) == qLower) {

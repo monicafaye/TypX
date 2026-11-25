@@ -340,7 +340,6 @@ func (tp *TemplatePane) rebuildRows() {
 
 	sectionOrder := []string{
 		"Project & Personal",
-		"Built-in Starters",
 		"Local & Cached",
 		"Typst Universe",
 	}
@@ -922,8 +921,6 @@ func (tp *TemplatePane) rowStyle(gr GalleryRow, isSelected bool) tcell.Style {
 		switch gr.Template.Source {
 		case SourceProject, SourcePersonal:
 			base = lookupStyle("identifier.class", config.DefStyle)
-		case SourceBuiltin:
-			base = lookupStyle("identifier", config.DefStyle)
 		default:
 			base = lookupStyle("type", config.DefStyle)
 		}
@@ -2355,7 +2352,7 @@ func (tp *TemplatePane) closeSourcePreview() {
 }
 
 func renderSourcePreviewText(t Template) string {
-	if t.AssetName != "" || t.FilePath != "" {
+	if t.FilePath != "" {
 		if rendered, err := RenderEntry(t, TemplateVars{Title: t.DisplayTitle()}); err == nil {
 			return rendered
 		}

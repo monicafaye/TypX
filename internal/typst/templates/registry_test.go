@@ -92,16 +92,18 @@ func TestDiscoverOfflineAndPrecedence(t *testing.T) {
 		CachePackagesDir: cachePkgDir,
 	})
 
-	// Check project template overrides personal & builtin when resolving by name.
+	// Check project template overrides personal when resolving by name.
 	resolved, ok := ResolveByName(found, "article")
 	require.True(t, ok)
 	assert.Equal(t, SourceProject, resolved.Source)
 	assert.Equal(t, "Project Article", resolved.Title)
 
-	// Built-in templates can still be selected explicitly or via default names.
-	notes, ok := ResolveByName(found, "notes")
+	// Built-in starters are no longer embedded; personal templates still resolve explicitly.
+	_, hasBuiltin := ResolveByName(found, "minimal")
+	assert.False(t, hasBuiltin)
+	persArticle, ok := ResolveByName(found, "personal/article")
 	require.True(t, ok)
-	assert.Equal(t, SourceBuiltin, notes.Source)
+	assert.Equal(t, SourcePersonal, persArticle.Source)
 
 	// Multi-file personal template discovered.
 	thesis, ok := ResolveByName(found, "thesis")

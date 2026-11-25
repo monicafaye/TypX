@@ -100,6 +100,11 @@ func TestEffectiveWidth(t *testing.T) {
 func TestTemplatePaneNavigationFilterApplyAndUniverse(t *testing.T) {
 	initPaneTestEnv(t, 120, 30)
 
+	persDir := filepath.Join(config.ConfigDir, "templates")
+	require.NoError(t, os.MkdirAll(persDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "minimal.typ"), []byte("// @title: Minimal Document\n= {{title}}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "notes.typ"), []byte("// @title: Study Notes\n= {{title}}\n"), 0o644))
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`[{"name":"charged-ieee","version":"0.1.4","description":"IEEE paper","categories":["paper"],"template":{"path":"template","entrypoint":"main.typ"}}]`))
 	}))
@@ -268,6 +273,11 @@ func (f *fakePreviewProvider) CompileTypst(ctx context.Context, filePath, rootDi
 
 func TestTemplatePaneLivePreviewDefaultOnToggleAndCleanup(t *testing.T) {
 	initPaneTestEnv(t, 120, 30)
+
+	persDir := filepath.Join(config.ConfigDir, "templates")
+	require.NoError(t, os.MkdirAll(persDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "minimal.typ"), []byte("// @title: Minimal Document\n= {{title}}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "notes.typ"), []byte("// @title: Study Notes\n= {{title}}\n"), 0o644))
 
 	SetPreviewCacheDir(filepath.Join(t.TempDir(), "preview-cache"))
 	fp := &fakePreviewProvider{visual: true}

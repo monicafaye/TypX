@@ -8,7 +8,6 @@ type SourceKind int
 const (
 	SourceProject SourceKind = iota
 	SourcePersonal
-	SourceBuiltin
 	SourceLocalPkg
 	SourceCachedPkg
 	SourceUniverse
@@ -21,8 +20,6 @@ func (s SourceKind) String() string {
 		return "Project"
 	case SourcePersonal:
 		return "Personal"
-	case SourceBuiltin:
-		return "Built-in"
 	case SourceLocalPkg:
 		return "@local"
 	case SourceCachedPkg:
@@ -39,8 +36,6 @@ func (s SourceKind) SectionTitle() string {
 	switch s {
 	case SourceProject, SourcePersonal:
 		return "Project & Personal"
-	case SourceBuiltin:
-		return "Built-in Starters"
 	case SourceLocalPkg, SourceCachedPkg:
 		return "Local & Cached"
 	case SourceUniverse:
@@ -50,21 +45,20 @@ func (s SourceKind) SectionTitle() string {
 	}
 }
 
-// Template describes an offline starter, user template, or Typst package template.
+// Template describes a user template or Typst package template.
 type Template struct {
-	ID          string
-	Name        string
-	Title       string
-	Description string
-	Category    string
-	Version     string
-	Source      SourceKind
-	IsMultiFile bool
-	DirPath     string
-	FilePath    string
+	ID            string
+	Name          string
+	Title         string
+	Description   string
+	Category      string
+	Version       string
+	Source        SourceKind
+	IsMultiFile   bool
+	DirPath       string
+	FilePath      string
 	Entrypoint    string
 	PackageSpec   string
-	AssetName     string
 	ThumbnailPath string
 	ThumbnailName string
 }

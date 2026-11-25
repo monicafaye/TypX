@@ -74,6 +74,15 @@ func TestE2E_TemplatesGalleryEmptyHintSaveAndMockTinymistInit(t *testing.T) {
 	ed.Pump(4)
 	assert.Contains(t, ed.InfoBarText(), "Alt+⇧N Templates")
 
+	// Seed a personal template in config.ConfigDir before opening the gallery.
+	persDir := filepath.Join(config.ConfigDir, "templates")
+	require.NoError(t, os.MkdirAll(persDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(persDir, "notes.typ"),
+		[]byte("// @title: Study Notes\n#let note(title, body) = [#strong(title): #body]\n\n= {{title}}\n\n== Key Ideas\n"),
+		0o644,
+	))
+
 	// 2. Alt+Shift+N opens Template Gallery docked on the left with TEMPLATES badge.
 	ed.InjectKey(tcell.KeyRune, 'N', tcell.ModAlt|tcell.ModShift)
 	tab := action.MainTab()
@@ -83,14 +92,14 @@ func TestE2E_TemplatesGalleryEmptyHintSaveAndMockTinymistInit(t *testing.T) {
 	assert.Contains(t, ed.InfoBarText(), "TEMPLATES")
 	assert.Contains(t, ed.ScreenLine(0), "Templates (")
 
-	// Filter with '/' to "notes" and press Enter -> inserts starter and returns focus.
+	// Filter with '/' to "notes" and press Enter -> inserts template and returns focus.
 	for _, r := range "/notes" {
 		ed.InjectKey(tcell.KeyRune, r, tcell.ModNone)
 	}
 	assert.Contains(t, ed.InfoBarText(), "Esc Clear Filter")
 	ed.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
 
-	assert.False(t, action.IsAuxiliaryPane(tab.ActivePane()), "applying starter must return focus to editor")
+	assert.False(t, action.IsAuxiliaryPane(tab.ActivePane()), "applying template must return focus to editor")
 	bufText := string(ed.Buf().Bytes())
 	assert.Contains(t, bufText, "#let note(title, body)")
 	assert.Contains(t, bufText, "= Blank")
@@ -182,6 +191,12 @@ func TestE2E_TemplateGalleryLiveVisualPreview(t *testing.T) {
 		templates.SetPreviewCacheDir("")
 	})
 
+	// Seed two personal templates so live preview renders and updates across j/k movement.
+	persDir := filepath.Join(config.ConfigDir, "templates")
+	require.NoError(t, os.MkdirAll(persDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "article.typ"), []byte("// @title: Academic Article\n= {{title}}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "minimal.typ"), []byte("// @title: Minimal Document\n= {{title}}\n"), 0o644))
+
 	tab := action.MainTab()
 	bp := ed.Pane()
 
@@ -190,19 +205,19 @@ func TestE2E_TemplateGalleryLiveVisualPreview(t *testing.T) {
 	require.True(t, ed.PumpUntil(3*time.Second, func() bool {
 		pp := preview.PaneForTab(tab)
 		return pp != nil && pp.HasOverride() && !pp.IsCompiling()
-	}), "expected live gallery preview pane to render starter automatically")
+	}), "expected live gallery preview pane to render template automatically")
 
 	pp := preview.PaneForTab(tab)
 	require.NotNil(t, pp)
-	assert.Equal(t, "Minimal Document", pp.OverrideTitle())
+	assert.Equal(t, "Academic Article", pp.OverrideTitle())
 	assert.Contains(t, ed.InfoBarText(), "v Preview●")
 
-	// 2. Pressing 'j' moves to next starter and updates preview override title.
+	// 2. Pressing 'j' moves to next template and updates preview override title.
 	ed.InjectKey(tcell.KeyRune, 'j', tcell.ModNone)
 	require.True(t, ed.PumpUntil(3*time.Second, func() bool {
 		cur := preview.PaneForTab(tab)
-		return cur != nil && cur.HasOverride() && cur.OverrideTitle() == "Academic Article" && !cur.IsCompiling()
-	}), "expected moving down in gallery to update preview to Academic Article")
+		return cur != nil && cur.HasOverride() && cur.OverrideTitle() == "Minimal Document" && !cur.IsCompiling()
+	}), "expected moving down in gallery to update preview to Minimal Document")
 
 	// 3. Pressing 'v' toggles live preview off and closes the auto-opened PreviewPane; 'v' again restores it.
 	ed.InjectKey(tcell.KeyRune, 'v', tcell.ModNone)

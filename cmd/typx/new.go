@@ -147,7 +147,6 @@ func printTemplateList(out io.Writer, items []templates.Template) {
 	}
 	sections := []string{
 		"Project & Personal",
-		"Built-in Starters",
 		"Local & Cached",
 	}
 	bySec := make(map[string][]templates.Template)
@@ -177,5 +176,10 @@ func printTemplateList(out io.Writer, items []templates.Template) {
 			}
 			fmt.Fprintf(out, "  %-28s %s\n", key, desc)
 		}
+	}
+	if !printed {
+		fmt.Fprintln(out, "No offline templates found.")
+		fmt.Fprintln(out, "Save templates under .typx/templates/ or <configDir>/templates/,")
+		fmt.Fprintln(out, "or initialize a package from Typst Universe with: typx --new @preview/<name>")
 	}
 }

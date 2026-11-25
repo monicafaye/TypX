@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	rt "github.com/monicafaye/TypX/runtime"
 )
 
 // ErrTargetExists is returned when scaffolding or saving would overwrite a
@@ -29,16 +27,10 @@ func ValidateTemplateName(name string) error {
 // ReadEntryContent returns the template's entry Typst source with leading
 // TypX metadata comments stripped.
 func ReadEntryContent(t Template) (string, error) {
-	var raw []byte
-	var err error
-	switch {
-	case t.AssetName != "":
-		raw, err = rt.Asset(t.AssetName)
-	case t.FilePath != "":
-		raw, err = os.ReadFile(t.FilePath)
-	default:
+	if t.FilePath == "" {
 		return "", fmt.Errorf("template %q has no readable source", t.DisplayTitle())
 	}
+	raw, err := os.ReadFile(t.FilePath)
 	if err != nil {
 		return "", err
 	}
@@ -46,8 +38,8 @@ func ReadEntryContent(t Template) (string, error) {
 	return body, nil
 }
 
-// RenderEntry renders t's entry file with variable substitution (for starters
-// and personal/project templates). Package templates are returned verbatim.
+// RenderEntry renders t's entry file with variable substitution (for personal
+// and project templates). Package templates are returned verbatim.
 func RenderEntry(t Template, vars TemplateVars) (string, error) {
 	body, err := ReadEntryContent(t)
 	if err != nil {
@@ -147,7 +139,7 @@ func ScaffoldToDir(t Template, targetDir string, vars TemplateVars, force bool) 
 	entryRel := t.Entrypoint
 	if entryRel == "" || !strings.HasSuffix(strings.ToLower(entryRel), ".typ") {
 		entryRel = "main.typ"
-	} else if t.Source == SourcePersonal || t.Source == SourceProject || t.Source == SourceBuiltin {
+	} else if t.Source == SourcePersonal || t.Source == SourceProject {
 		entryRel = "main.typ"
 	}
 	entryAbs := filepath.Join(absDir, filepath.FromSlash(entryRel))

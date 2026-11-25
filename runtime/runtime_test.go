@@ -28,17 +28,14 @@ func TestAssetDir(t *testing.T) {
 	assert.Contains(t, colorEntries, "typx-dark.micro")
 	assert.Contains(t, colorEntries, "typx-light.micro")
 
-	templateEntries, err := AssetDir("templates")
-	assert.NoError(t, err)
-	assert.Contains(t, templateEntries, "article.typ")
-	assert.Contains(t, templateEntries, "notes.typ")
-	assert.Contains(t, templateEntries, "slides.typ")
+	_, err = AssetDir("templates")
+	assert.Error(t, err)
 
-	data, err := Asset("templates/article.typ")
+	data, err := Asset("help/typst.md")
 	assert.NoError(t, err)
-	assert.Contains(t, string(data), "{{title}}")
+	assert.Contains(t, string(data), "TypX")
 
-	prefixedData, err := Asset("runtime/templates/article.typ")
+	prefixedData, err := Asset("runtime/help/typst.md")
 	assert.NoError(t, err)
 	assert.Equal(t, data, prefixedData)
 }

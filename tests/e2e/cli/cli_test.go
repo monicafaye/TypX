@@ -645,22 +645,32 @@ func TestE2E_LiveTinymist_Smoke(t *testing.T) {
 func TestCLI_NewFlagListAndNoClobber(t *testing.T) {
 	typx := harness.BuildTypxBinary(t)
 	cfgDir := harness.IsolatedConfigDir(t, nil)
+	env := map[string]string{
+		"TYPX_CONFIG_HOME":         cfgDir,
+		"TYPST_PACKAGE_PATH":       t.TempDir(),
+		"TYPST_PACKAGE_CACHE_PATH": t.TempDir(),
+	}
 
-	res := harness.RunCLI(t, typx, map[string]string{
-		"TYPX_CONFIG_HOME": cfgDir,
-	}, "", "--new", "list")
+	// Empty offline library reports helpful guidance cleanly.
+	emptyRes := harness.RunCLI(t, typx, env, "", "--new", "list")
+	require.Equal(t, 0, emptyRes.ExitCode, "stderr: %s", emptyRes.Stderr)
+	assert.Contains(t, emptyRes.Stdout, "No offline templates found.")
+	assert.NotContains(t, emptyRes.Stdout, "Built-in Starters:")
+
+	// With personal templates in <cfgDir>/templates, --new list shows Project & Personal.
+	persDir := filepath.Join(cfgDir, "templates")
+	require.NoError(t, os.MkdirAll(persDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "notes.typ"), []byte("// @title: Notes\n= {{title}}\n"), 0o644))
+
+	res := harness.RunCLI(t, typx, env, "", "--new", "list")
 	require.Equal(t, 0, res.ExitCode, "stderr: %s", res.Stderr)
-	assert.Contains(t, res.Stdout, "Built-in Starters:")
-	assert.Contains(t, res.Stdout, "article")
+	assert.Contains(t, res.Stdout, "Project & Personal:")
 	assert.Contains(t, res.Stdout, "notes")
-	assert.Contains(t, res.Stdout, "paper")
 
 	// Refuses overwriting an existing non-empty file with clear error and exit code 1.
 	existing := filepath.Join(t.TempDir(), "existing.typ")
 	require.NoError(t, os.WriteFile(existing, []byte("= Keep Me\n"), 0o644))
-	errRes := harness.RunCLI(t, typx, map[string]string{
-		"TYPX_CONFIG_HOME": cfgDir,
-	}, "", "--new", "notes", existing)
+	errRes := harness.RunCLI(t, typx, env, "", "--new", "notes", existing)
 	assert.Equal(t, 1, errRes.ExitCode)
 	assert.Contains(t, errRes.Stderr, "already exists")
 

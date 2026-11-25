@@ -14,19 +14,34 @@ import (
 
 func TestHandleNewFlagList(t *testing.T) {
 	origCfg := config.ConfigDir
-	config.ConfigDir = t.TempDir()
+	cfgDir := t.TempDir()
+	config.ConfigDir = cfgDir
 	t.Cleanup(func() { config.ConfigDir = origCfg })
+	t.Setenv("TYPST_PACKAGE_PATH", t.TempDir())
+	t.Setenv("TYPST_PACKAGE_CACHE_PATH", t.TempDir())
 	config.InitRuntimeFiles(false)
 
-	var out bytes.Buffer
-	args, exitNow, err := handleNewFlag("list", nil, &out, nil)
+	var emptyOut bytes.Buffer
+	args, exitNow, err := handleNewFlag("list", nil, &emptyOut, nil)
 	require.NoError(t, err)
 	assert.True(t, exitNow)
 	assert.Nil(t, args)
-	assert.Contains(t, out.String(), "Built-in Starters:")
+	assert.Contains(t, emptyOut.String(), "No offline templates found.")
+	assert.NotContains(t, emptyOut.String(), "Built-in Starters:")
+
+	persDir := filepath.Join(cfgDir, "templates")
+	require.NoError(t, os.MkdirAll(persDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "article.typ"), []byte("// @title: Article\n= {{title}}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "notes.typ"), []byte("// @title: Notes\n= {{title}}\n"), 0o644))
+
+	var out bytes.Buffer
+	args, exitNow, err = handleNewFlag("list", nil, &out, nil)
+	require.NoError(t, err)
+	assert.True(t, exitNow)
+	assert.Nil(t, args)
+	assert.Contains(t, out.String(), "Project & Personal:")
 	assert.Contains(t, out.String(), "article")
 	assert.Contains(t, out.String(), "notes")
-	assert.Contains(t, out.String(), "slides")
 }
 
 func TestHandleNewFlagSingleMultiPersonalAndNoClobber(t *testing.T) {
@@ -36,8 +51,13 @@ func TestHandleNewFlagSingleMultiPersonalAndNoClobber(t *testing.T) {
 	t.Cleanup(func() { config.ConfigDir = origCfg })
 	config.InitRuntimeFiles(true)
 
+	persDir := filepath.Join(cfgDir, "templates")
+	require.NoError(t, os.MkdirAll(persDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "notes.typ"), []byte("#let note(title, body) = []\n= {{title}}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "article.typ"), []byte("= {{title}}\n"), 0o644))
+
 	tmp := t.TempDir()
-	// 1. Single-file starter with explicit target path & cursor line flag preserved.
+	// 1. Single-file personal template with explicit target path & cursor line flag preserved.
 	targetFile := filepath.Join(tmp, "hw-1.typ")
 	openArgs, exitNow, err := handleNewFlag("notes", []string{targetFile, "+10"}, nil, nil)
 	require.NoError(t, err)
@@ -54,8 +74,8 @@ func TestHandleNewFlagSingleMultiPersonalAndNoClobber(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
 
-	// 3. Personal template overrides built-in and multi-file folder scaffolds to directory.
-	persMulti := filepath.Join(cfgDir, "templates", "lab")
+	// 3. Multi-file personal template folder scaffolds to directory.
+	persMulti := filepath.Join(persDir, "lab")
 	require.NoError(t, os.MkdirAll(persMulti, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(persMulti, "main.typ"), []byte("= {{title}}\n#import \"defs.typ\": *\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(persMulti, "defs.typ"), []byte("#let x = 42\n"), 0o644))
