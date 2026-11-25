@@ -74,6 +74,12 @@ globally, via CLI flag, or in an `"ft:typst"` block in `settings.json`.
 
     default value: `false`
 
+* `typst.templatesWidth`: `global only`. Preferred width in columns for the
+   docked Template Gallery sidebar (`Alt-Shift-n` / `:templates`).
+   Automatically hides when terminal width is below 50 columns.
+
+    default value: `36`
+
 ## General editor options
 
 Here are the available editor options:
@@ -705,6 +711,7 @@ options in JSON format:
     "typst.outlineWidth": 30,
     "typst.previewOpenBrowser": true,
     "typst.smartPairs": true,
+    "typst.templatesWidth": 36,
     "typst.tinymistPath": "",
     "useprimary": true,
     "wordwrap": false,

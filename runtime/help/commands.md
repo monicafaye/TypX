@@ -26,6 +26,18 @@ See `> help typst` for a walkthrough of Typst authoring workflows.
 * `outline ['on'|'off'|'open'|'close'|'toggle']`: toggles or controls the
    docked Document Outline sidebar (default key: `Alt-o`).
 
+* `templates ['toggle'|'open'|'close'|'focus'|'universe'|'refresh']`: toggles
+   or controls the docked Template Gallery sidebar (default key: `Alt-N` /
+   `Alt-Shift-n`).
+
+* `template ['name'] ['dir'|--preamble]`: opens the Template Gallery if no
+   name is given, applies a starter/personal template, or scaffolds a
+   multi-file/`@local`/`@preview` template into a project folder.
+
+* `template-save 'name' [--preamble] [--force]`: saves the active buffer (or
+   only the preamble before the first top-level `=` heading with `--preamble`)
+   into `<config-dir>/templates/<name>.typ`.
+
 * `conceal ['on'|'off'|'true'|'false']`: toggles or sets live Unicode math and
    typography concealment for the active `.typ` buffer (default key: `Alt-c`).
 

@@ -21,6 +21,7 @@ editor defaults.
 | Alt-m         | `> math-inline`    | Insert inline math `$|$`, wrap selection, or exit inline math             |
 | Alt-M         | `> math-display`   | Insert multi-line display math block (`Alt-Shift-m`)                      |
 | Alt-i         | `> insert`         | Open LyX-style template insert palette                                    |
+| Alt-N         | `> templates`      | Toggle docked Template Gallery sidebar (`Alt-Shift-n`)                    |
 | Alt-b         | `> wrap-bold`      | Wrap selection or insert `*bold*`                                         |
 | Alt-e         | `> wrap-italic`    | Wrap selection or insert `_italic_`                                       |
 | Alt-Left      | `> heading-promote`| Promote heading level (`== ` -> `= `)                                     |
@@ -38,6 +39,21 @@ editor defaults.
 | Enter / Mouse Click  | Jump editor to entry, center viewport, and return focus          |
 | /                    | Filter outline entries (`Esc` clears, `Enter` accepts)           |
 | Esc / Tab            | Return focus to the editor without jumping                       |
+
+### Template Gallery Sidebar (when focused)
+
+| Key                  | Description of function                                          |
+|----------------------|------------------------------------------------------------------|
+| Up / Down or k / j   | Move selection up / down (skipping section headers)              |
+| Home / End           | Jump to first / last selectable template                         |
+| PgUp / PgDn          | Page up / down through template rows                             |
+| Enter                | Apply starter/personal template or scaffold multi-file project   |
+| p                    | Insert preamble or package entrypoint at top of current buffer   |
+| n                    | Scaffold template into a new project directory                   |
+| u                    | Load or refresh Typst Universe (`@preview`) online catalog       |
+| /                    | Filter templates (`Esc` clears, `Enter` accepts)                 |
+| Esc / Tab            | Return focus to the editor                                       |
+| q / Alt-N            | Close the Template Gallery sidebar                               |
 
 ### Power user
 

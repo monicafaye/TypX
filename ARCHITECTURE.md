@@ -21,6 +21,7 @@ flowchart TB
         Conceal["internal/typst/conceal (Symbol Table, VisualMap)"]
         Shortcuts["internal/typst/shortcuts (Wrappers, Snippets, Smart Pairs)"]
         Outline["internal/typst/outline (Incremental Parser, OutlinePane)"]
+        Templates["internal/typst/templates (Offline Registry, Universe Client, TemplatePane)"]
         Preview["internal/typst/preview (Sixel, PNG Deck, PDF Anchor Index, PreviewPane)"]
         LSP["internal/lsp (tinymist JSON-RPC Client, Root Resolver, Browser Proxy)"]
     end
@@ -41,6 +42,7 @@ flowchart TB
     Cmd --> Features
     Cmd --> LSP
     Cmd --> Preview
+    Cmd --> Templates
     Cmd --> Action
     Cmd --> Buffer
     Cmd --> Display
@@ -52,6 +54,7 @@ flowchart TB
     Features --> Shortcuts
     Features --> Outline
     Features --> Preview
+    Features --> Templates
     Features --> LSP
     Features --> Action
     Features --> Buffer
@@ -67,6 +70,11 @@ flowchart TB
     Outline --> Display
     Outline --> Screen
     Outline --> Config
+    Templates --> Action
+    Templates --> Buffer
+    Templates --> Display
+    Templates --> Screen
+    Templates --> Config
     Preview --> Action
     Preview --> Buffer
     Preview --> Display
@@ -106,8 +114,9 @@ Filesystem inspection does not reveal runtime ordering constraints; these sequen
 1. **Config Directory Precedence (`internal/config/config.go`)**:
    `-config-dir` flag → `TYPX_CONFIG_HOME` → `<os.UserConfigDir()>/typx` → `~/.config/typx`.
 2. **Startup Sequence (`cmd/typx/typx.go`)**:
-   - Parse flags (`-check`, `-no-lsp`, `-preview`, `-config-dir`, and dynamic `-<option>` overrides) and initialize config/settings.
+   - Parse flags (`-check`, `-no-lsp`, `-preview`, `-new`, `-config-dir`, and dynamic `-<option>` overrides) and initialize config/settings.
    - If `-check`, run `runCheck` (bounded `tinymist` version probe + environment check) and exit without touching the terminal screen.
+   - If `-new <template>`, run `handleNewFlag` (printing template catalog on `-new list` and exiting, or scaffolding starter/personal/package files non-destructively and passing the created entrypoint to `lsp.Init` and `LoadInput`).
    - Call **`preview.ProbeTerminal()` *before* `screen.Init()`**: terminal capability/cell-pixel queries read stdin/stdout directly before `tcell` takes ownership of the TTY.
    - Initialize `screen`, clipboard, and `config.LoadAllPlugins()`.
    - Run **`features.Init()`** *before* **`lsp.Init(lsp.Options{StartPreview, InitialFiles})`**: `features.Init()` installs `lsp.SetInlinePreviewHandler`, which `lsp.ShouldUseInlinePreview()` reads to decide whether `-preview` opens inline or in the browser. Passing `InitialFiles` lets LSP resolve the Typst project root before `LoadInput` runs.
@@ -151,6 +160,7 @@ To keep upstream `micro` diffs minimal and localized, TypX interacts with `micro
 | `preview.TinymistCompiler.DiscoverFn` & `preview.SetRootResolver` | `TinymistDiscoveryFunc`, `RootResolverFunc` | `lsp.Discover` and `lsp.FindProjectRoot` | Reuses LSP binary discovery and multi-file root resolution without importing `internal/lsp`. |
 | `outline.SetSymbolProvider` | `outline.SymbolProvider` | `lsp.RequestDocumentSymbols` → `convertLSPSymbols` | Enriches the pure-Go outline parser with `tinymist` `textDocument/documentSymbol` results when LSP is active. |
 | `outline.SetJumpHandler` | `outline.JumpHandler` | `syncPreviewToOutlineItem` → `preview.PreviewPane.ScrollToSection` & `lsp.ScrollPreviewTo` | Repositions inline Sixel and/or browser preview when an outline entry is selected without coupling `outline` to `preview` or `lsp`. |
+| `templates.SetExternalBackend` & `templates.SetRootResolver` | `templates.ExternalBackend` (`InitTemplate`, `GetTemplateEntry`), `func(string) string` | `lspTemplateAdapter` (`lsp.InitTemplate`, `lsp.GetTemplateEntry`), `lsp.FindProjectRoot` | Lets `TemplatePane` and `:template` scaffold `@preview`/`@local` packages and fetch entrypoints via `tinymist` without importing `internal/lsp`. |
 | `shortcuts.SetModeDetector` | `func(lines [][]byte, line, col int) shortcuts.Mode` | `typst.DetectModeAt` (with rune-to-character cluster column mapping) | Injects canonical lexical mode detection into `shortcuts` (note: `shortcuts/mode.go` retains a standalone fallback; `internal/typst` is stdlib-only, so this seam is historical rather than cycle-required). |
 
 ---
@@ -168,7 +178,7 @@ To keep upstream `micro` diffs minimal and localized, TypX interacts with `micro
 
 ### 5.2 `tinymist` LSP & Browser Preview (`internal/lsp`)
 
-- **Interface**: `lsp.Init(Options)`, `lsp.Shutdown()`, `lsp.Check(io.Writer)`, `lsp.Discover`, `lsp.FindProjectRoot`, `lsp.RequestDocumentSymbols`, `lsp.ScrollPreviewTo`, `lsp.IsPreviewActive`, `lsp.ShouldUseInlinePreview`, plus commands/actions (`:preview`, `:diagnostics`, `:tinymist-status`, `:tinymist-restart`, `:hover`, `:lsp-complete`).
+- **Interface**: `lsp.Init(Options)`, `lsp.Shutdown()`, `lsp.Check(io.Writer)`, `lsp.Discover`, `lsp.FindProjectRoot`, `lsp.RequestDocumentSymbols`, `lsp.ScrollPreviewTo`, `lsp.InitTemplate`, `lsp.GetTemplateEntry`, `lsp.IsPreviewActive`, `lsp.ShouldUseInlinePreview`, plus commands/actions (`:preview`, `:diagnostics`, `:tinymist-status`, `:tinymist-restart`, `:hover`, `:lsp-complete`).
 - **Implementation**:
   - Binary discovery checks `typst.tinymistPath`, `PATH`, and OS-specific install paths (WinGet, Scoop, Cargo, Homebrew, `~/.local/bin`, VS Code extensions). Startup reads `ServerInfo.Version` from the LSP `initialize` response rather than running a blocking `--version` probe.
   - Stdio JSON-RPC 2.0 transport (`Content-Length` framing) with dedicated reader/writer goroutines, UTF-16 ↔ rune column conversion, debounced document sync, and a stderr ring buffer surfaced via `:tinymist-status`.
@@ -212,6 +222,18 @@ To keep upstream `micro` diffs minimal and localized, TypX interacts with `micro
   - In bundled Lua plugins: close `*os.File` handles from `os.Create` (prevents Windows locks), use `LocFromVisual`, and keep `autoclose.lua` yielding on `.typ` buffers when `typst.smartPairs` is enabled.
   - Statuslines, preview footers, and the bottom bar must compact or drop low-priority items gracefully in narrow 3-pane layouts.
 
+### 5.6 Template Gallery & Project Scaffolding (`internal/typst/templates`)
+
+- **Interface**: `templates.Init`, `templates.SetExternalBackend`, `templates.SetRootResolver`, `templates.DiscoverOffline`, `templates.ResolveByName`, `templates.ScaffoldToFile`, `templates.ScaffoldToDir`, `templates.SavePersonalTemplate`, `UniverseClient`, `TemplatePane` (`action.Pane`, `action.AuxiliaryPane`, `display.Window`), plus commands/actions (`:templates`, `:template`, `:template-save`, `ToggleTemplates` / `Alt+Shift+N`).
+- **Implementation**:
+  - Offline registry scans project-local (`.typx/templates/`), personal (`<ConfigDir>/templates/`), embedded starters (`runtime/templates/*.typ`), and OS Typst `@local` / cached `@preview` package directories (with a pure-Go `typst.toml` parser, never invoking `tinymist.getResources([])`).
+  - `UniverseClient` loads and caches Typst Universe `@preview/index.json` only on demand (ETag + 24h TTL stripped cache) and provides a zip-slip-guarded `.tar.gz` extraction fallback into Typst's package cache directory.
+  - `TemplatePane` renders grouped template sections in a `DockLeft` pane with `/` live filtering, `cursor-line` fg-as-bg selection highlighting, 3-row footer preview, and async `tinymist.doInitTemplate` / `tinymist.doGetTemplateEntry` execution marshaling UI updates via `action.EnqueueUI`.
+- **Invariants**:
+  - Never perform network calls at startup; all Universe/package operations run off the main loop and capture `canceled := ctx.Err() == context.Canceled` before `cancel()`.
+  - Never overwrite non-empty destination files or directories unless explicitly forced/confirmed, and reject symlink/parent-traversal tar entries.
+  - Bind uppercase `Alt-N` only (`Alt-n` remains `micro`'s `SpawnMultiCursor`), and promote the `Templates` bottom bar hint only while the active `.typ` buffer is blank.
+
 ---
 
 ## 6. Import Dependency Rules
@@ -220,5 +242,5 @@ Verified against `go list ./...`. Route new cross-module interactions through `i
 
 - **`internal/typst` (`mode.go`) & `internal/views`**: Remain stdlib-only.
 - **`internal/typst/conceal`**: Imports only `internal/typst` and `internal/util` (never `internal/action` or `internal/display`, since `display` imports `conceal`).
-- **`internal/lsp`, `internal/typst/preview`, `internal/typst/outline`**: Never import one another directly; coordinate through `features.Init()` seams (`InlinePreviewHandler`, `Compiler`/discovery/root resolver, `SymbolProvider`, `JumpHandler`).
-- **Inherited `micro` core (`action`, `buffer`, `config`, `display`, `screen`, `views`)**: Never import `internal/lsp`, `internal/typst/features`, `outline`, `preview`, or `shortcuts`. The sole Typst import inside `micro` core is `internal/display` → `internal/typst/conceal`.
+- **`internal/lsp`, `internal/typst/preview`, `internal/typst/outline`, `internal/typst/templates`**: Never import one another directly; coordinate through `features.Init()` seams (`InlinePreviewHandler`, `Compiler`/discovery/root resolver, `SymbolProvider`, `JumpHandler`, `ExternalBackend`, `SetRootResolver`).
+- **Inherited `micro` core (`action`, `buffer`, `config`, `display`, `screen`, `views`)**: Never import `internal/lsp`, `internal/typst/features`, `outline`, `preview`, `shortcuts`, or `templates`. The sole Typst import inside `micro` core is `internal/display` → `internal/typst/conceal`.

@@ -91,7 +91,46 @@ on the left edge of the active tab.
 
 ---
 
-## 4. `tinymist` LSP & Companion Live Preview
+## 4. Document & Project Templates (`:templates` / `Alt-N` / `--new`)
+
+Press `Alt-Shift-n` (`Alt-N`) or run `> templates` to open the docked Template
+Gallery sidebar, or start a document directly from the command line:
+
+```
+typx --new list
+typx --new notes hw3.typ
+typx --new @preview/charged-ieee my-paper
+```
+
+### Template Sources (Precedence Order)
+
+1. **Project**: `.typx/templates/` in the active project root (`.typ` files or
+   folders with `main.typ` / `typst.toml`).
+2. **Personal**: `<config-dir>/templates/` (supports optional leading
+   `// @title:`, `// @desc:`, `// @category:` comments and `{{title}}`,
+   `{{author}}`, `{{date}}` variables).
+3. **Built-in starters**: `minimal`, `article`, `notes`, `report`, `slides`,
+   `cv`, `letter`, `paper`.
+4. **Local & Cached**: Typst `@local` and already-cached `@preview` template
+   packages discovered from Typst's package directories.
+5. **Typst Universe (`@preview`)**: Loaded on demand with `u` in the Gallery or
+   `> templates universe` and cached locally with ETag/TTL.
+
+### Template Commands & Gallery Controls
+
+- `> template [name] [dir|--preamble]`: Open Gallery, insert a starter or
+  personal template, scaffold a multi-file/package project, or insert just its
+  preamble.
+- `> template-save <name> [--preamble] [--force]`: Save the active buffer (or
+  its preamble above the first `=` heading) to `<config-dir>/templates/<name>.typ`.
+- Inside the Gallery: `Up`/`Down` (`k`/`j`) select, `/` filters, `Enter`
+  applies/scaffolds, `p` inserts preamble/entrypoint in place, `n` scaffolds a
+  new folder, `u` loads/refreshes Typst Universe, `Esc` returns to editor, `q`
+  closes.
+
+---
+
+## 5. `tinymist` LSP & Companion Live Preview
 
 TypX integrates with `tinymist` over stdio JSON-RPC 2.0 for diagnostics,
 completion, hover docs, document symbols, and live browser preview.
@@ -127,7 +166,7 @@ run `typx --no-lsp file.typ` for offline editing.
 
 ---
 
-## 5. TypX Configuration Options (`typst.*`)
+## 6. TypX Configuration Options (`typst.*`)
 
 See `> help options` for the full list of editor options. TypX-specific keys:
 
@@ -141,6 +180,7 @@ See `> help options` for the full list of editor options. TypX-specific keys:
 - `typst.previewOpenBrowser` (default `true`): Auto-open preview URL in browser.
 - `typst.outlineWidth` (default `30`): Preferred Outline sidebar width (columns).
 - `typst.outlineShowLabels` (default `false`): Show standalone `<labels>` in Outline.
+- `typst.templatesWidth` (default `36`): Preferred Template Gallery sidebar width (columns).
 
 ### Recommended Colorschemes
 
