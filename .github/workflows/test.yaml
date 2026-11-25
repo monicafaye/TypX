@@ -30,3 +30,7 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+      - name: Test (race)
+        if: runner.os == 'Linux'
+        run: CGO_ENABLED=1 go test -race ./...

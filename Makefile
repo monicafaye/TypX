@@ -1,6 +1,6 @@
 .PHONY: runtime build generate build-quick build-cross test test-race clean
 
-TYPX_VERSION ?= 0.1.0-dev
+TYPX_VERSION ?= 0.2.1-dev
 HASH = $(shell git rev-parse --short HEAD)
 DATE = $(shell GOOS=$(shell go env GOHOSTOS) GOARCH=$(shell go env GOHOSTARCH) \
 	go run tools/build-date.go)
