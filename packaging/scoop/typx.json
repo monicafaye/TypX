@@ -1,0 +1,36 @@
+{
+    "version": "0.3.0",
+    "description": "Terminal editor for Typst with live math concealment, document outline, tinymist LSP, and Sixel preview",
+    "homepage": "https://github.com/monicafaye/TypX",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/monicafaye/TypX/releases/download/v0.3.0/typx-0.3.0-windows-amd64.zip",
+            "hash": "REPLACE_WITH_WINDOWS_AMD64_SHA256"
+        },
+        "arm64": {
+            "url": "https://github.com/monicafaye/TypX/releases/download/v0.3.0/typx-0.3.0-windows-arm64.zip",
+            "hash": "REPLACE_WITH_WINDOWS_ARM64_SHA256"
+        }
+    },
+    "bin": "typx.exe",
+    "suggest": {
+        "LSP diagnostics, completion, hover, and live preview": "tinymist"
+    },
+    "checkver": {
+        "github": "https://github.com/monicafaye/TypX"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/monicafaye/TypX/releases/download/v$version/typx-$version-windows-amd64.zip"
+            },
+            "arm64": {
+                "url": "https://github.com/monicafaye/TypX/releases/download/v$version/typx-$version-windows-arm64.zip"
+            }
+        },
+        "hash": {
+            "url": "$baseurl/SHA256SUMS.txt"
+        }
+    }
+}

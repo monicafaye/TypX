@@ -1,6 +1,6 @@
 .PHONY: runtime build generate build-quick build-cross test test-race clean
 
-TYPX_VERSION ?= 0.2.1-dev
+TYPX_VERSION ?= 0.4.0-dev
 HASH = $(shell git rev-parse --short HEAD)
 DATE = $(shell GOOS=$(shell go env GOHOSTOS) GOARCH=$(shell go env GOHOSTARCH) \
 	go run tools/build-date.go)
@@ -11,14 +11,6 @@ VSCODE_TESTS_BASE_URL = 'https://raw.githubusercontent.com/microsoft/vscode/e6a4
 CGO_ENABLED := $(if $(CGO_ENABLED),$(CGO_ENABLED),0)
 
 ADDITIONAL_GO_LINKER_FLAGS := ""
-GOHOSTOS = $(shell go env GOHOSTOS)
-ifeq ($(GOHOSTOS), darwin)
-	# Native darwin resp. macOS builds need external and dynamic linking
-	ADDITIONAL_GO_LINKER_FLAGS += $(shell GOOS=$(GOHOSTOS) \
-		GOARCH=$(shell go env GOHOSTARCH) \
-		go run tools/info-plist.go "$(shell go env GOOS)" "$(TYPX_VERSION)")
-	CGO_ENABLED = 1
-endif
 
 build: generate build-quick
 
@@ -35,7 +27,9 @@ build-all: build
 build-cross: generate
 	mkdir -p binaries
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w $(GOVARS)" -o binaries/typx-windows-amd64.exe ./cmd/typx
+	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "-s -w $(GOVARS)" -o binaries/typx-windows-arm64.exe ./cmd/typx
 	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w $(GOVARS)" -o binaries/typx-linux-amd64 ./cmd/typx
+	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -trimpath -ldflags "-s -w $(GOVARS)" -o binaries/typx-linux-arm64 ./cmd/typx
 	CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -trimpath -ldflags "-s -w $(GOVARS)" -o binaries/typx-darwin-amd64 ./cmd/typx
 	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags "-s -w $(GOVARS)" -o binaries/typx-darwin-arm64 ./cmd/typx
 

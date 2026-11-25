@@ -12,15 +12,18 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+      PACKAGING_TOKEN: ${{ secrets.PACKAGING_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.24.x'
 
@@ -28,6 +31,7 @@ jobs:
         run: go generate ./runtime
 
       - name: Build release archives
+        id: build
         shell: bash
         run: |
           set -euo pipefail
@@ -35,6 +39,7 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
             VERSION="0.0.0-$(git rev-parse --short HEAD)"
           fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
           HASH="$(git rev-parse --short HEAD)"
           DATE="$(go run tools/build-date.go)"
           LDFLAGS="-s -w -X github.com/monicafaye/TypX/internal/util.TypXVersion=${VERSION} -X github.com/monicafaye/TypX/internal/util.CommitHash=${HASH} -X 'github.com/monicafaye/TypX/internal/util.CompileDate=${DATE}'"
@@ -46,6 +51,7 @@ jobs:
             "darwin amd64"
             "darwin arm64"
             "windows amd64"
+            "windows arm64"
           )
 
           for target in "${TARGETS[@]}"; do
@@ -63,7 +69,8 @@ jobs:
             cp LICENSE LICENSE-MICRO LICENSE-THIRD-PARTY README.md "dist/${STAGE}/"
 
             if [ "${GOOS}" = "windows" ]; then
-              (cd dist && zip -qr "${STAGE}.zip" "${STAGE}")
+              # Flatten Windows zip so typx.exe sits at archive root (required by WinGet/Scoop).
+              (cd "dist/${STAGE}" && zip -qr "../${STAGE}.zip" .)
             else
               tar -C dist -czf "dist/${STAGE}.tar.gz" "${STAGE}"
             fi
@@ -72,9 +79,63 @@ jobs:
 
           (cd dist && sha256sum typx-* > SHA256SUMS.txt)
 
+      - name: Render package manager manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash packaging/scripts/update-manifests.sh "${{ steps.build.outputs.version }}" dist/SHA256SUMS.txt dist/packaging
+
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: dist/*
+          files: |
+            dist/typx-*
+            dist/SHA256SUMS.txt
+
+      - name: Publish to WinGet
+        if: startsWith(github.ref, 'refs/tags/v') && env.WINGET_TOKEN != ''
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: monicafaye.TypX
+          token: ${{ secrets.WINGET_TOKEN }}
+
+      - name: Update Scoop bucket and Homebrew tap
+        if: startsWith(github.ref, 'refs/tags/v') && env.PACKAGING_TOKEN != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.build.outputs.version }}"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git clone "https://x-access-token:${PACKAGING_TOKEN}@github.com/monicafaye/scoop-bucket.git" /tmp/scoop-bucket; then
+            mkdir -p /tmp/scoop-bucket/bucket
+            cp dist/packaging/scoop/typx.json /tmp/scoop-bucket/bucket/typx.json
+            (
+              cd /tmp/scoop-bucket
+              if ! git diff --quiet; then
+                git add bucket/typx.json
+                git commit -m "typx: update to v${VERSION}"
+                git push
+              fi
+            )
+          else
+            echo "::warning::Could not clone monicafaye/scoop-bucket; skipping Scoop update."
+          fi
+
+          if git clone "https://x-access-token:${PACKAGING_TOKEN}@github.com/monicafaye/homebrew-tap.git" /tmp/homebrew-tap; then
+            mkdir -p /tmp/homebrew-tap/Formula
+            cp dist/packaging/homebrew/typx.rb /tmp/homebrew-tap/Formula/typx.rb
+            (
+              cd /tmp/homebrew-tap
+              if ! git diff --quiet; then
+                git add Formula/typx.rb
+                git commit -m "typx: update to v${VERSION}"
+                git push
+              fi
+            )
+          else
+            echo "::warning::Could not clone monicafaye/homebrew-tap; skipping Homebrew tap update."
+          fi

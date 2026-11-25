@@ -1,0 +1,33 @@
+# Maintainer: monicafaye <354112421+monicafaye@users.noreply.github.com>
+pkgname=typx-bin
+pkgver=0.3.0
+pkgrel=1
+pkgdesc='Terminal editor for Typst with live math concealment, document outline, tinymist LSP, and Sixel preview'
+arch=('x86_64' 'aarch64')
+url='https://github.com/monicafaye/TypX'
+license=('MIT')
+provides=('typx')
+conflicts=('typx')
+optdepends=(
+  'tinymist: Typst language server for diagnostics, completion, hover, formatting, and live preview'
+  'wl-clipboard: Wayland system clipboard integration'
+  'xclip: X11 system clipboard integration'
+)
+source_x86_64=("${url}/releases/download/v${pkgver}/typx-${pkgver}-linux-amd64.tar.gz")
+source_aarch64=("${url}/releases/download/v${pkgver}/typx-${pkgver}-linux-arm64.tar.gz")
+sha256sums_x86_64=('REPLACE_WITH_LINUX_AMD64_SHA256')
+sha256sums_aarch64=('REPLACE_WITH_LINUX_ARM64_SHA256')
+
+package() {
+  local goarch='amd64'
+  if [ "${CARCH}" = 'aarch64' ]; then
+    goarch='arm64'
+  fi
+
+  local srcdir_pkg="${srcdir}/typx-${pkgver}-linux-${goarch}"
+  install -Dm755 "${srcdir_pkg}/typx" "${pkgdir}/usr/bin/typx"
+  install -Dm644 "${srcdir_pkg}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 "${srcdir_pkg}/LICENSE-MICRO" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-MICRO"
+  install -Dm644 "${srcdir_pkg}/LICENSE-THIRD-PARTY" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-THIRD-PARTY"
+  install -Dm644 "${srcdir_pkg}/README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+}
