@@ -14,8 +14,8 @@
 TypX (`typx`) is a terminal editor for [Typst](https://typst.app/), forked from [`zyedidia/micro`](https://github.com/zyedidia/micro). It combines live math concealment, a document outline, `tinymist` LSP integration, and side-by-side live preview in a single Go binary with standard keybindings and no plugin configuration.
 
 <p align="center">
-  <img src="assets/typx-preview.png" alt="TypX in Windows Terminal showing the Document Outline sidebar, Typst editor with live Unicode math concealment, and native in-terminal Sixel live preview" width="100%" /><br />
-  <sub><em>Document Outline (<code>Alt+O</code>), live Unicode math concealment (<code>Alt+C</code>), and native in-terminal Sixel preview (<code>Alt+P</code>).</em></sub>
+  <img src="assets/typx-preview.png" alt="TypX in Windows Terminal showing the Document Outline sidebar, Typst editor with cursor-aware Unicode math concealment on @preview/clean-math-paper, and native in-terminal Sixel live preview" width="100%" /><br />
+  <sub><em>Document Outline (<code>Alt+O</code>), cursor-aware Unicode math concealment (<code>Alt+C</code>), and native in-terminal Sixel live preview (<code>Alt+P</code>) editing <code>@preview/clean-math-paper</code>.</em></sub>
 </p>
 
 TypX includes:
@@ -29,6 +29,11 @@ TypX includes:
 - **File Manager sidebar.** Press `Alt+T` or run `:tree` to browse directories, expand folders inline, open files in splits, and run `:touch`, `:mkdir`, `:rename`, and `:rm`.
 - **In-terminal Sixel and browser preview.** Press `Alt+P` or run `:preview inline` for a right-docked Sixel preview in Sixel-capable terminals with zoom, color inversion, and margin trimming, or run `:preview browser` for an auto-reloading browser preview with cursor sync.
 - **`tinymist` LSP and multi-file projects.** TypX resolves project roots from `typst.toml`, root-relative `/...` imports, `.git`, or `../` imports, and provides `:pin [path]`/`:unpin` main-file pinning (`PIN:` statusline indicator), `:export [pdf|png|svg|html]` (`typst.exportOnSave`), `:format` (`typst.formatOnSave`), go-to-definition across `.typ`/`.bib`/packages (`F12`, `Alt+U` back), find references (`Shift+F12`), cross-file symbol rename (`F2` / `:lsp-rename`), code actions (`Alt+A`), workspace symbol search (`Alt+S`), interactive `:diagnostics` drawer (`F8`/`Shift+F8` jump, `/` filter), completion (`Ctrl+Space`), and hover docs (`Alt+K` or `:hover`). Pass `--no-lsp` to run offline without `tinymist`.
+
+<p align="center">
+  <img src="assets/typx-templates.png" alt="TypX Template Gallery sidebar browsing Typst Universe templates with live in-terminal Sixel preview of @preview/charged-vde" width="100%" /><br />
+  <sub><em>Template Gallery (<code>Alt+Shift+N</code>) browsing Typst Universe packages with live in-terminal Sixel preview.</em></sub>
+</p>
 
 ---
 
