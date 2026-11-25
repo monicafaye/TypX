@@ -34,6 +34,19 @@ TypX includes:
 
 ## Installation
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew install monicafaye/tap/typx
+```
+
+### Scoop (Windows)
+
+```powershell
+scoop bucket add monicafaye https://github.com/monicafaye/scoop-bucket
+scoop install monicafaye/typx
+```
+
 ### Prebuilt binaries
 
 Prebuilt archives for `windows/amd64`, `windows/arm64`, `darwin/arm64`, `darwin/amd64`, `linux/amd64`, and `linux/arm64` with SHA-256 checksums are published on [GitHub Releases](https://github.com/monicafaye/TypX/releases). Extract the archive and place `typx` (`typx.exe` on Windows) on your `PATH`. Package manager manifests for Scoop, Homebrew, and AUR live in [packaging/](packaging/README.md).
