@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -104,13 +105,15 @@ type PreviewPane struct {
 	openedByOverride bool
 	savedScrollY     int
 
-	compiling     bool
-	compileStart  time.Time
-	lastErr       string
-	lastVersion   uint64
-	lastShared    *buffer.SharedBuffer
-	lastPath      string
-	spinTick      atomic.Int32
+	compiling          bool
+	compileStart       time.Time
+	lastErr            string
+	lastVersion        uint64
+	lastShared         *buffer.SharedBuffer
+	lastPath           string
+	lastCompiledMain   string
+	pinnedSubfileDirty bool
+	spinTick           atomic.Int32
 	spinStop      chan struct{}
 	hadOverlayTxt bool
 
@@ -717,18 +720,37 @@ func (pp *PreviewPane) startCompileNow() {
 	}
 
 	b := target.Buf
-	absPath := b.AbsPath
-	if absPath == "" && b.Path != "" {
+	bufAbsPath := b.AbsPath
+	if bufAbsPath == "" && b.Path != "" {
 		if a, err := filepath.Abs(b.Path); err == nil {
-			absPath = a
+			bufAbsPath = a
 		}
 	}
-	modified := b.Modified() || absPath == ""
+
+	absPath := bufAbsPath
+	mainPath := ""
+	if pp.mgr != nil && bufAbsPath != "" {
+		mainPath = pp.mgr.resolveMainFile(bufAbsPath)
+	}
+
+	pinnedOtherFile := mainPath != "" && canonicalPreviewPath(mainPath) != canonicalPreviewPath(bufAbsPath)
+	var modified bool
 	var content []byte
-	if modified {
-		raw := b.Bytes()
-		content = make([]byte, len(raw))
-		copy(content, raw)
+	if pinnedOtherFile {
+		absPath = mainPath
+		modified = false
+		pp.pinnedSubfileDirty = b.Modified()
+	} else {
+		if mainPath != "" {
+			absPath = mainPath
+		}
+		modified = b.Modified() || absPath == ""
+		if modified {
+			raw := b.Bytes()
+			content = make([]byte, len(raw))
+			copy(content, raw)
+		}
+		pp.pinnedSubfileDirty = false
 	}
 
 	rootDir := ""
@@ -780,7 +802,8 @@ func (pp *PreviewPane) startCompileNow() {
 
 	pp.lastVersion = b.Version()
 	pp.lastShared = b.SharedBuffer
-	pp.lastPath = absPath
+	pp.lastPath = bufAbsPath
+	pp.lastCompiledMain = absPath
 	pp.compiling = true
 	pp.compileStart = time.Now()
 	pp.startSpinner()
@@ -1083,6 +1106,9 @@ func (pp *PreviewPane) drawFooter(y int) {
 		}
 		if pp.trimMargins {
 			flags += " trim"
+		}
+		if pp.pinnedSubfileDirty {
+			flags += " (save to update)"
 		}
 		base := fmt.Sprintf(" %s | %s (%d%%)%s", prefix, pp.pageLabel(), pct, flags)
 		left = fitPreviewFooter(base, pp.view.Width)
@@ -1416,6 +1442,10 @@ func findNodeParent(n *views.Node, id uint64) (*views.Node, int) {
 	return nil, -1
 }
 
+// MainFileResolverFunc resolves an optional pinned main .typ path for the
+// given buffer path. Returning "" uses the buffer's own path.
+type MainFileResolverFunc func(bufPath string) string
+
 // Manager coordinates per-tab docked PreviewPanes, compiler wiring, buffer
 // observers, resize handling, and post-show Sixel emission.
 type Manager struct {
@@ -1425,10 +1455,11 @@ type Manager struct {
 	autoHidden  map[*action.Tab]bool
 	pendingSync bool
 
-	cfgMu        sync.RWMutex
-	compiler     Compiler
-	rootResolver RootResolverFunc
-	output       io.Writer // nil = auto (os.Stdout when not SimulationScreen)
+	cfgMu            sync.RWMutex
+	compiler         Compiler
+	rootResolver     RootResolverFunc
+	mainFileResolver MainFileResolverFunc
+	output           io.Writer // nil = auto (os.Stdout when not SimulationScreen)
 }
 
 var (
@@ -1470,6 +1501,16 @@ func SetCompiler(c Compiler) {
 // SetRootResolver configures how project roots are resolved for .typ files.
 func SetRootResolver(fn RootResolverFunc) {
 	defaultManager.setRootResolver(fn)
+}
+
+// SetMainFileResolver configures optional resolution of a pinned main .typ file.
+func SetMainFileResolver(fn MainFileResolverFunc) {
+	defaultManager.setMainFileResolver(fn)
+}
+
+// NotifyMainFileChanged triggers a recompile on all open document preview panes.
+func NotifyMainFileChanged() {
+	defaultManager.notifyMainFileChanged()
 }
 
 // SetOutput overrides the raw Sixel output writer (intended for tests; nil restores default).
@@ -1530,6 +1571,41 @@ func (m *Manager) getRootResolver() RootResolverFunc {
 	fn := m.rootResolver
 	m.cfgMu.RUnlock()
 	return fn
+}
+
+func (m *Manager) setMainFileResolver(fn MainFileResolverFunc) {
+	m.cfgMu.Lock()
+	m.mainFileResolver = fn
+	m.cfgMu.Unlock()
+}
+
+func (m *Manager) resolveMainFile(bufPath string) string {
+	m.cfgMu.RLock()
+	fn := m.mainFileResolver
+	m.cfgMu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn(bufPath)
+}
+
+func (m *Manager) notifyMainFileChanged() {
+	for _, pp := range m.panes {
+		if pp != nil && !pp.overrideActive {
+			pp.ScheduleCompile(true)
+		}
+	}
+}
+
+func canonicalPreviewPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	cleaned := filepath.Clean(p)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(cleaned)
+	}
+	return cleaned
 }
 
 func (m *Manager) setOutput(w io.Writer) {
@@ -1915,7 +1991,17 @@ func (m *Manager) onPaneFocus(tab *action.Tab, pane action.Pane) {
 		return
 	}
 	if pp.target != bp {
+		effMain := m.resolveMainFile(bp.Buf.AbsPath)
+		if effMain == "" {
+			effMain = bp.Buf.AbsPath
+		}
+		samePinnedMain := pp.lastCompiledMain != "" &&
+			effMain != "" &&
+			canonicalPreviewPath(effMain) == canonicalPreviewPath(pp.lastCompiledMain)
 		pp.target = bp
+		if samePinnedMain {
+			return
+		}
 		pp.scrollY = 0
 		pp.pendingSection = nil
 		pp.ScheduleCompile(true)
@@ -1932,7 +2018,22 @@ func (m *Manager) OnBufferChange(b *buffer.Buffer, ev buffer.ChangeEvent) {
 			continue
 		}
 		target := pp.resolveTarget()
+		mainPath := ""
+		if b.AbsPath != "" {
+			mainPath = m.resolveMainFile(b.AbsPath)
+		}
+		isPinnedOther := mainPath != "" && b.AbsPath != "" &&
+			canonicalPreviewPath(mainPath) != canonicalPreviewPath(b.AbsPath)
 		if target != nil && target.Buf != nil && target.Buf.SharedBuffer == b.SharedBuffer {
+			if isPinnedOther {
+				pp.pinnedSubfileDirty = b.Modified()
+				screen.Redraw()
+			} else {
+				pp.ScheduleCompile(false)
+			}
+			continue
+		}
+		if mainPath != "" && b.AbsPath != "" && canonicalPreviewPath(mainPath) == canonicalPreviewPath(b.AbsPath) {
 			pp.ScheduleCompile(false)
 		}
 	}
@@ -1949,7 +2050,23 @@ func (m *Manager) OnBufferSave(b *buffer.Buffer, ev buffer.SaveEvent) {
 		}
 		target := pp.resolveTarget()
 		if target != nil && target.Buf != nil && target.Buf.SharedBuffer == b.SharedBuffer {
+			pp.pinnedSubfileDirty = false
 			pp.ScheduleCompile(true)
+			continue
+		}
+		if pp.lastCompiledMain != "" && b.AbsPath != "" {
+			rootDir := ""
+			if fn := m.getRootResolver(); fn != nil {
+				rootDir = fn(pp.lastCompiledMain)
+			}
+			if rootDir == "" {
+				rootDir = filepath.Dir(pp.lastCompiledMain)
+			}
+			if canonicalPreviewPath(b.AbsPath) == canonicalPreviewPath(pp.lastCompiledMain) ||
+				isSubPath(rootDir, b.AbsPath) {
+				pp.pinnedSubfileDirty = false
+				pp.ScheduleCompile(true)
+			}
 		}
 	}
 }

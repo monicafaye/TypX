@@ -178,16 +178,14 @@ func TestIntegrationDocumentLifecycleDiagnosticsCompletionHover(t *testing.T) {
 	assert.Equal(t, buffer.Loc{X: 5, Y: 0}, msg.End)
 	assert.Equal(t, "mock error here", msg.Msg)
 
-	// :diagnostics command opens a Diagnostics split
+	// :diagnostics command opens a bottom-docked interactive ListPane
 	DiagnosticsCommand()(bpTyp, nil)
-	foundDiagPane := false
-	for _, p := range bpTyp.Tab().Panes {
-		if pane, ok := p.(*action.BufPane); ok && pane.Buf.GetName() == "Diagnostics" {
-			foundDiagPane = true
-			assert.Contains(t, string(pane.Buf.Bytes()), "mock error here")
-		}
-	}
-	assert.True(t, foundDiagPane, "expected :diagnostics to open Diagnostics split")
+	diagLP := ListPaneForTab(bpTyp.Tab())
+	require.NotNil(t, diagLP, "expected :diagnostics to open ListPane drawer")
+	diagItems := diagLP.VisibleItems()
+	require.NotEmpty(t, diagItems)
+	assert.Contains(t, diagItems[0].Primary, "mock error here")
+	assert.True(t, CloseListPaneForTab(bpTyp.Tab()))
 
 	// Save flushes pending edit before didSave
 	bTyp.Insert(buffer.Loc{X: 0, Y: 0}, "ok ")

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -63,6 +64,9 @@ func runMockTinymist() int {
 		time.Sleep(30 * time.Second)
 		return 0
 	}
+	if len(os.Args) > 1 && os.Args[1] == "compile" {
+		return runMockCompile(os.Args[2:])
+	}
 
 	logPath := os.Getenv("TYPX_MOCK_LOG")
 	var logMu sync.Mutex
@@ -102,6 +106,7 @@ func runMockTinymist() int {
 		}
 	}
 
+	docs := make(map[string]string)
 	br := bufio.NewReaderSize(os.Stdin, 64*1024)
 	for {
 		payload, err := readFrame(br)
@@ -141,10 +146,12 @@ func runMockTinymist() int {
 				ID:      msg.ID,
 				Result: InitializeResult{
 					Capabilities: ServerCapabilities{
-						PositionEncoding:   "utf-16",
-						TextDocumentSync:   1,
-						CompletionProvider: map[string]any{},
-						HoverProvider:      true,
+						PositionEncoding:           "utf-16",
+						TextDocumentSync:           1,
+						CompletionProvider:         map[string]any{},
+						HoverProvider:              true,
+						DefinitionProvider:         true,
+						DocumentFormattingProvider: true,
 					},
 					ServerInfo: &ServerInfo{Name: "tinymist", Version: "0.13.0-mock"},
 				},
@@ -158,6 +165,7 @@ func runMockTinymist() int {
 		case "textDocument/didOpen":
 			var p DidOpenTextDocumentParams
 			if err := json.Unmarshal(msg.Params, &p); err == nil {
+				docs[p.TextDocument.URI] = p.TextDocument.Text
 				appendLog("didOpen:" + p.TextDocument.URI + ":" + p.TextDocument.Text)
 				publishMockDiagnostics(writeFrame, p.TextDocument.URI, p.TextDocument.Version, p.TextDocument.Text)
 			}
@@ -169,6 +177,7 @@ func runMockTinymist() int {
 				if len(p.ContentChanges) > 0 {
 					text = p.ContentChanges[0].Text
 				}
+				docs[p.TextDocument.URI] = text
 				appendLog(fmt.Sprintf("didChange:%s:v%d:%s", p.TextDocument.URI, p.TextDocument.Version, text))
 				if strings.Contains(text, "CRASH_NOW") {
 					fmt.Fprintln(os.Stderr, "mock panic: CRASH_NOW requested")
@@ -232,10 +241,102 @@ func runMockTinymist() int {
 				},
 			})
 
+		case "textDocument/formatting":
+			var p DocumentFormattingParams
+			_ = json.Unmarshal(msg.Params, &p)
+			appendLog("formatting:" + p.TextDocument.URI)
+			if delay := os.Getenv("TYPX_MOCK_FORMAT_DELAY_MS"); delay != "" {
+				var ms int
+				_, _ = fmt.Sscanf(delay, "%d", &ms)
+				if ms > 0 {
+					time.Sleep(time.Duration(ms) * time.Millisecond)
+				}
+			}
+			if os.Getenv("TYPX_MOCK_FORMAT_FAIL") == "1" {
+				writeFrame(rpcResponse{
+					JSONRPC: "2.0",
+					ID:      msg.ID,
+					Error:   &RPCError{Code: -32603, Message: "mock format error"},
+				})
+				continue
+			}
+			var edits []TextEdit
+			text := docs[p.TextDocument.URI]
+			lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+			for y, line := range lines {
+				if strings.HasPrefix(line, "=   ") {
+					edits = append(edits, TextEdit{
+						Range:   Range{Start: Position{Line: y, Character: 1}, End: Position{Line: y, Character: 4}},
+						NewText: " ",
+					})
+				}
+				if strings.HasPrefix(line, "  let  x=1") {
+					edits = append(edits, TextEdit{
+						Range:   Range{Start: Position{Line: y, Character: 0}, End: Position{Line: y, Character: len(line)}},
+						NewText: "  let x = 1",
+					})
+				}
+			}
+			writeFrame(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      msg.ID,
+				Result:  edits,
+			})
+
+		case "textDocument/definition":
+			var p TextDocumentPositionParams
+			_ = json.Unmarshal(msg.Params, &p)
+			appendLog(fmt.Sprintf("definition:%s:%d:%d", p.TextDocument.URI, p.Position.Line, p.Position.Character))
+			srcPath := URIToPath(p.TextDocument.URI)
+			srcDir := filepath.Dir(srcPath)
+			text := docs[p.TextDocument.URI]
+			lineText := mockLineAt(text, p.Position.Line)
+			switch {
+			case strings.Contains(text, "NO_DEF"):
+				writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: nil})
+			case strings.Contains(text, "MULTI_DEF"):
+				targetA := PathToURI(filepath.Join(srcDir, "helper.typ"))
+				targetB := PathToURI(filepath.Join(srcDir, "refs.bib"))
+				locs := []Location{
+					{URI: targetA, Range: Range{Start: Position{Line: 1, Character: 0}, End: Position{Line: 1, Character: 6}}},
+					{URI: targetB, Range: Range{Start: Position{Line: 0, Character: 0}, End: Position{Line: 0, Character: 8}}},
+				}
+				writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: locs})
+			case strings.Contains(lineText, "citekey"):
+				bibPath := filepath.Join(srcDir, "refs.bib")
+				links := []LocationLink{{
+					TargetURI:            PathToURI(bibPath),
+					TargetRange:          Range{Start: Position{Line: 1, Character: 0}, End: Position{Line: 1, Character: 12}},
+					TargetSelectionRange: Range{Start: Position{Line: 1, Character: 2}, End: Position{Line: 1, Character: 10}},
+				}}
+				writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: links})
+			case os.Getenv("TYPX_MOCK_DEF_PKG_PATH") != "":
+				pkgPath := os.Getenv("TYPX_MOCK_DEF_PKG_PATH")
+				links := []LocationLink{{
+					TargetURI:            PathToURI(pkgPath),
+					TargetRange:          Range{Start: Position{Line: 0, Character: 0}, End: Position{Line: 0, Character: 5}},
+					TargetSelectionRange: Range{Start: Position{Line: 0, Character: 0}, End: Position{Line: 0, Character: 5}},
+				}}
+				writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: links})
+			default:
+				helperPath := filepath.Join(srcDir, "helper.typ")
+				links := []LocationLink{{
+					TargetURI:            PathToURI(helperPath),
+					TargetRange:          Range{Start: Position{Line: 2, Character: 5}, End: Position{Line: 2, Character: 11}},
+					TargetSelectionRange: Range{Start: Position{Line: 2, Character: 5}, End: Position{Line: 2, Character: 11}},
+				}}
+				writeFrame(rpcResponse{JSONRPC: "2.0", ID: msg.ID, Result: links})
+			}
+
 		case "workspace/executeCommand":
 			var p ExecuteCommandParams
 			_ = json.Unmarshal(msg.Params, &p)
-			appendLog("executeCommand:" + p.Command)
+			if p.Command == "tinymist.pinMain" {
+				rawArgs, _ := json.Marshal(p.Arguments)
+				appendLog("executeCommand:" + p.Command + ":" + string(rawArgs))
+			} else {
+				appendLog("executeCommand:" + p.Command)
+			}
 			if p.Command == "tinymist.startDefaultPreview" && os.Getenv("TYPX_MOCK_PREVIEW_FALLBACK") == "1" {
 				writeFrame(rpcResponse{
 					JSONRPC: "2.0",
@@ -322,4 +423,65 @@ func publishMockDiagnostics(writeFrame func(any), uri string, ver int, text stri
 func mustRawJSON(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+func runMockCompile(args []string) int {
+	var format, inputPath, outputPath string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--root", "--ppi":
+			i++
+		case "--format":
+			if i+1 < len(args) {
+				format = args[i+1]
+				i++
+			}
+		default:
+			if strings.HasPrefix(args[i], "--") {
+				continue
+			}
+			if inputPath == "" {
+				inputPath = args[i]
+			} else if outputPath == "" {
+				outputPath = args[i]
+			}
+		}
+	}
+	if logPath := os.Getenv("TYPX_MOCK_LOG"); logPath != "" {
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			_, _ = fmt.Fprintf(f, "compile:%s:%s:%s\n", format, inputPath, outputPath)
+			_ = f.Close()
+		}
+	}
+	if os.Getenv("TYPX_MOCK_COMPILE_FAIL") == "1" {
+		fmt.Fprintln(os.Stderr, "error: mock compile failure")
+		return 1
+	}
+	if outputPath == "" {
+		return 2
+	}
+	outFile := strings.ReplaceAll(outputPath, "{0p}", "01")
+	outFile = strings.ReplaceAll(outFile, "{p}", "1")
+	content, err := os.ReadFile(inputPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.WriteFile(outFile, append([]byte("MOCK_"+strings.ToUpper(format)+":"), content...), 0644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if format == "html" {
+		fmt.Fprintln(os.Stderr, "warning: html export is experimental")
+	}
+	return 0
+}
+
+func mockLineAt(text string, line int) string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	if line < 0 || line >= len(lines) {
+		return ""
+	}
+	return lines[line]
 }

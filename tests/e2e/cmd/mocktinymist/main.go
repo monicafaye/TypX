@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,6 +62,8 @@ func main() {
 		runLSP()
 	case "preview":
 		runPreview(args[1:])
+	case "compile":
+		runCompile(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "mocktinymist: unknown subcommand %q\n", args[0])
 		os.Exit(2)
@@ -179,6 +183,7 @@ func runLSP() {
 
 	reader := bufio.NewReader(os.Stdin)
 	docs := make(map[string]string)
+	pinnedMain := ""
 	shutdownSeen := false
 	var previewListeners []net.Listener
 	defer func() {
@@ -219,13 +224,16 @@ func runLSP() {
 					"completionProvider": map[string]any{
 						"triggerCharacters": []string{"#", ".", "@"},
 					},
-					"hoverProvider":          true,
-					"documentSymbolProvider": true,
+					"hoverProvider":              true,
+					"documentSymbolProvider":     true,
+					"definitionProvider":         true,
+					"documentFormattingProvider": true,
 					"executeCommandProvider": map[string]any{
 						"commands": []string{
 							"tinymist.startDefaultPreview",
 							"tinymist.doInitTemplate",
 							"tinymist.doGetTemplateEntry",
+							"tinymist.pinMain",
 						},
 					},
 				},
@@ -399,6 +407,108 @@ func runLSP() {
 			}
 			writeRPCResponse(msg.ID, result, nil)
 
+		case "textDocument/definition":
+			var p struct {
+				TextDocument struct {
+					URI string `json:"uri"`
+				} `json:"textDocument"`
+				Position struct {
+					Line      int `json:"line"`
+					Character int `json:"character"`
+				} `json:"position"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			appendTrace(traceRecord{
+				Method: msg.Method,
+				ID:     msg.ID,
+				URI:    p.TextDocument.URI,
+				Params: msg.Params,
+			})
+			srcPath := uriToLocalPath(p.TextDocument.URI)
+			srcDir := filepath.Dir(srcPath)
+			lineText := lineAtOffset(docs[p.TextDocument.URI], p.Position.Line)
+			switch {
+			case strings.Contains(lineText, "knuth"):
+				bibPath := filepath.Join(srcDir, "refs.bib")
+				if _, statErr := os.Stat(bibPath); statErr == nil {
+					writeRPCResponse(msg.ID, []map[string]any{{
+						"targetUri": pathToFileURI(bibPath),
+						"targetRange": map[string]any{
+							"start": map[string]any{"line": 0, "character": 0},
+							"end":   map[string]any{"line": 0, "character": 12},
+						},
+						"targetSelectionRange": map[string]any{
+							"start": map[string]any{"line": 0, "character": 0},
+							"end":   map[string]any{"line": 0, "character": 12},
+						},
+					}}, nil)
+					break
+				}
+				writeRPCResponse(msg.ID, nil, nil)
+			case strings.Contains(lineText, "helper"):
+				helperPath := filepath.Join(srcDir, "helper.typ")
+				if _, statErr := os.Stat(helperPath); statErr == nil {
+					writeRPCResponse(msg.ID, []map[string]any{{
+						"targetUri": pathToFileURI(helperPath),
+						"targetRange": map[string]any{
+							"start": map[string]any{"line": 0, "character": 0},
+							"end":   map[string]any{"line": 0, "character": 10},
+						},
+						"targetSelectionRange": map[string]any{
+							"start": map[string]any{"line": 0, "character": 0},
+							"end":   map[string]any{"line": 0, "character": 10},
+						},
+					}}, nil)
+					break
+				}
+				writeRPCResponse(msg.ID, nil, nil)
+			default:
+				writeRPCResponse(msg.ID, nil, nil)
+			}
+
+		case "textDocument/formatting":
+			var p struct {
+				TextDocument struct {
+					URI string `json:"uri"`
+				} `json:"textDocument"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			appendTrace(traceRecord{
+				Method: msg.Method,
+				ID:     msg.ID,
+				URI:    p.TextDocument.URI,
+				Params: msg.Params,
+			})
+			text := docs[p.TextDocument.URI]
+			normalized := strings.ReplaceAll(text, "\r\n", "\n")
+			lines := strings.Split(normalized, "\n")
+			edits := make([]map[string]any, 0)
+			for y, line := range lines {
+				if strings.HasPrefix(line, "=") {
+					trimmed := strings.TrimLeft(line[1:], " ")
+					if len(line) > 1 && line[1] == ' ' && strings.HasPrefix(line, "=  ") {
+						spacesEnd := len(line) - len(trimmed)
+						edits = append(edits, map[string]any{
+							"range": map[string]any{
+								"start": map[string]any{"line": y, "character": 1},
+								"end":   map[string]any{"line": y, "character": spacesEnd},
+							},
+							"newText": " ",
+						})
+					}
+				}
+				if strings.HasPrefix(line, "  let  x=1") {
+					edits = append(edits, map[string]any{
+						"range": map[string]any{
+							"start": map[string]any{"line": y, "character": 0},
+							"end":   map[string]any{"line": y, "character": len(line)},
+						},
+						"newText": "  let x = 1",
+					})
+				}
+			}
+			writeRPCResponse(msg.ID, edits, nil)
+
 		case "workspace/executeCommand":
 			var p struct {
 				Command   string            `json:"command"`
@@ -472,6 +582,19 @@ func runLSP() {
 				}
 				entryBody := fmt.Sprintf("// mock entry for %s\n#import %q: *\n", spec, spec)
 				writeRPCResponse(msg.ID, entryBody, nil)
+
+			case p.Command == "tinymist.pinMain":
+				var nextPin *string
+				if len(p.Arguments) > 0 {
+					_ = json.Unmarshal(p.Arguments[0], &nextPin)
+				}
+				if nextPin != nil {
+					pinnedMain = *nextPin
+				} else {
+					pinnedMain = ""
+				}
+				appendTrace(traceRecord{Event: "pinMain", Note: pinnedMain})
+				writeRPCResponse(msg.ID, nil, nil)
 
 			default:
 				writeRPCResponse(msg.ID, nil, nil)
@@ -577,19 +700,24 @@ func writeRPCNotification(method string, params any) {
 }
 
 func publishDiagsForText(uri string, version int, text string, forceDefault bool) {
-	lineIdx, startUTF16, endUTF16, found := findErrTriggerRange(text)
+	ranges := findErrTriggerRanges(text)
 	diags := make([]map[string]any, 0)
-	if found {
+	lineIdx, startUTF16, endUTF16 := 0, 0, 0
+	for i, r := range ranges {
+		if i == 0 {
+			lineIdx, startUTF16, endUTF16 = r[0], r[1], r[2]
+		}
 		diags = append(diags, map[string]any{
 			"range": map[string]any{
-				"start": map[string]any{"line": lineIdx, "character": startUTF16},
-				"end":   map[string]any{"line": lineIdx, "character": endUTF16},
+				"start": map[string]any{"line": r[0], "character": r[1]},
+				"end":   map[string]any{"line": r[0], "character": r[2]},
 			},
 			"severity": 1,
 			"source":   "tinymist",
 			"message":  "mock error: ERR_TRIGGER detected",
 		})
-	} else if forceDefault {
+	}
+	if len(ranges) == 0 && forceDefault {
 		diags = append(diags, map[string]any{
 			"range": map[string]any{
 				"start": map[string]any{"line": 0, "character": 0},
@@ -615,11 +743,32 @@ func publishDiagsForText(uri string, version int, text string, forceDefault bool
 		Note:    fmt.Sprintf("count=%d line=%d start=%d end=%d", len(diags), lineIdx, startUTF16, endUTF16),
 	})
 	writeRPCNotification("textDocument/publishDiagnostics", params)
+
+	if len(ranges) > 0 && os.Getenv("TYPX_MOCK_MULTI_DIAG") == "1" {
+		srcPath := uriToLocalPath(uri)
+		subPath := filepath.Join(filepath.Dir(srcPath), "sub.typ")
+		if _, err := os.Stat(subPath); err == nil {
+			subURI := pathToFileURI(subPath)
+			writeRPCNotification("textDocument/publishDiagnostics", map[string]any{
+				"uri": subURI,
+				"diagnostics": []map[string]any{{
+					"range": map[string]any{
+						"start": map[string]any{"line": 0, "character": 0},
+						"end":   map[string]any{"line": 0, "character": 3},
+					},
+					"severity": 2,
+					"source":   "tinymist",
+					"message":  "mock warning in sub.typ",
+				}},
+			})
+		}
+	}
 }
 
-func findErrTriggerRange(text string) (lineIdx, startUTF16, endUTF16 int, found bool) {
+func findErrTriggerRanges(text string) [][3]int {
 	const needle = "ERR_TRIGGER"
 	lines := strings.Split(text, "\n")
+	var out [][3]int
 	for i, line := range lines {
 		line = strings.TrimSuffix(line, "\r")
 		idx := strings.Index(line, needle)
@@ -627,10 +776,131 @@ func findErrTriggerRange(text string) (lineIdx, startUTF16, endUTF16 int, found 
 			prefix := line[:idx]
 			start := len(utf16.Encode([]rune(prefix)))
 			end := start + len(utf16.Encode([]rune(needle)))
-			return i, start, end, true
+			out = append(out, [3]int{i, start, end})
 		}
 	}
-	return 0, 0, 0, false
+	return out
+}
+
+func runCompile(args []string) {
+	appendTrace(traceRecord{
+		Event: "compile",
+		Note:  strings.Join(args, " "),
+	})
+	var format, inputPath, outputPath string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--root", "--ppi":
+			i++
+		case "--format":
+			if i+1 < len(args) {
+				format = strings.ToLower(strings.TrimSpace(args[i+1]))
+				i++
+			}
+		default:
+			if strings.HasPrefix(args[i], "--") {
+				continue
+			}
+			if inputPath == "" {
+				inputPath = args[i]
+			} else if outputPath == "" {
+				outputPath = args[i]
+			}
+		}
+	}
+	if outputPath == "" {
+		os.Exit(2)
+	}
+	var srcContent []byte
+	if inputPath != "" {
+		var err error
+		srcContent, err = os.ReadFile(inputPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	if format == "" {
+		format = strings.TrimPrefix(strings.ToLower(filepath.Ext(outputPath)), ".")
+	}
+	payload := compileSyntheticPayload(format)
+	pageNums := []string{"1"}
+	if strings.Contains(string(srcContent), "#pagebreak()") {
+		pageNums = []string{"1", "2"}
+	}
+	writeOne := func(dest string) {
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(dest, payload, 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	if strings.Contains(outputPath, "{0p}") || strings.Contains(outputPath, "{p}") {
+		for _, pNum := range pageNums {
+			padded := pNum
+			if len(padded) < 2 {
+				padded = "0" + padded
+			}
+			dest := strings.ReplaceAll(outputPath, "{0p}", padded)
+			dest = strings.ReplaceAll(dest, "{p}", pNum)
+			writeOne(dest)
+		}
+		return
+	}
+	writeOne(outputPath)
+}
+
+func compileSyntheticPayload(format string) []byte {
+	switch format {
+	case "pdf":
+		return []byte("%PDF-1.4\n% mock tinymist pdf\n")
+	case "png":
+		return []byte("\x89PNG\r\n\x1a\n")
+	case "svg":
+		return []byte("<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>")
+	case "html":
+		return []byte("<!doctype html><html><body>mock</body></html>")
+	default:
+		return []byte("mock")
+	}
+}
+
+func lineAtOffset(text string, line int) string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	if line < 0 || line >= len(lines) {
+		return ""
+	}
+	return lines[line]
+}
+
+func uriToLocalPath(uri string) string {
+	u, err := url.Parse(uri)
+	if err != nil || !strings.EqualFold(u.Scheme, "file") {
+		return uri
+	}
+	p := u.Path
+	if runtime.GOOS == "windows" {
+		if len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+			p = p[1:]
+		}
+		return strings.ReplaceAll(p, "/", `\`)
+	}
+	return p
+}
+
+func pathToFileURI(p string) string {
+	abs, err := filepath.Abs(p)
+	if err == nil {
+		p = abs
+	}
+	slashed := strings.ReplaceAll(p, `\`, "/")
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed
+	}
+	return (&url.URL{Scheme: "file", Path: slashed}).String()
 }
 
 func tokenAtUTF16(text string, lineIdx, utf16Col int) string {

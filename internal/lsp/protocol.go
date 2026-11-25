@@ -76,6 +76,14 @@ type Location struct {
 	Range Range  `json:"range"`
 }
 
+// LocationLink represents a link between a source and a target location.
+type LocationLink struct {
+	OriginSelectionRange *Range `json:"originSelectionRange,omitempty"`
+	TargetURI            string `json:"targetUri"`
+	TargetRange          Range  `json:"targetRange"`
+	TargetSelectionRange Range  `json:"targetSelectionRange"`
+}
+
 // TextDocumentIdentifier identifies a text document using a URI.
 type TextDocumentIdentifier struct {
 	URI string `json:"uri"`
@@ -155,6 +163,19 @@ type TextDocumentClientCapabilities struct {
 	Hover              *HoverClientCapabilities              `json:"hover,omitempty"`
 	PublishDiagnostics *PublishDiagnosticsClientCapabilities `json:"publishDiagnostics,omitempty"`
 	DocumentSymbol     *DocumentSymbolClientCapabilities     `json:"documentSymbol,omitempty"`
+	Definition         *DefinitionClientCapabilities         `json:"definition,omitempty"`
+	Formatting         *FormattingClientCapabilities         `json:"formatting,omitempty"`
+}
+
+// DefinitionClientCapabilities describes textDocument/definition capabilities.
+type DefinitionClientCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+	LinkSupport         bool `json:"linkSupport,omitempty"`
+}
+
+// FormattingClientCapabilities describes textDocument/formatting capabilities.
+type FormattingClientCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
 }
 
 // TextDocumentSyncClientCapabilities describes document sync capabilities.
@@ -223,8 +244,10 @@ type ServerCapabilities struct {
 	TextDocumentSync       any                    `json:"textDocumentSync,omitempty"`
 	CompletionProvider     any                    `json:"completionProvider,omitempty"`
 	HoverProvider          any                    `json:"hoverProvider,omitempty"`
-	DocumentSymbolProvider any                    `json:"documentSymbolProvider,omitempty"`
-	ExecuteCommandProvider *ExecuteCommandOptions `json:"executeCommandProvider,omitempty"`
+	DocumentSymbolProvider     any                    `json:"documentSymbolProvider,omitempty"`
+	DefinitionProvider         any                    `json:"definitionProvider,omitempty"`
+	DocumentFormattingProvider any                    `json:"documentFormattingProvider,omitempty"`
+	ExecuteCommandProvider     *ExecuteCommandOptions `json:"executeCommandProvider,omitempty"`
 }
 
 // InitializedParams is sent with the initialized notification.
@@ -334,6 +357,20 @@ type DocumentSymbolParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
 }
 
+// FormattingOptions configures LSP document formatting.
+type FormattingOptions struct {
+	TabSize                int  `json:"tabSize"`
+	InsertSpaces           bool `json:"insertSpaces"`
+	TrimTrailingWhitespace bool `json:"trimTrailingWhitespace,omitempty"`
+	InsertFinalNewline     bool `json:"insertFinalNewline,omitempty"`
+}
+
+// DocumentFormattingParams is sent with textDocument/formatting.
+type DocumentFormattingParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Options      FormattingOptions      `json:"options"`
+}
+
 // DocumentSymbol represents a hierarchical symbol in a document.
 type DocumentSymbol struct {
 	Name           string           `json:"name"`
@@ -421,6 +458,13 @@ func DefaultClientCapabilities() ClientCapabilities {
 			},
 			DocumentSymbol: &DocumentSymbolClientCapabilities{
 				HierarchicalDocumentSymbolSupport: true,
+			},
+			Definition: &DefinitionClientCapabilities{
+				DynamicRegistration: false,
+				LinkSupport:         true,
+			},
+			Formatting: &FormattingClientCapabilities{
+				DynamicRegistration: false,
 			},
 		},
 		General: &GeneralClientCapabilities{
@@ -529,6 +573,53 @@ func ParseDocumentSymbols(raw json.RawMessage) ([]DocumentSymbol, error) {
 		return nil, err
 	}
 	return syms, nil
+}
+
+// ParseLocations parses a textDocument/definition or textDocument/references
+// response supporting null, Location, []Location, and []LocationLink.
+func ParseLocations(raw json.RawMessage) ([]Location, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	if trimmed[0] == '{' {
+		var link LocationLink
+		if err := json.Unmarshal(trimmed, &link); err == nil && link.TargetURI != "" {
+			r := link.TargetSelectionRange
+			if r == (Range{}) {
+				r = link.TargetRange
+			}
+			return []Location{{URI: link.TargetURI, Range: r}}, nil
+		}
+		var loc Location
+		if err := json.Unmarshal(trimmed, &loc); err != nil {
+			return nil, err
+		}
+		if loc.URI == "" {
+			return nil, nil
+		}
+		return []Location{loc}, nil
+	}
+	if trimmed[0] != '[' {
+		return nil, json.Unmarshal(trimmed, &[]Location{})
+	}
+
+	var elems []json.RawMessage
+	if err := json.Unmarshal(trimmed, &elems); err != nil {
+		return nil, err
+	}
+	if len(elems) == 0 {
+		return nil, nil
+	}
+	out := make([]Location, 0, len(elems))
+	for _, elem := range elems {
+		parsed, err := ParseLocations(elem)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, parsed...)
+	}
+	return out, nil
 }
 
 // UTF16ToRuneCol converts a zero-based UTF-16 code-unit column offset into a

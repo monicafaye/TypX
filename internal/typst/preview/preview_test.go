@@ -7,6 +7,8 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -132,14 +134,16 @@ func TestContinuousDeckScrollingAndZeroOverscrollDebt(t *testing.T) {
 }
 
 type fakeCompiler struct {
-	mu    sync.Mutex
-	calls int
-	pages int
+	mu      sync.Mutex
+	calls   int
+	pages   int
+	lastReq CompileRequest
 }
 
 func (f *fakeCompiler) CompilePages(ctx context.Context, req CompileRequest) (*DocumentDeck, error) {
 	f.mu.Lock()
 	f.calls++
+	f.lastReq = req
 	n := f.pages
 	f.mu.Unlock()
 
@@ -158,8 +162,10 @@ func (f *fakeCompiler) CallCount() int {
 
 func initPreviewTestEnv(t *testing.T) (tcell.SimulationScreen, *action.BufPane) {
 	t.Helper()
+	config.ConfigDir = t.TempDir()
 	config.InitRuntimeFiles(true)
 	config.GlobalSettings = config.DefaultAllSettings()
+	config.GlobalSettings["backup"] = false
 	config.GlobalSettings["typst.debounceMs"] = float64(20)
 	config.GlobalSettings["typst.previewWidth"] = float64(50)
 	if ulua.L == nil {
@@ -630,4 +636,79 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func TestPreviewPinnedMainCompilesMainAndRecompilesOnSubfileSave(t *testing.T) {
+	_, _ = initPreviewTestEnv(t)
+	SetCapsForTest(TerminalCaps{Sixel: true, CellW: 10, CellH: 20, Source: "test", Probed: true})
+
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "main.typ")
+	subDir := filepath.Join(dir, "chapters")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	subPath := filepath.Join(subDir, "ch1.typ")
+	if err := os.WriteFile(mainPath, []byte("#include \"chapters/ch1.typ\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(subPath, []byte("= Chapter 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	bSub, err := buffer.NewBufferFromFile(subPath, buffer.BTDefault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bSub.Settings["filetype"] = "typst"
+	action.InitTabs([]*buffer.Buffer{bSub})
+	bpSub := action.MainTab().CurPane()
+
+	fc := &fakeCompiler{pages: 2}
+	SetCompiler(fc)
+	SetRootResolver(func(p string) string { return dir })
+	SetMainFileResolver(func(p string) string { return mainPath })
+	t.Cleanup(func() {
+		SetRootResolver(nil)
+		SetMainFileResolver(nil)
+	})
+	Init()
+
+	pp, ok := Open(bpSub, false)
+	if !ok || pp == nil {
+		t.Fatal("preview.Open failed")
+	}
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !pp.IsCompiling() && pp.viewport != nil
+	})
+
+	fc.mu.Lock()
+	req := fc.lastReq
+	fc.mu.Unlock()
+	if canonicalPreviewPath(req.FilePath) != canonicalPreviewPath(mainPath) {
+		t.Fatalf("expected compile FilePath=%q, got %q", mainPath, req.FilePath)
+	}
+	if req.Modified {
+		t.Fatal("expected Modified=false when compiling pinned main from a subfile")
+	}
+
+	// Editing the subfile updates dirty hint without shadow-compiling subfile as main.
+	bSub.Insert(buffer.Loc{X: 0, Y: 0}, "draft ")
+	buffer.FlushObservers()
+	if !pp.pinnedSubfileDirty {
+		t.Fatal("expected pinnedSubfileDirty=true while subfile is modified")
+	}
+
+	// Saving the subfile clears dirty flag and triggers immediate recompile of pinned main.
+	prevCalls := fc.CallCount()
+	if err := bSub.Save(); err != nil {
+		t.Fatal(err)
+	}
+	buffer.FlushObservers()
+	waitForCondition(t, 2*time.Second, func() bool {
+		return fc.CallCount() > prevCalls && !pp.IsCompiling()
+	})
+	if pp.pinnedSubfileDirty {
+		t.Fatal("expected pinnedSubfileDirty=false after subfile save")
+	}
 }

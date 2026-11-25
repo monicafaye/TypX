@@ -31,6 +31,8 @@ func buildBottomBarContext() display.BottomBarContext {
 			return previewBottomBarContext(p)
 		case *templates.TemplatePane:
 			return templatesBottomBarContext(p)
+		case *lsp.ListPane:
+			return listPaneBottomBarContext(p)
 		}
 	}
 
@@ -125,6 +127,9 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 		if diagItem != nil {
 			hints = append(hints, *diagItem)
 		}
+		if errCount > 0 {
+			hints = append(hints, display.BottomBarItem{Key: "F8", Label: "Next Err", Action: "NextDiagnostic", Priority: 2})
+		}
 		hints = append(hints,
 			display.BottomBarItem{Key: "Alt+I", Label: "Snippets", Action: "InsertPalette", Priority: 0},
 			display.BottomBarItem{Key: "^Space", Label: "Complete", Action: "LspComplete", Priority: 1},
@@ -144,6 +149,9 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 		badgeAccent = "code"
 		if diagItem != nil {
 			hints = append(hints, *diagItem)
+		}
+		if errCount > 0 {
+			hints = append(hints, display.BottomBarItem{Key: "F8", Label: "Next Err", Action: "NextDiagnostic", Priority: 2})
 		}
 		hints = append(hints,
 			display.BottomBarItem{Key: "^Space", Label: "Complete", Action: "LspComplete", Priority: 0},
@@ -165,6 +173,9 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 		}
 		if diagItem != nil {
 			hints = append(hints, *diagItem)
+		}
+		if errCount > 0 {
+			hints = append(hints, display.BottomBarItem{Key: "F8", Label: "Next Err", Action: "NextDiagnostic", Priority: 2})
 		}
 		if isEmpty {
 			hints = append(hints,
@@ -226,6 +237,8 @@ func typstKeyMenuRows(previewOn, outlineOn, concealOn, treeOn, templatesOn bool)
 				{Key: "Alt+B", Label: "Bold", Action: "WrapBold", Priority: 4},
 				{Key: "Alt+E", Label: "Italic", Action: "WrapItalic", Priority: 4},
 				{Key: "Alt+K", Label: "Hover", Action: "LspHover", Priority: 3},
+				{Key: "F12", Label: "Def", Action: "LspDefinition", Priority: 3},
+				{Key: "F8", Label: "Next Err", Action: "NextDiagnostic", Priority: 4},
 				{Key: "^Space", Label: "Complete", Action: "LspComplete", Priority: 2},
 			},
 		},
@@ -308,6 +321,37 @@ func templatesBottomBarContext(tp *templates.TemplatePane) display.BottomBarCont
 		Hints:    hints,
 		MenuRows: typstKeyMenuRows(false, false, true, false, true),
 		MenuTip:  "Templates focused · Enter apply · v preview · p preamble · n scaffold · u load Universe · / filter · Esc returns to editor",
+	}
+}
+
+func listPaneBottomBarContext(lp *lsp.ListPane) display.BottomBarContext {
+	badge := "LIST"
+	tip := "List focused · Enter to jump · Esc closes"
+	hints := []display.BottomBarItem{
+		{Key: "↑/↓", Label: "Navigate", Priority: 1},
+		{Key: "Enter", Label: "Jump", Action: "pane:Enter", Priority: 0},
+	}
+	if lp.IsFilterable() {
+		badge = "DIAGNOSTICS"
+		tip = "Diagnostics focused · Enter to jump · f toggles errors only · Esc closes"
+		hints = append(hints, display.BottomBarItem{
+			Key:      "f",
+			Label:    "Errors",
+			Action:   "pane:f",
+			Priority: 1,
+			Active:   lp.IsErrorsOnly(),
+		})
+	}
+	hints = append(hints,
+		display.BottomBarItem{Key: "Esc", Label: "Close", Action: "pane:Esc", Priority: 0},
+		display.BottomBarItem{Key: "q", Label: "Close", Action: "pane:q", Priority: 2, AlignRight: true},
+		display.BottomBarItem{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 3, AlignRight: true},
+	)
+	return display.BottomBarContext{
+		Badge:    badge,
+		Hints:    hints,
+		MenuRows: typstKeyMenuRows(false, false, true, false, false),
+		MenuTip:  tip,
 	}
 }
 

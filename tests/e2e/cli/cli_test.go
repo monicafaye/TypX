@@ -57,6 +57,11 @@ func TestCLI_OptionsFlag(t *testing.T) {
 		"-typst.previewOpenBrowser ",
 		"-typst.outlineWidth ",
 		"-typst.outlineShowLabels ",
+		"-typst.exportOnSave ",
+		"-typst.formatOnSave ",
+		"-typst.formatter ",
+		"-typst.gotoOpenMode ",
+		"-typst.listPaneHeight ",
 	}
 
 	for _, flagName := range []string{"--options", "-options"} {

@@ -76,7 +76,7 @@ func Init() {
 		// 2. Register concealment toggle action, :conceal command, and Alt-c binding.
 		action.RegisterAction("ToggleConceal", NewToggleConcealAction())
 		action.RegisterCommand("conceal", NewConcealCmd(), concealCompleter)
-		bindWithFallback("Alt-c", "ToggleConceal")
+		action.RegisterDefaultBindingWithFallback("buffer", "Alt-c", "ToggleConceal")
 
 		// 3. Register LyX-style actions, commands, templates, and bindings.
 		shortcuts.RegisterAll()
@@ -121,8 +121,10 @@ func Init() {
 			},
 		})
 		preview.SetRootResolver(lsp.FindProjectRoot)
+		preview.SetMainFileResolver(func(string) string { return lsp.PinnedMain() })
 		preview.Init()
 		lsp.SetInlinePreviewHandler(inlinePreviewAdapter{})
+		lsp.SetPinChangeHandler(func(string) { preview.NotifyMainFileChanged() })
 
 		// 8. Wire Template Gallery & scaffolding with optional tinymist template RPCs
 		// and live in-terminal Sixel visual preview.
@@ -280,15 +282,6 @@ func convertLSPSymbols(syms []lsp.DocumentSymbol) []outline.Symbol {
 		}
 	}
 	return out
-}
-
-func bindWithFallback(key, typxAction string) {
-	defaults := action.DefaultBindings("buffer")
-	if prev := defaults[key]; prev != "" {
-		action.RegisterDefaultBinding("buffer", key, typxAction+"|"+prev)
-		return
-	}
-	action.RegisterDefaultBinding("buffer", key, typxAction)
 }
 
 // NewToggleConcealAction returns the BufKeyAction for toggling math/symbol

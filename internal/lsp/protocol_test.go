@@ -166,3 +166,36 @@ func TestParseDocumentSymbols(t *testing.T) {
 	assert.Equal(t, "Methods", syms[0].Name)
 	assert.Equal(t, 12, syms[0].SelectionRange.Start.Line)
 }
+
+func TestParseLocations(t *testing.T) {
+	locs, err := ParseLocations(json.RawMessage(`null`))
+	require.NoError(t, err)
+	assert.Nil(t, locs)
+
+	locs, err = ParseLocations(json.RawMessage(`[]`))
+	require.NoError(t, err)
+	assert.Nil(t, locs)
+
+	single := `{"uri":"file:///a.typ","range":{"start":{"line":2,"character":4},"end":{"line":2,"character":9}}}`
+	locs, err = ParseLocations(json.RawMessage(single))
+	require.NoError(t, err)
+	require.Len(t, locs, 1)
+	assert.Equal(t, "file:///a.typ", locs[0].URI)
+	assert.Equal(t, 2, locs[0].Range.Start.Line)
+	assert.Equal(t, 4, locs[0].Range.Start.Character)
+
+	multi := `[{"uri":"file:///a.typ","range":{"start":{"line":1,"character":0},"end":{"line":1,"character":3}}},{"uri":"file:///refs.bib","range":{"start":{"line":10,"character":7},"end":{"line":10,"character":15}}}]`
+	locs, err = ParseLocations(json.RawMessage(multi))
+	require.NoError(t, err)
+	require.Len(t, locs, 2)
+	assert.Equal(t, "file:///refs.bib", locs[1].URI)
+	assert.Equal(t, 10, locs[1].Range.Start.Line)
+
+	links := `[{"targetUri":"file:///lib.typ","targetRange":{"start":{"line":5,"character":0},"end":{"line":8,"character":1}},"targetSelectionRange":{"start":{"line":5,"character":5},"end":{"line":5,"character":12}}}]`
+	locs, err = ParseLocations(json.RawMessage(links))
+	require.NoError(t, err)
+	require.Len(t, locs, 1)
+	assert.Equal(t, "file:///lib.typ", locs[0].URI)
+	assert.Equal(t, 5, locs[0].Range.Start.Line)
+	assert.Equal(t, 5, locs[0].Range.Start.Character)
+}

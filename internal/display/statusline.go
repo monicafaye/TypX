@@ -440,6 +440,8 @@ func classifyStatusSegment(seg string, p statusLinePalette) tcell.Style {
 		return p.err
 	}
 	switch {
+	case strings.HasPrefix(trimmed, "PIN:"):
+		return p.accent
 	case strings.HasPrefix(trimmed, "ERR:"):
 		return p.err
 	case strings.Contains(trimmed, "compiling") || strings.Contains(trimmed, "starting"):

@@ -72,6 +72,17 @@ func FindProjectRoot(filePath string) string {
 	return findProjectRoot(filePath)
 }
 
+// PinnedMain returns the currently pinned main .typ file path, or "" if none.
+func PinnedMain() string {
+	return defaultManager.getPinnedMain()
+}
+
+// SetPinChangeHandler registers a callback invoked on the UI goroutine whenever
+// the pinned main file changes via :pin or :unpin.
+func SetPinChangeHandler(fn func(string)) {
+	defaultManager.setPinChangeHandler(fn)
+}
+
 // Options configures the tinymist LSP subsystem at startup.
 type Options struct {
 	// StartPreview requests immediately starting live preview on the initially
@@ -102,6 +113,11 @@ func Init(opts Options) {
 		action.RegisterAction("LspComplete", LspCompleteAction())
 		action.RegisterAction("LspHover", LspHoverAction())
 		action.RegisterAction("TogglePreview", TogglePreviewAction())
+		action.RegisterAction("LspFormat", LspFormatAction())
+		action.RegisterAction("LspDefinition", LspDefinitionAction())
+		action.RegisterAction("LspJumpBack", LspJumpBackAction())
+		action.RegisterAction("NextDiagnostic", NextDiagnosticAction())
+		action.RegisterAction("PrevDiagnostic", PrevDiagnosticAction())
 
 		action.RegisterCommand("diagnostics", DiagnosticsCommand(), nil)
 		action.RegisterCommand("tinymist-status", TinymistStatusCommand(), nil)
@@ -109,10 +125,24 @@ func Init(opts Options) {
 		action.RegisterCommand("preview", PreviewCommand(), previewCompleter)
 		action.RegisterCommand("hover", HoverCommand(), nil)
 		action.RegisterCommand("lsp-complete", LspCompleteCommand(), nil)
+		action.RegisterCommand("pin", PinCommand(), buffer.FileComplete)
+		action.RegisterCommand("unpin", UnpinCommand(), nil)
+		action.RegisterCommand("export", ExportCommand(), exportCompleter)
+		action.RegisterCommand("format", FormatCommand(), nil)
+		action.RegisterCommand("definition", DefinitionCommand(), nil)
+		action.RegisterCommand("jump-back", JumpBackCommand(), nil)
+		action.RegisterCommand("diag-next", DiagNextCommand(), nil)
+		action.RegisterCommand("diag-prev", DiagPrevCommand(), nil)
+
+		action.RegisterPreActionHook("Save", defaultManager.handlePreSaveFormat)
 
 		action.RegisterDefaultBinding("buffer", "CtrlSpace", "LspComplete")
 		action.RegisterDefaultBinding("buffer", "Alt-k", "LspHover")
 		action.RegisterDefaultBinding("buffer", "Alt-p", "TogglePreview|RemoveMultiCursor")
+		action.RegisterDefaultBindingWithFallback("buffer", "F12", "LspDefinition")
+		action.RegisterDefaultBindingWithFallback("buffer", "Alt-u", "LspJumpBack")
+		action.RegisterDefaultBindingWithFallback("buffer", "F8", "NextDiagnostic")
+		action.RegisterDefaultBindingWithFallback("buffer", "Shift-F8", "PrevDiagnostic")
 
 		display.SetStatusInfoFn("typst.lsp", StatusLineInfo())
 	})
@@ -370,4 +400,95 @@ func ScrollPreviewTo(b *buffer.Buffer, line, runeCol int) bool {
 // the main UI goroutine via action.EnqueueUI only if the buffer version still matches.
 func RequestDocumentSymbols(b *buffer.Buffer, cb func(version uint64, symbols []DocumentSymbol)) bool {
 	return defaultManager.requestDocumentSymbols(b, cb)
+}
+
+// PinCommand returns the :pin [path] command handler.
+func PinCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		defaultManager.pinCommand(bp, args)
+	}
+}
+
+// UnpinCommand returns the :unpin command handler.
+func UnpinCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		defaultManager.unpinCommand(bp)
+	}
+}
+
+// ExportCommand returns the :export [pdf|png|svg|html] [output] command handler.
+func ExportCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		defaultManager.exportCommand(bp, args)
+	}
+}
+
+// LspFormatAction returns the BufKeyAction for formatting the active Typst buffer.
+func LspFormatAction() action.BufKeyAction {
+	return func(bp *action.BufPane) bool {
+		return defaultManager.triggerFormat(bp, false)
+	}
+}
+
+// FormatCommand returns the :format command handler.
+func FormatCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		defaultManager.triggerFormat(bp, true)
+	}
+}
+
+// LspDefinitionAction returns the BufKeyAction for jumping to definition (F12).
+func LspDefinitionAction() action.BufKeyAction {
+	return func(bp *action.BufPane) bool {
+		return defaultManager.triggerDefinition(bp, false)
+	}
+}
+
+// DefinitionCommand returns the :definition command handler.
+func DefinitionCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		defaultManager.triggerDefinition(bp, true)
+	}
+}
+
+// LspJumpBackAction returns the BufKeyAction for jumping back to the prior location (Alt-u).
+func LspJumpBackAction() action.BufKeyAction {
+	return func(bp *action.BufPane) bool {
+		return defaultManager.jumpBack(bp, false)
+	}
+}
+
+// JumpBackCommand returns the :jump-back command handler.
+func JumpBackCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		defaultManager.jumpBack(bp, true)
+	}
+}
+
+// NextDiagnosticAction returns the BufKeyAction for jumping to the next diagnostic (F8).
+func NextDiagnosticAction() action.BufKeyAction {
+	return func(bp *action.BufPane) bool {
+		return defaultManager.jumpDiagnostic(bp, 1)
+	}
+}
+
+// PrevDiagnosticAction returns the BufKeyAction for jumping to the previous diagnostic (Shift-F8).
+func PrevDiagnosticAction() action.BufKeyAction {
+	return func(bp *action.BufPane) bool {
+		return defaultManager.jumpDiagnostic(bp, -1)
+	}
+}
+
+// DiagNextCommand returns the :diag-next command handler.
+func DiagNextCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		defaultManager.jumpDiagnostic(bp, 1)
+	}
+}
+
+// DiagPrevCommand returns the :diag-prev command handler.
+func DiagPrevCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		defaultManager.jumpDiagnostic(bp, -1)
+	}
 }
