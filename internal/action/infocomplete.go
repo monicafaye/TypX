@@ -80,13 +80,33 @@ func colorschemeComplete(input string) (string, []string) {
 
 // filetypeComplete autocompletes filetype
 func filetypeComplete(input string) (string, []string) {
+	return completeFiletypes(
+		input,
+		config.ListRealRuntimeFiles(config.RTSyntax),
+		config.ListRuntimeFiles(config.RTSyntaxHeader),
+		config.ListRuntimeFiles(config.RTSyntax),
+	)
+}
+
+func completeFiletypes(input string, realSyntax, syntaxHeaders, allSyntax []config.RuntimeFile) (string, []string) {
 	var suggestions []string
 
 	// We cannot match filetypes just by names of syntax files,
 	// since those names may be different from the actual filetype values
 	// specified inside syntax files (e.g. "c++" filetype in cpp.yaml).
 	// So we need to parse filetype values out of those files.
-	for _, f := range config.ListRealRuntimeFiles(config.RTSyntax) {
+	seen := make(map[string]bool)
+	addSuggestion := func(ft string) {
+		if ft == "" || ft == "off" || ft == "unknown" || seen[ft] {
+			return
+		}
+		seen[ft] = true
+		if strings.HasPrefix(ft, input) {
+			suggestions = append(suggestions, ft)
+		}
+	}
+
+	for _, f := range realSyntax {
 		data, err := f.Data()
 		if err != nil {
 			continue
@@ -95,16 +115,12 @@ func filetypeComplete(input string) (string, []string) {
 		if err != nil {
 			continue
 		}
-		// Prevent duplicated defaults
-		if header.FileType == "off" || header.FileType == "unknown" {
-			continue
-		}
-		if strings.HasPrefix(header.FileType, input) {
-			suggestions = append(suggestions, header.FileType)
-		}
+		addSuggestion(header.FileType)
 	}
-headerLoop:
-	for _, f := range config.ListRuntimeFiles(config.RTSyntaxHeader) {
+
+	headerFiles := make(map[string]bool)
+	for _, f := range syntaxHeaders {
+		headerFiles[f.Name()] = true
 		data, err := f.Data()
 		if err != nil {
 			continue
@@ -113,14 +129,24 @@ headerLoop:
 		if err != nil {
 			continue
 		}
-		for _, v := range suggestions {
-			if v == header.FileType {
-				continue headerLoop
-			}
+		addSuggestion(header.FileType)
+	}
+
+	// Fallback to embedded YAML syntax files when precompiled .hdr files are
+	// absent (for example in `go install` builds without `go generate ./runtime`).
+	for _, f := range allSyntax {
+		if headerFiles[f.Name()] {
+			continue
 		}
-		if strings.HasPrefix(header.FileType, input) {
-			suggestions = append(suggestions, header.FileType)
+		data, err := f.Data()
+		if err != nil {
+			continue
 		}
+		header, err := highlight.MakeHeaderYaml(data)
+		if err != nil {
+			continue
+		}
+		addSuggestion(header.FileType)
 	}
 
 	if strings.HasPrefix("off", input) {
