@@ -123,10 +123,11 @@ typx --new @preview/charged-ieee my-paper
   preamble.
 - `> template-save <name> [--preamble] [--force]`: Save the active buffer (or
   its preamble above the first `=` heading) to `<config-dir>/templates/<name>.typ`.
-- Inside the Gallery: `Up`/`Down` (`k`/`j`) select, `/` filters, `Enter`
-  applies/scaffolds, `p` inserts preamble/entrypoint in place, `n` scaffolds a
-  new folder, `u` loads/refreshes Typst Universe, `Esc` returns to editor, `q`
-  closes.
+- Inside the Gallery: `Up`/`Down` (`k`/`j`) select, `v` toggles live visual
+  preview (on by default in Sixel-capable terminals, or a read-only `.typ`
+  source split otherwise), `/` filters, `Enter` applies/scaffolds, `p` inserts
+  preamble/entrypoint in place, `n` scaffolds a new folder, `u` loads/refreshes
+  Typst Universe, `Esc` returns to editor, `q` closes.
 
 ---
 

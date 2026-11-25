@@ -48,6 +48,7 @@ editor defaults.
 | Home / End           | Jump to first / last selectable template                         |
 | PgUp / PgDn          | Page up / down through template rows                             |
 | Enter                | Apply starter/personal template or scaffold multi-file project   |
+| v                    | Toggle live Sixel preview (or read-only `.typ` source split)     |
 | p                    | Insert preamble or package entrypoint at top of current buffer   |
 | n                    | Scaffold template into a new project directory                   |
 | u                    | Load or refresh Typst Universe (`@preview`) online catalog       |
