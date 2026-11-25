@@ -28,7 +28,7 @@ TypX includes:
 - **Document Outline sidebar.** Press `Alt+O` or run `:outline` to toggle a docked sidebar powered by an incremental Go parser, with optional `tinymist` `textDocument/documentSymbol` enrichment, live cursor tracking, keyboard or mouse jump, and `/` filtering.
 - **File Manager sidebar.** Press `Alt+T` or run `:tree` to browse directories, expand folders inline, open files in splits, and run `:touch`, `:mkdir`, `:rename`, and `:rm`.
 - **In-terminal Sixel and browser preview.** Press `Alt+P` or run `:preview inline` for a right-docked Sixel preview in Sixel-capable terminals with zoom, color inversion, and margin trimming, or run `:preview browser` for an auto-reloading browser preview with cursor sync.
-- **`tinymist` LSP and multi-file projects.** TypX resolves project roots from `typst.toml`, root-relative `/...` imports, `.git`, or `../` imports, and provides gutter diagnostics, `:diagnostics`, completion (`Ctrl+Space`), and hover docs (`Alt+K` or `:hover`). Pass `--no-lsp` to run offline without `tinymist`.
+- **`tinymist` LSP and multi-file projects.** TypX resolves project roots from `typst.toml`, root-relative `/...` imports, `.git`, or `../` imports, and provides `:pin [path]`/`:unpin` main-file pinning (`PIN:` statusline indicator), `:export [pdf|png|svg|html]` (`typst.exportOnSave`), `:format` (`typst.formatOnSave`), go-to-definition across `.typ`/`.bib`/packages (`F12`, `Alt+U` back), interactive `:diagnostics` drawer (`F8`/`Shift+F8` jump), completion (`Ctrl+Space`), and hover docs (`Alt+K` or `:hover`). Pass `--no-lsp` to run offline without `tinymist`.
 
 ---
 
@@ -186,8 +186,14 @@ Press `Ctrl+E` to open the command bar (`>` prompt). All TypX keybindings apply 
 | Demote Heading | `:heading-demote` | `Alt+Right` | Increase heading level (`= ` to `== `). |
 | LSP Completion | `:lsp-complete` | `Ctrl+Space` | Trigger `tinymist` autocomplete popup. |
 | LSP Hover | `:hover` | `Alt+K` | Show `tinymist` documentation or type info at cursor. |
-| Diagnostics List | `:diagnostics` | None | Show all `tinymist` diagnostics for the current `.typ` buffer. |
-| Tinymist Status | `:tinymist-status` | None | Display `tinymist` binary path, LSP state, preview URL, and stderr tail. |
+| Go to Definition | `:definition` | `F12` | Jump to definition across `.typ`, `.bib`, and read-only `@preview` packages. |
+| Jump Back | `:jump-back` | `Alt+U` | Return to the previous location on the tab's definition jump stack. |
+| Next / Prev Diagnostic | `:diag-next`, `:diag-prev` | `F8`, `Shift+F8` | Cycle across diagnostics in the current buffer with wrap-around. |
+| Diagnostics Drawer | `:diagnostics` | None | Open the bottom interactive diagnostics drawer (`f` filters errors only, `Enter` jumps). |
+| Pin / Unpin Main | `:pin [path]`, `:unpin` | None | Pin or unpin the project's main `.typ` file for LSP, preview, and `:export`. |
+| Export Document | `:export [pdf\|png\|svg\|html] [output]` | None | Export the active or pinned document via `tinymist compile`. |
+| Format Document | `:format` | None | Format the active `.typ` buffer via `tinymist` with single-step undo. |
+| Tinymist Status | `:tinymist-status` | None | Display `tinymist` binary path, LSP state, pinned main, preview URL, and stderr tail. |
 | Restart Tinymist | `:tinymist-restart` | None | Restart the `tinymist` language server subprocess. |
 
 Direct snippet commands are also registered for every template: `:insert-figure`, `:insert-table`, `:insert-frac`, `:insert-matrix`, `:insert-cases`, `:insert-code`, `:insert-callout`, `:insert-vec`, `:insert-hat`, and `:insert-bar`.
@@ -268,6 +274,11 @@ TypX resolves its configuration directory in this order:
 | `typst.outlineWidth` | global | `30` | Preferred width in columns for the Document Outline sidebar (auto-hides if terminal width `< 50`). |
 | `typst.outlineShowLabels` | global | `false` | Include standalone `<label>` anchors in the Document Outline alongside headings and figures. |
 | `typst.templatesWidth` | global | `36` | Preferred width in columns for the Template Gallery sidebar (auto-hides if terminal width `< 50`). |
+| `typst.exportOnSave` | global | `"off"` | Auto-export `.typ` buffers on explicit save (`"off"`, `"pdf"`, `"png"`, `"svg"`, `"html"`). |
+| `typst.formatOnSave` | global | `false` | Format `.typ` buffers via `tinymist` before explicit save (falls back to saving after 1s timeout). |
+| `typst.formatter` | global | `"typstyle"` | Typst formatter backend passed to `tinymist` (`"typstyle"`, `"typstfmt"`, `"disable"`). |
+| `typst.gotoOpenMode` | global | `"tab"` | How `F12` / `:definition` opens unopened targets (`"tab"`, `"vsplit"`, `"current"`). |
+| `typst.listPaneHeight` | global | `10` | Preferred row height for bottom-docked drawers (`:diagnostics`, multi-target `:definition`). |
 
 Example `settings.json`:
 

@@ -75,11 +75,33 @@ See `> help typst` for a walkthrough of Typst authoring workflows.
 * `hover`: requests `tinymist` LSP hover documentation at the cursor
    (default key: `Alt-k`).
 
-* `diagnostics`: displays current `tinymist` diagnostics for the active `.typ`
-   buffer.
+* `definition`: jumps to the definition of the symbol or citation at the cursor
+   via `tinymist` (supports `.typ`, `.bib`, and read-only `@preview` packages;
+   opens a bottom picker when multiple locations match; default key: `F12`).
+
+* `jump-back`: returns to the previous cursor location in the tab's definition
+   jump stack (default key: `Alt-u`).
+
+* `diag-next` / `diag-prev`: jumps to the next or previous diagnostic in the
+   current buffer with wrap-around (default keys: `F8`, `Shift-F8`).
+
+* `diagnostics`: opens the interactive bottom-docked `ListPane` showing
+   `tinymist` diagnostics for the active buffer and project (`Enter` jumps,
+   `f` toggles errors only, `Esc`/`q` closes).
+
+* `pin ['path']`: pins `path` (or the current `.typ` buffer) as the project's
+   main file for `tinymist`, live preview, and `:export` (persisted per root).
+
+* `unpin`: clears the project's pinned main `.typ` file.
+
+* `export ['pdf'|'png'|'svg'|'html'] ['output']`: exports the active or pinned
+   `.typ` document via `tinymist compile`.
+
+* `format`: formats the current `.typ` buffer via `tinymist` as a single undo step.
 
 * `tinymist-status`: reports `tinymist` binary discovery path, LSP connection
-   state, live preview URL, install hints (if missing), and recent stderr logs.
+   state, pinned main file, live preview URL, install hints (if missing), and
+   recent stderr logs.
 
 * `tinymist-restart`: restarts the `tinymist` LSP server subprocess.
 

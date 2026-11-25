@@ -110,6 +110,33 @@ globally, via CLI flag, or in an `"ft:typst"` block in `settings.json`.
 
     default value: `36`
 
+* `typst.exportOnSave`: `global only`. Automatically export `.typ` files on
+   explicit save (`off`, `pdf`, `png`, `svg`, or `html`).
+
+    default value: `off`
+
+* `typst.formatOnSave`: `global only`. Format `.typ` buffers via `tinymist`
+   before explicit saves (`Ctrl-s` / `:save`), falling back to saving unchanged
+   if the formatter times out (1s) or is offline.
+
+    default value: `false`
+
+* `typst.formatter`: `global only`. Formatter backend requested from
+   `tinymist` (`typstyle`, `typstfmt`, or `disable`). Takes effect on LSP
+   startup or after `:tinymist-restart`.
+
+    default value: `typstyle`
+
+* `typst.gotoOpenMode`: `global only`. How `:definition` (`F12`) and `:diagnostics`
+   open unopened files (`tab`, `vsplit`, or `current`).
+
+    default value: `tab`
+
+* `typst.listPaneHeight`: `global only`. Preferred row height for bottom-docked
+   drawers (`:diagnostics` and multi-target `:definition` pickers).
+
+    default value: `10`
+
 ## General editor options
 
 Here are the available editor options:
@@ -736,7 +763,12 @@ options in JSON format:
     "typst.conceal": true,
     "typst.concealMode": "line",
     "typst.debounceMs": 150,
+    "typst.exportOnSave": "off",
+    "typst.formatOnSave": false,
+    "typst.formatter": "typstyle",
+    "typst.gotoOpenMode": "tab",
     "typst.keyHints": true,
+    "typst.listPaneHeight": 10,
     "typst.lspEnabled": true,
     "typst.outlineShowLabels": false,
     "typst.outlineWidth": 30,

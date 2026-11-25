@@ -168,8 +168,24 @@ offline editing.
   preview.
 - `:lsp-complete` (`Ctrl-Space`): Trigger `tinymist` autocompletion.
 - `:hover` (`Alt-k`): Display `tinymist` hover documentation at the cursor.
-- `:diagnostics`: Display all diagnostics for the current `.typ` buffer.
-- `:tinymist-status`: Show binary path, LSP status, preview URL, and stderr log.
+- `:definition` (`F12`): Jump to the definition of the symbol or citation under
+  the cursor (supports `.typ`, `.bib`, and read-only `@preview` packages; opens
+  a bottom `ListPane` picker when multiple targets exist).
+- `:jump-back` (`Alt-u`): Jump back through the tab's definition jump stack.
+- `:diag-next` (`F8`) / `:diag-prev` (`Shift-F8`): Jump to the next or previous
+  diagnostic in the current buffer (wraps around).
+- `:diagnostics`: Open the interactive bottom-docked diagnostics drawer across
+  the active file and workspace (`Enter` jumps, `f` toggles errors only,
+  `Esc`/`q` closes).
+- `:pin [path]` / `:unpin`: Pin or unpin the project's main `.typ` file for
+  `tinymist`, Sixel/browser live preview, and `:export` (shown as `PIN: <file>`
+  in the statusline and persisted per project root).
+- `:export [pdf|png|svg|html] [output]`: Export the active document (or pinned
+  main file) via `tinymist compile`.
+- `:format`: Format the current `.typ` buffer via `tinymist` as a single
+  undoable edit (can also run automatically via `typst.formatOnSave`).
+- `:tinymist-status`: Show binary path, LSP status, pinned main, preview URL,
+  and stderr log.
 - `:tinymist-restart`: Restart the `tinymist` subprocess.
 
 ### In-Terminal Sixel Preview Controls
@@ -212,6 +228,11 @@ See `> help options` for the full list of editor options. TypX-specific keys:
 - `typst.outlineWidth` (default `30`): Preferred Outline sidebar width (columns).
 - `typst.outlineShowLabels` (default `false`): Show standalone `<labels>` in Outline.
 - `typst.templatesWidth` (default `36`): Preferred Template Gallery sidebar width (columns).
+- `typst.exportOnSave` (default `"off"`): Auto-export on explicit save (`"off"`, `"pdf"`, `"png"`, `"svg"`, `"html"`).
+- `typst.formatOnSave` (default `false`): Format `.typ` buffers before explicit save (with 1s timeout fallback).
+- `typst.formatter` (default `"typstyle"`): Formatter backend passed to `tinymist` (`"typstyle"`, `"typstfmt"`, `"disable"`).
+- `typst.gotoOpenMode` (default `"tab"`): How `:definition` / `:diagnostics` open unopened files (`"tab"`, `"vsplit"`, `"current"`).
+- `typst.listPaneHeight` (default `10`): Preferred height in rows for bottom-docked drawers (`ListPane`).
 
 ### Recommended Colorschemes
 

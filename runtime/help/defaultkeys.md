@@ -28,6 +28,10 @@ editor defaults.
 | Alt-Right     | `> heading-demote` | Demote heading level (`= ` -> `== `)                                      |
 | Ctrl-Space    | `> lsp-complete`   | Trigger `tinymist` LSP completion                                         |
 | Alt-k         | `> hover`          | Show `tinymist` LSP hover documentation                                   |
+| F12           | `> definition`     | Jump to definition across `.typ`, `.bib`, and `@preview` packages         |
+| Alt-u         | `> jump-back`      | Return to the previous location in the tab's jump stack                   |
+| F8            | `> diag-next`      | Jump to next diagnostic in buffer (wraps around)                          |
+| Shift-F8      | `> diag-prev`      | Jump to previous diagnostic in buffer (wraps around)                      |
 
 ### In-Terminal Sixel Preview (when focused)
 
