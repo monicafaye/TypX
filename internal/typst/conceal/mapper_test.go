@@ -60,7 +60,7 @@ func TestWordBoundariesAndLongestMatch(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"untouched_words", "$sin(x) + index + summary + alpha1 + in_set + dots1$", "$sin(x) + index + summary + alpha1 + in_set + dots1$"},
+		{"untouched_words", "$sin(x) + index + summary + alpha1 + #in_set + dots1$", "$sin(x) + index + summary + alpha1 + #in_set + dots1$"},
 		{"dot_prefix_suffix", "$foo.in + dots.foo + alpha.$", "$foo.in + dots.foo + α.$"},
 		{"concealed_words", "$alpha + in + sum + dot + dots + plus.minus$", "$α + ∈ + ∑ + · + … + ±$"},
 		{"longest_arrows", "$<--> <==> <-> <=> --> <-- ==> <== -> <- =>$", "$⟷ ⟺ ↔ ⇔ ⟶ ⟵ ⟹ ⟸ → ← ⇒$"},
@@ -94,6 +94,63 @@ func TestSuperAndSubscripts(t *testing.T) {
 		if got := string(lv.DisplayText); got != tc.want {
 			t.Errorf("input %q: got %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestMathSubscriptOperatorAndCodeIdentifiers(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "subscript_operator_regression",
+			in:   "$integral_0^x + sum_i^n + sum_(i=1)^n + alpha_0 + beta_i + x^2_0 + a_alpha + #in_set$",
+			want: "$∫₀^x + ∑ᵢⁿ + ∑_(i=1)ⁿ + α₀ + βᵢ + x²₀ + a_α + #in_set$",
+		},
+		{
+			name: "untouched_words",
+			in:   "$sin(x) + index + summary + alpha1 + dots1$",
+			want: "$sin(x) + index + summary + alpha1 + dots1$",
+		},
+		{
+			name: "untouched_a_index",
+			in:   "$a_index$",
+			want: "$a_index$",
+		},
+		{
+			name: "untouched_double_scripts",
+			in:   "$x^^2 + x__i$",
+			want: "$x^^2 + x__i$",
+		},
+		{
+			name: "untouched_dotted_in",
+			in:   "$foo.in$",
+			want: "$foo.in$",
+		},
+		{
+			name: "code_identifiers_in_math",
+			in:   "$#in_set + #alpha_1 + #my-alpha + #x->y$",
+			want: "$#in_set + #alpha_1 + #my-alpha + #x→y$",
+		},
+		{
+			name: "hash_non_ident_and_escape_unaffected",
+			in:   `$<label> + #<label> + #(alpha) + \#alpha$`,
+			want: `$<label> + #<label> + #(α) + \#α$`,
+		},
+		{
+			name: "multi_digit_and_dotted_subscripts",
+			in:   "$alpha_12 + beta_1 + in.not_0 + integral.double_0^1$",
+			want: "$α_12 + β₁ + ∉₀ + ∬₀¹$",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lv := scanOne(tc.in, nil)
+			if got := string(lv.DisplayText); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -132,6 +189,7 @@ func TestCoordinateRoundTripUTF8CombiningWideAndTabs(t *testing.T) {
 		"e\u0301 😀 $𝑥 + alpha -> beta$ --- end",
 		"a\u0301\u0327 -- b\u0300",
 		"$alpha + \U0001D538$ ok",
+		"$integral_0^x + sum_i^n + #in_set + x^2_0$",
 	}
 
 	for _, line := range lines {

@@ -118,6 +118,29 @@ func isCellIdentCont(c charCell) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_'
 }
 
+// scanCellIdentEnd returns the index after a Typst identifier starting at start.
+// When mask is non-nil, scanning stops before any cell where mask[idx] is false.
+func scanCellIdentEnd(cells []charCell, start int, mask []bool) int {
+	n := len(cells)
+	j := start
+	for j < n && (mask == nil || mask[j]) {
+		if isCellIdentCont(cells[j]) {
+			j++
+		} else if isPlainRune(cells[j], '-') && j+1 < n && (mask == nil || mask[j+1]) && isCellIdentCont(cells[j+1]) {
+			j++
+		} else {
+			break
+		}
+	}
+	return j
+}
+
+// isMathWordRune reports whether r is a word rune (letter or digit) in Typst
+// math mode, excluding '_' which acts as the subscript operator.
+func isMathWordRune(r rune) bool {
+	return util.IsAlphanumeric(r)
+}
+
 func cellsMatchKeyword(cells []charCell, start, end int) bool {
 	n := end - start
 	if n < 2 || n > 8 {
@@ -337,6 +360,10 @@ func classifyLineCells(cells []charCell, prev typst.LineState, mathSpans []typst
 				i++
 				continue
 			}
+			if isPlainRune(cells[i], '#') && i+1 < n && isMathCell[i+1] && isCellIdentStart(cells[i+1]) {
+				i = scanCellIdentEnd(cells, i+1, isMathCell)
+				continue
+			}
 			inMathContent[i] = true
 			i++
 			continue
@@ -448,16 +475,7 @@ func classifyLineCells(cells []charCell, prev typst.LineState, mathSpans []typst
 			}
 			if isCellIdentStart(cells[i+1]) {
 				identStart := i + 1
-				j := identStart
-				for j < n {
-					if isCellIdentCont(cells[j]) {
-						j++
-					} else if isPlainRune(cells[j], '-') && j+1 < n && isCellIdentCont(cells[j+1]) {
-						j++
-					} else {
-						break
-					}
-				}
+				j := scanCellIdentEnd(cells, identStart, nil)
 				if cellsMatchKeyword(cells, identStart, j) {
 					inCodeStmt = true
 					stmtBaseStackLen = len(stack)
@@ -529,14 +547,7 @@ func classifyLineCells(cells []charCell, prev typst.LineState, mathSpans []typst
 			}
 			if inHashChain && len(stack) == hashBaseStackLen {
 				if isPlainRune(cells[i], '.') && i+1 < n && isCellIdentStart(cells[i+1]) {
-					j := i + 1
-					for j < n {
-						if isCellIdentCont(cells[j]) || (isPlainRune(cells[j], '-') && j+1 < n && isCellIdentCont(cells[j+1])) {
-							j++
-						} else {
-							break
-						}
-					}
+					j := scanCellIdentEnd(cells, i+1, nil)
 					inHashChain = hasChainCont(j)
 					i = j
 					continue
@@ -617,19 +628,19 @@ func matchMathToken(cells []charCell, i int, inMathContent []bool) (Span, bool) 
 			}
 			if entry.wordBoundary {
 				if i > 0 {
-					if util.IsWordChar(cells[i-1].base) {
+					if isMathWordRune(cells[i-1].base) {
 						continue
 					}
-					if isPlainRune(cells[i-1], '.') && i > 1 && util.IsWordChar(cells[i-2].base) {
+					if isPlainRune(cells[i-1], '.') && i > 1 && isMathWordRune(cells[i-2].base) {
 						continue
 					}
 				}
 				j := i + patLen
 				if j < n {
-					if util.IsWordChar(cells[j].base) {
+					if isMathWordRune(cells[j].base) {
 						continue
 					}
-					if isPlainRune(cells[j], '.') && j+1 < n && util.IsWordChar(cells[j+1].base) {
+					if isPlainRune(cells[j], '.') && j+1 < n && isMathWordRune(cells[j+1].base) {
 						continue
 					}
 				}
@@ -659,7 +670,7 @@ func matchMathToken(cells []charCell, i int, inMathContent []bool) (Span, bool) 
 		if ok {
 			leftOK := i == 0 || (!isPlainRune(cells[i-1], '^') && !isPlainRune(cells[i-1], '_') && !isPlainRune(cells[i-1], '\\'))
 			j := i + 2
-			rightOK := j >= n || (!util.IsWordChar(cells[j].base) && !isPlainRune(cells[j], cells[i].base))
+			rightOK := j >= n || (!isMathWordRune(cells[j].base) && !isPlainRune(cells[j], cells[i].base))
 			if leftOK && rightOK {
 				w := runewidth.RuneWidth(glyph)
 				if w <= 0 {
