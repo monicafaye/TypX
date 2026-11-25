@@ -50,10 +50,10 @@ jobs:
         env:
           TINYMIST_VERSION: v0.15.12
         run: |
-          mkdir -p "$HOME/.local/bin"
+          mkdir -p "$HOME/.local/bin" /tmp/tinymist-unpack
           curl -fsSL "https://github.com/Myriad-Dreamin/tinymist/releases/download/${TINYMIST_VERSION}/tinymist-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/tinymist.tar.gz
-          tar -xzf /tmp/tinymist.tar.gz -C /tmp
-          find /tmp -maxdepth 3 -type f -name tinymist -exec install -m 0755 {} "$HOME/.local/bin/tinymist" \;
+          tar -xzf /tmp/tinymist.tar.gz -C /tmp/tinymist-unpack
+          find /tmp/tinymist-unpack -maxdepth 3 -type f -name tinymist -exec install -m 0755 {} "$HOME/.local/bin/tinymist" \;
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/tinymist" --version
 
