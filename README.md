@@ -34,52 +34,85 @@ TypX includes:
 
 ## Installation
 
-### Linux
+The installer scripts download `typx`, verify its SHA-256 checksum, update `PATH`, and install [tinymist](https://github.com/Myriad-Dreamin/tinymist) if it is missing. TypX uses `tinymist` for live preview, diagnostics, completion, and PDF export.
 
-Install the latest release (verifies SHA-256 and installs to `~/.local/bin`, override with `TYPX_INSTALL_DIR`):
+### Windows
+
+Run this command in [Windows Terminal](https://apps.microsoft.com/detail/9n0dx20hk701) or PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/monicafaye/TypX/main/scripts/install.ps1 | iex
+```
+
+Or install with Scoop:
+
+```powershell
+scoop bucket add monicafaye https://github.com/monicafaye/scoop-bucket
+scoop bucket add typst-community https://github.com/typst-community/scoop-bucket
+scoop install monicafaye/typx typst-community/tinymist
+```
+
+### macOS
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/monicafaye/TypX/main/scripts/install.sh | sh
 ```
 
-Native `.deb` (Debian/Ubuntu) and `.rpm` (Fedora/RHEL/openSUSE) packages for `amd64` and `arm64` are also attached to [GitHub Releases](https://github.com/monicafaye/TypX/releases):
+Or install with Homebrew:
 
 ```bash
-# Debian / Ubuntu
+brew install monicafaye/tap/typx tinymist
+```
+
+### Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/monicafaye/TypX/main/scripts/install.sh | sh
+```
+
+[GitHub Releases](https://github.com/monicafaye/TypX/releases) also provides `.deb` and `.rpm` packages for `amd64` and `arm64`:
+
+```bash
+# Debian or Ubuntu
 sudo apt install ./typx_*_amd64.deb
 
-# Fedora / RHEL / openSUSE
+# Fedora, RHEL, or openSUSE
 sudo dnf install ./typx-*.x86_64.rpm
+
+# tinymist
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Myriad-Dreamin/tinymist/releases/latest/download/tinymist-installer.sh | sh
 ```
 
-### Homebrew (macOS)
+Open a new terminal window and verify both `typx` and `tinymist`:
 
 ```bash
-brew install monicafaye/tap/typx
+typx --check
 ```
 
-### Scoop (Windows)
+<details>
+<summary>Manual download, Go install, and building from source</summary>
 
-```powershell
-scoop bucket add monicafaye https://github.com/monicafaye/scoop-bucket
-scoop install monicafaye/typx
-```
+#### Prebuilt archives
 
-### Prebuilt binaries
+[GitHub Releases](https://github.com/monicafaye/TypX/releases) publishes archives for `windows/amd64`, `windows/arm64`, `darwin/arm64`, `darwin/amd64`, `linux/amd64`, and `linux/arm64`, along with `SHA256SUMS.txt`. Extract `typx`, or `typx.exe` on Windows, onto your `PATH`. Install `tinymist` from [tinymist releases](https://github.com/Myriad-Dreamin/tinymist/releases) or via a package manager:
 
-Prebuilt archives for `windows/amd64`, `windows/arm64`, `darwin/arm64`, `darwin/amd64`, `linux/amd64`, and `linux/arm64` (plus Linux `.deb`/`.rpm` packages and `SHA256SUMS.txt`) are published on [GitHub Releases](https://github.com/monicafaye/TypX/releases). Extract the archive and place `typx` (`typx.exe` on Windows) on your `PATH`. Package manager manifests for Scoop, Homebrew, `.deb`/`.rpm`, and AUR live in [packaging/](packaging/README.md).
+- Windows: `winget install Myriad-Dreamin.Tinymist`
+- macOS: `brew install tinymist`
+- Linux: `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Myriad-Dreamin/tinymist/releases/latest/download/tinymist-installer.sh | sh`
 
-### Using Go (`go install`)
+Package manager manifests for Scoop, Homebrew, `.deb`, `.rpm`, and AUR live in [packaging/](packaging/README.md).
 
-Requires Go 1.23 or newer. Installs `typx` into `$GOBIN` or `$GOPATH/bin`:
+#### Using Go
+
+Install Go 1.23 or newer first. This command installs `typx` into `$GOBIN` or `$GOPATH/bin`. Install `tinymist` separately.
 
 ```bash
 go install github.com/monicafaye/TypX/cmd/typx@latest
 ```
 
-### Building from source
+#### Building from source
 
-Requires Go 1.23 or newer.
+Install Go 1.23 or newer first:
 
 ```bash
 git clone https://github.com/monicafaye/TypX
@@ -88,16 +121,16 @@ go generate ./runtime
 go build -trimpath ./cmd/typx
 ```
 
-Or use `make`, which runs `go generate ./runtime` and injects version, commit hash, and compile date metadata:
+Or use `make`, which runs `go generate ./runtime` and embeds the version, commit hash, and compile date:
 
 ```bash
 make build      # builds ./typx (or typx.exe on Windows)
 make install    # installs to $GOBIN or $GOPATH/bin
 ```
 
-### Cross-platform builds
+#### Cross-platform builds
 
-TypX embeds all runtime assets (syntax grammars, colorschemes, help files, and core Lua plugins) via `go:embed` and compiles with `CGO_ENABLED=0`:
+TypX embeds all runtime assets via `go:embed` and compiles with `CGO_ENABLED=0`:
 
 ```bash
 go generate ./runtime
@@ -115,54 +148,39 @@ GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o binaries/typx-darwi
 GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o binaries/typx-darwin-amd64 ./cmd/typx
 ```
 
-Or build all six targets at once with `make build-cross`.
+Run `make build-cross` to build all six targets at once.
 
----
+</details>
 
-## `tinymist` setup for LSP and live preview
+<details>
+<summary>Installer options and tinymist configuration</summary>
 
-TypX works offline for syntax highlighting, math concealment, structural and math shortcuts, and the Document Outline. Installing [tinymist](https://github.com/Myriad-Dreamin/tinymist) adds live diagnostics, completion, hover info, outline symbol enrichment, and live preview (both in-terminal Sixel and companion browser preview).
+#### Installer script variables
 
-### Install `tinymist`
+- `TYPX_INSTALL_DIR` sets the install directory. Defaults are `%LOCALAPPDATA%\TypX\bin` on Windows and `~/.local/bin` on macOS and Linux.
+- `TYPX_SKIP_TINYMIST=1` skips installing `tinymist`.
+- `TYPX_NO_MODIFY_PATH=1` skips editing `PATH` or shell profiles.
 
-- **Windows:**
-  ```powershell
-  winget install Myriad-Dreamin.Tinymist
-  # or
-  scoop install tinymist
-  # or
-  cargo install --locked tinymist
-  ```
-- **macOS:**
-  ```bash
-  brew install tinymist
-  # or
-  cargo install --locked tinymist
-  ```
-- **Linux:**
-  ```bash
-  cargo install --locked tinymist
-  # or download a prebuilt binary from https://github.com/Myriad-Dreamin/tinymist/releases
-  ```
+#### Installing `tinymist` separately
 
-### Automatic discovery order
+- Windows: `winget install Myriad-Dreamin.Tinymist`, `scoop install typst-community/tinymist`, or `cargo install --locked tinymist`
+- macOS: `brew install tinymist` or `cargo install --locked tinymist`
+- Linux: `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Myriad-Dreamin/tinymist/releases/latest/download/tinymist-installer.sh | sh`, `cargo install --locked tinymist`, or a binary from [tinymist releases](https://github.com/Myriad-Dreamin/tinymist/releases)
 
-TypX searches for `tinymist` (`tinymist.exe` on Windows) in this order:
+#### Automatic discovery order
 
-1. Explicit `typst.tinymistPath` in TypX `settings.json`, or `-typst.tinymistPath <path>` on the CLI.
-2. `PATH` (`tinymist` or `tinymist.exe`).
+TypX searches for `tinymist` on macOS and Linux, or `tinymist.exe` on Windows, in this order:
+
+1. `typst.tinymistPath` in `settings.json`, or `-typst.tinymistPath <path>` on the command line.
+2. `PATH`.
 3. Standard OS locations:
-   - **Windows:** `%USERPROFILE%\.cargo\bin`, `%LOCALAPPDATA%\Microsoft\WinGet\Links`, `%USERPROFILE%\scoop\shims`, and installed VS Code `myriad-dreamin.tinymist` extensions.
-   - **macOS:** `/opt/homebrew/bin`, `/usr/local/bin`, `~/.cargo/bin`, `~/.local/bin`, and VS Code extensions.
-   - **Linux:** `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`, `/usr/bin`, and VS Code extensions.
+   - Windows: `%USERPROFILE%\.local\bin`, `%USERPROFILE%\.cargo\bin`, `%LOCALAPPDATA%\Microsoft\WinGet\Links`, `%USERPROFILE%\scoop\shims`, and installed VS Code `myriad-dreamin.tinymist` extensions.
+   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `~/.cargo/bin`, `~/.local/bin`, and VS Code extensions.
+   - Linux: `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`, `/usr/bin`, and VS Code extensions.
 
-Verify your environment, including Sixel terminal detection and `tinymist` discovery, at any time:
+Inside TypX, press `Ctrl+E` and run `tinymist-status` to inspect the active binary, or run `tinymist-restart` to restart the server. Pass `--no-lsp` to edit offline without `tinymist`.
 
-```bash
-typx --check
-```
-
-Inside TypX, press `Ctrl+E` and run `tinymist-status`, or `tinymist-restart` to restart the language server.
+</details>
 
 ---
 

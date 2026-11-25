@@ -4,6 +4,8 @@ set -eu
 REPO="monicafaye/TypX"
 INSTALL_DIR="${TYPX_INSTALL_DIR:-${HOME}/.local/bin}"
 VERSION="${TYPX_VERSION:-}"
+SKIP_TINYMIST="${TYPX_SKIP_TINYMIST:-0}"
+NO_MODIFY_PATH="${TYPX_NO_MODIFY_PATH:-0}"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -22,7 +24,7 @@ case "${OS_RAW}" in
   Linux)  OS="linux" ;;
   Darwin) OS="darwin" ;;
   *)
-    printf 'error: unsupported OS %s (for Windows, use Scoop or download from https://github.com/%s/releases)\n' "${OS_RAW}" "${REPO}" >&2
+    printf 'error: unsupported OS %s (for Windows, run: irm https://raw.githubusercontent.com/%s/main/scripts/install.ps1 | iex)\n' "${OS_RAW}" "${REPO}" >&2
     exit 1
     ;;
 esac
@@ -104,12 +106,90 @@ cp "${BIN_SRC}" "${INSTALL_DIR}/typx"
 chmod 0755 "${INSTALL_DIR}/typx"
 
 printf 'Installed TypX to %s/typx\n' "${INSTALL_DIR}"
+
+PATH_UPDATED=0
+
+find_tinymist() {
+  if command -v tinymist >/dev/null 2>&1; then
+    command -v tinymist
+    return 0
+  fi
+  for cand in \
+    "/opt/homebrew/bin/tinymist" \
+    "/usr/local/bin/tinymist" \
+    "${HOME}/.local/bin/tinymist" \
+    "${HOME}/.cargo/bin/tinymist"; do
+    if [ -x "${cand}" ]; then
+      printf '%s\n' "${cand}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [ "${SKIP_TINYMIST}" != "1" ]; then
+  if EXISTING_TINYMIST="$(find_tinymist)"; then
+    printf 'Found existing tinymist at %s.\n' "${EXISTING_TINYMIST}"
+  else
+    printf '\nInstalling tinymist (required for live preview, diagnostics, and PDF export)...\n'
+    if curl --proto '=https' --tlsv1.2 -LsSf "https://github.com/Myriad-Dreamin/tinymist/releases/latest/download/tinymist-installer.sh" | sh; then
+      PATH_UPDATED=1
+    else
+      printf 'warning: could not install tinymist automatically.\n' >&2
+      printf 'TypX is installed. Install tinymist manually from:\n' >&2
+      printf '  https://github.com/Myriad-Dreamin/tinymist/releases\n' >&2
+    fi
+  fi
+fi
+
+add_to_profile() {
+  rc_file="$1"
+  export_line="export PATH=\"${INSTALL_DIR}:\$PATH\""
+  if [ -f "${rc_file}" ]; then
+    if grep -F "${INSTALL_DIR}" "${rc_file}" >/dev/null 2>&1; then
+      return 0
+    fi
+    if [ "${INSTALL_DIR}" = "${HOME}/.local/bin" ] && grep -F '$HOME/.local/bin' "${rc_file}" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  printf '\n# Added by TypX installer\n%s\n' "${export_line}" >> "${rc_file}"
+  printf 'Added %s to %s\n' "${INSTALL_DIR}" "${rc_file}"
+  PATH_UPDATED=1
+}
+
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*) ;;
   *)
-    printf '\nNote: %s is not on your PATH. Add it to your shell profile:\n' "${INSTALL_DIR}"
-    printf '  export PATH="%s:$PATH"\n' "${INSTALL_DIR}"
+    if [ "${NO_MODIFY_PATH}" = "1" ]; then
+      printf '\nNote: %s is not on your PATH. Add it to your shell profile:\n' "${INSTALL_DIR}"
+      printf '  export PATH="%s:$PATH"\n' "${INSTALL_DIR}"
+    else
+      SHELL_NAME="$(basename "${SHELL:-}")"
+      case "${SHELL_NAME}" in
+        zsh)  add_to_profile "${HOME}/.zshrc" ;;
+        bash)
+          if [ "${OS}" = "darwin" ]; then
+            add_to_profile "${HOME}/.bash_profile"
+          else
+            add_to_profile "${HOME}/.bashrc"
+          fi
+          ;;
+        *)
+          if [ "${OS}" = "darwin" ]; then
+            add_to_profile "${HOME}/.zshrc"
+          else
+            add_to_profile "${HOME}/.profile"
+          fi
+          ;;
+      esac
+    fi
     ;;
 esac
 
-printf '\nRun `typx --check` to verify your terminal and tinymist setup.\n'
+if [ "${PATH_UPDATED}" = "1" ]; then
+  printf '\nClose this terminal window and open a new one, then run:\n'
+else
+  printf '\nVerify your setup by running:\n'
+fi
+printf '  typx --check\n'

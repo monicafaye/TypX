@@ -84,6 +84,8 @@ class Typx < Formula
   version "${VERSION}"
   license "MIT"
 
+  depends_on "tinymist"
+
   on_macos do
     on_arm do
       url "https://github.com/monicafaye/TypX/releases/download/v#{version}/typx-#{version}-darwin-arm64.tar.gz"
@@ -115,10 +117,7 @@ class Typx < Formula
 
   def caveats
     <<~EOS
-      TypX works offline out of the box for editing, math concealment, shortcuts, and the Document Outline.
-      For live diagnostics, completion, hover docs, formatting, and live preview, install tinymist:
-        brew install tinymist
-      Then verify your environment with:
+      Run the check command to verify your terminal and tinymist setup:
         typx --check
     EOS
   end

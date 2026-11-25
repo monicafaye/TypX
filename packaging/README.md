@@ -15,7 +15,7 @@ Tagged releases publish 6 archives, 4 native Linux packages, and `SHA256SUMS.txt
 - `typx_<version>_amd64.deb` and `typx_<version>_arm64.deb` (built via `nfpm` from `packaging/nfpm.yaml`)
 - `typx-<version>-1.x86_64.rpm` and `typx-<version>-1.aarch64.rpm` (built via `nfpm` from `packaging/nfpm.yaml`)
 
-Linux and macOS users can also install directly from GitHub Releases with SHA-256 verification via `scripts/install.sh`.
+Windows users can install TypX and `tinymist` from GitHub Releases with SHA-256 verification via `scripts/install.ps1`. Linux and macOS users can do the same via `scripts/install.sh`.
 
 ## Enabling Automated Publishing
 

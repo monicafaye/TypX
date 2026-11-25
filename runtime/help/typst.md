@@ -139,11 +139,18 @@ synchronization.
 
 ### Installing `tinymist`
 
-- **Windows**: `winget install Myriad-Dreamin.Tinymist`, `scoop install tinymist`,
-  or `cargo install --locked tinymist` (VS Code `myriad-dreamin.tinymist`
-  extension binaries are also auto-discovered).
-- **macOS**: `brew install tinymist` or `cargo install --locked tinymist`.
-- **Linux**: `cargo install --locked tinymist` or download a release binary from
+The TypX installer scripts (`scripts/install.ps1` on Windows and
+`scripts/install.sh` on macOS and Linux) install `tinymist` automatically if it
+is missing. To install `tinymist` on its own:
+
+- On Windows, run `winget install Myriad-Dreamin.Tinymist`,
+  `scoop install typst-community/tinymist`, or
+  `cargo install --locked tinymist`. TypX also discovers VS Code
+  `myriad-dreamin.tinymist` extension binaries automatically.
+- On macOS, run `brew install tinymist` or `cargo install --locked tinymist`.
+- On Linux, run
+  `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Myriad-Dreamin/tinymist/releases/latest/download/tinymist-installer.sh | sh`,
+  run `cargo install --locked tinymist`, or download a release binary from
   `https://github.com/Myriad-Dreamin/tinymist/releases`.
 
 If `tinymist` is installed in a non-standard path, set:
@@ -153,8 +160,7 @@ If `tinymist` is installed in a non-standard path, set:
 ```
 
 Run `typx --check` from your shell to verify Sixel terminal detection and
-`tinymist` discovery/version probing, or run `typx --no-lsp file.typ` for
-offline editing.
+`tinymist` discovery, or run `typx --no-lsp file.typ` for offline editing.
 
 ### LSP & Preview Commands
 
