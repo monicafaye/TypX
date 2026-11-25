@@ -218,25 +218,50 @@ func TestTypstSyntaxHeaderAndPatterns(t *testing.T) {
 	}
 }
 
-func TestTypxColorschemes(t *testing.T) {
+func TestBundledColorschemes(t *testing.T) {
 	requiredGroups := []string{
 		"default", "comment", "todo",
-		"identifier", "identifier.class", "identifier.var",
-		"constant", "constant.bool", "constant.number", "constant.specialChar",
-		"constant.string", "constant.string.raw", "constant.string.url",
-		"statement", "preproc", "type", "special",
+		"identifier", "identifier.class", "identifier.macro", "identifier.var",
+		"constant", "constant.bool", "constant.bool.true", "constant.bool.false",
+		"constant.number", "constant.specialChar",
+		"constant.string", "constant.string.char", "constant.string.raw", "constant.string.url",
+		"statement", "preproc", "type", "type.keyword", "type.extended", "special",
 		"symbol", "symbol.brackets", "symbol.operator", "symbol.tag", "symbol.math", "conceal",
 		"underlined", "error", "ignore",
 		"gutter-error", "gutter-warning", "gutter-info",
 		"line-number", "current-line-number", "cursor-line", "color-column",
 		"selection", "hlsearch", "match-brace",
 		"statusline", "statusline.inactive", "statusline.suggestions",
+		"statusline.dim", "statusline.ok", "statusline.warn", "statusline.err", "statusline.accent",
+		"statusline.mode.markup", "statusline.mode.math", "statusline.mode.code", "statusline.mode.raw",
+		"bottombar", "bottombar.key", "bottombar.active",
+		"bottombar.badge", "bottombar.badge.math", "bottombar.badge.code", "bottombar.badge.raw",
+		"bottombar.err", "bottombar.warn", "bottombar.dim",
 		"tabbar", "tabbar.active", "message", "error-message",
 		"divider", "scrollbar", "indent-char", "tab-error", "trailingws",
 		"diff-added", "diff-modified", "diff-deleted",
 	}
 
-	for _, name := range []string{"typx-dark", "typx-light"} {
+	fullSchemes := []string{
+		"default",
+		"catppuccin-mocha", "catppuccin-latte",
+		"github-dark", "github-light",
+		"tokyo-night", "nord",
+		"rose-pine", "rose-pine-dawn",
+		"kanagawa",
+		"everforest-dark", "everforest-light",
+		"gruvbox-tc", "gruvbox-light",
+		"solarized-tc", "solarized-light",
+		"monokai", "dracula-tc", "one-dark",
+	}
+
+	for _, removed := range []string{"typx-dark", "typx-light"} {
+		if config.ColorschemeExists(removed) {
+			t.Errorf("removed colorscheme %q should not exist", removed)
+		}
+	}
+
+	for _, name := range fullSchemes {
 		t.Run(name, func(t *testing.T) {
 			var parsed []string
 			scheme, err := config.LoadColorscheme(name, &parsed)

@@ -21,7 +21,7 @@ TypX (`typx`) is a terminal editor for [Typst](https://typst.app/), forked from 
 TypX includes:
 
 - **Micro ergonomics.** Standard keybindings (`Ctrl+S`, `Ctrl+C`, `Ctrl+V`, `Ctrl+Z`, `Ctrl+F`), mouse support, splits, tabs, and Lua plugins work out of the box.
-- **Typst syntax and themes.** The built-in `typst.yaml` grammar highlights Markup, Math, and Code modes alongside `typx-dark` and `typx-light` colorschemes and companion formats (`bibtex`, `markdown`, `yaml`, `toml`, `json`, `ini`, `patch`).
+- **Typst syntax and themes.** The built-in `typst.yaml` grammar highlights Markup, Math, and Code modes alongside companion formats (`bibtex`, `markdown`, `yaml`, `toml`, `json`, `ini`, `patch`) and built-in dark and light themes (`monokai`, `catppuccin-mocha`, `catppuccin-latte`, `tokyo-night`, `nord`, `rose-pine`, `rose-pine-dawn`, `kanagawa`, `everforest-dark`, `everforest-light`, `github-dark`, `github-light`, `gruvbox-tc`, `gruvbox-light`, `solarized-tc`, `solarized-light`, `dracula-tc`, `one-dark`).
 - **Cursor-aware Unicode math concealment.** Non-cursor lines display Greek letters, arrows, relations, set and logic operators, big operators, simple super/subscripts, and typographic dashes (`---`, `--`, `...`), while the active line stays unconcealed for editing. Concealment never alters the `.typ` file on disk.
 - **Structural and math shortcuts.** Keybindings insert inline or display math (`Alt+M` and `Alt+Shift+M`), bold or italic wrappers (`Alt+B` and `Alt+E`), heading level changes (`Alt+Left` and `Alt+Right`), indentation-aware snippets (`:insert` or `Alt+I`), and Typst-aware smart pairs.
 - **Template Gallery and project scaffolding.** Start documents with `typx --new <template> [path]`, press `Alt+Shift+N` or run `:templates` for a docked gallery of project/personal templates (`.typx/templates/`, `<config-dir>/templates/`), `@local` packages, and on-demand Typst Universe `@preview` templates via `tinymist` — with live in-terminal Sixel visual preview enabled by default while browsing. Save reusable preambles or documents with `:template-save`.
@@ -208,7 +208,7 @@ typx --preview paper.typ         # open file and start live preview
 | `--version` | Show TypX version, upstream `micro` base version, commit hash, and compile date. |
 | `--options` | List all configuration options and their default values. |
 | `-config-dir <dir>` | Use a custom configuration directory for this session. |
-| `-<option> <value>` | Override any option for this session (for example, `typx -colorscheme typx-dark paper.typ`). |
+| `-<option> <value>` | Override any option for this session (for example, `typx -colorscheme catppuccin-mocha paper.typ`). |
 | `+LINE[:COL]` | Open buffer positioned at a specific line and optional column. |
 
 ---
@@ -339,7 +339,7 @@ Example `settings.json`:
 
 ```json
 {
-  "colorscheme": "typx-dark",
+  "colorscheme": "catppuccin-mocha",
   "typst.conceal": true,
   "typst.concealMode": "line",
   "typst.previewMode": "auto",
@@ -360,12 +360,15 @@ When editing `.typ` files, TypX applies these defaults unless overridden globall
 
 ### Colorschemes
 
-Try TypX's dedicated themes via `Ctrl+E`:
+Switch themes via `Ctrl+E` (press `Tab` to list all embedded themes, or run `> help colors`):
 
 ```text
-> set colorscheme typx-dark
-> set colorscheme typx-light
+> set colorscheme catppuccin-mocha
+> set colorscheme tokyo-night
+> set colorscheme github-light
 ```
+
+The default theme is `default` (`monokai`). Dark themes with full Typst and UI styling include `catppuccin-mocha`, `tokyo-night`, `nord`, `rose-pine`, `kanagawa`, `everforest-dark`, `github-dark`, `dracula-tc`, `gruvbox-tc`, `one-dark`, `solarized-tc`, and `monokai`. Light themes include `github-light`, `catppuccin-latte`, `gruvbox-light`, `solarized-light`, `rose-pine-dawn`, and `everforest-light`.
 
 ---
 
@@ -388,7 +391,7 @@ Inside TypX, press `Ctrl+E` and run `help` or open a specific topic:
 - `> help defaultkeys` lists default TypX and editor keybindings.
 - `> help commands` lists all command-bar commands.
 - `> help options` lists all global, local, and `typst.*` configuration options.
-- `> help colors` lists colorschemes including `typx-dark`, `typx-light`, and built-in themes.
+- `> help colors` lists all built-in dark, light, 256-color, and 16-color themes.
 - `> help keybindings` explains how to customize `bindings.json` and bindable actions.
 - `> help tutorial` walks through basic configuration.
 

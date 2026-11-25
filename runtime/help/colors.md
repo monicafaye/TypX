@@ -55,26 +55,44 @@ color support comes in three flavors.
 
 Here is the list of colorschemes:
 
-### TypX Themes (256-color & true color)
+### Dark themes (true color and 256-color)
 
-Designed specifically for Typst authoring with clear visual hierarchy for
-headings, concealed math glyphs, inline raw spans, and `tinymist` diagnostics:
+These include full syntax, math conceal, statusline, and bottom bar groups:
 
-* `typx-dark`: TypX dark theme
-* `typx-light`: TypX light theme
+* `default` (`monokai`): Classic Monokai dark theme (the default colorscheme)
+* `catppuccin-mocha`: Catppuccin Mocha dark theme
+* `tokyo-night`: Tokyo Night dark theme
+* `nord`: Nord Arctic dark theme
+* `rose-pine`: Rose Pine dark theme
+* `kanagawa`: Kanagawa Wave dark theme
+* `everforest-dark`: Everforest Medium dark theme
+* `github-dark`: GitHub Dark Default theme
+* `dracula-tc`: Dracula truecolor theme
+* `gruvbox-tc`: Gruvbox Dark Medium truecolor theme
+* `one-dark`: Atom One Dark theme
+* `solarized-tc`: Solarized Dark truecolor theme
 
-### 256 color
+### Light themes (true color and 256-color)
 
-These should work and look nice in most terminals. I recommend these
-themes the most.
+These include full syntax, math conceal, statusline, and bottom bar groups:
 
-* `monokai` (also the `default` colorscheme)
+* `github-light`: GitHub Light syntax palette on warm paper surfaces
+* `catppuccin-latte`: Catppuccin Latte light theme
+* `gruvbox-light`: Gruvbox Light Medium theme
+* `solarized-light`: Solarized Light theme
+* `rose-pine-dawn`: Rose Pine Dawn warm light theme
+* `everforest-light`: Everforest Light Medium theme
+
+### Additional 256-color themes
+
+* `monokai-dark`
 * `zenburn`
 * `gruvbox`
 * `darcula`
 * `twilight`
 * `railscast`
 * `bubblegum` (light theme)
+* `sunny-day` (light theme)
 
 ### 16 color
 
@@ -84,10 +102,10 @@ These may vary widely based on the 16 colors selected for your terminal.
 * `solarized` (must have the solarized color palette in your terminal to use
    this colorscheme properly)
 * `cmc-16`
-* `cmc-paper`
 * `geany`
+* `gotham`
 
-### True color
+### Additional true color themes
 
 Micro enables true color support by default as long as it detects that the
 terminal supports it (which is usually indicated by the environment variable
@@ -96,12 +114,10 @@ enabling it unconditionally by setting the option `truecolor` to `on` (or
 alternatively by setting the environment variable `MICRO_TRUECOLOR` to 1, which
 is supported for backward compatibility).
 
-* `solarized-tc`: this is the solarized colorscheme for true color.
-* `atom-dark`: this colorscheme is based off of Atom's "dark" colorscheme.
-* `cmc-tc`: A true colour variant of the cmc theme.  It requires true color to
-   look its best. Use cmc-16 if your terminal doesn't support true color.
-* `gruvbox-tc`: The true color version of the gruvbox colorscheme
-* `material-tc`: Colorscheme based off of Google's Material Design palette
+* `atom-dark`: Atom Dark theme
+* `cmc-tc`: True color variant of the cmc theme
+* `dukedark-tc`, `dukelight-tc`, `dukeubuntu-tc`
+* `material-tc`: Material Design dark theme
 
 ## Creating a Colorscheme
 

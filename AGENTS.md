@@ -27,7 +27,7 @@ CGO_ENABLED=1 go test -race ./...
 - `internal/typst/` — Pure-Go Typst modules (`mode.go`, `conceal/`, `shortcuts/`, `outline/`, `preview/`, and composition root `features/`).
 - `internal/lsp/` — `tinymist` JSON-RPC 2.0 client, discovery, project root resolution, browser preview proxy, and subprocess cleanup.
 - `internal/{action,buffer,config,display,screen,views}/` — Inherited `micro` core with narrow TypX seams.
-- `runtime/` — Embedded syntax grammars, colorschemes (`typx-dark`, `typx-light`), help docs, and bundled Lua plugins (`filemanager`, Typst-guarded `autoclose`).
+- `runtime/` — Embedded syntax grammars, colorschemes, help docs, and bundled Lua plugins (`filemanager`, Typst-guarded `autoclose`).
 - `tests/e2e/` — Headless editor & CLI end-to-end tests with `tests/e2e/cmd/mocktinymist`.
 
 ## Repo-Wide Invariants

@@ -32,9 +32,9 @@ Key Typst authoring shortcuts in `.typ` buffers:
 Move the cursor around with the mouse or with the arrow keys. Enter text simply
 by pressing character keys.
 
-If you want a Typst-tuned theme, try `> set colorscheme typx-dark` or
-`> set colorscheme typx-light`. You can press tab to see all available
-colorschemes, or see more information with `> help colors`.
+Try switching colorschemes with `> set colorscheme catppuccin-mocha`,
+`> set colorscheme tokyo-night`, or `> set colorscheme github-light`. Press tab
+to see all available colorschemes, or run `> help colors`.
 
 Press `Ctrl-w` to move between splits, and type `> vsplit filename` or
 `> hsplit filename` to open a new split.
@@ -61,7 +61,7 @@ Here are the available help topics:
 * `options`: Gives a list of all the options you can customize
 * `plugins`: Explains how TypX's Lua plugin system works and how to create your
    own plugins
-* `colors`: Explains colorschemes and syntax highlighting (`typx-dark`,
-   `typx-light`, and custom themes)
+* `colors`: Explains colorschemes and syntax highlighting (built-in dark and
+   light themes, and custom themes)
 
 For example, to open the Typst authoring guide you would run `> help typst`.

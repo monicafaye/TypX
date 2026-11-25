@@ -1,5 +1,5 @@
-# TypX Light — High-contrast light colorscheme for Typst authoring
-# Designed for both truecolor and 256-color terminals.
+# GitHub Light
+# High-contrast light colorscheme on warm paper surfaces for truecolor and 256-color terminals.
 
 color-link default "#1F2328,#FAF8F5"
 color-link comment "italic #6E7781"

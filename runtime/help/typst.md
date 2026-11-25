@@ -248,12 +248,16 @@ See `> help options` for the full list of editor options. TypX-specific keys:
 - `typst.gotoOpenMode` (default `"tab"`): How `:definition` / `:diagnostics` open unopened files (`"tab"`, `"vsplit"`, `"current"`).
 - `typst.listPaneHeight` (default `10`): Preferred height in rows for bottom-docked drawers (`ListPane`).
 
-### Recommended Colorschemes
+### Colorschemes
 
-TypX ships dedicated dark and light colorschemes tuned for Typst headings,
-concealed math glyphs, and diagnostics:
+Built-in dark and light colorschemes with full Typst syntax, concealed math,
+and diagnostics styling include `default` (`monokai`), `catppuccin-mocha`,
+`tokyo-night`, `nord`, `rose-pine`, `kanagawa`, `everforest-dark`,
+`github-dark`, `dracula-tc`, `gruvbox-tc`, `one-dark`, `solarized-tc`,
+`github-light`, `catppuccin-latte`, `gruvbox-light`, `solarized-light`,
+`rose-pine-dawn`, and `everforest-light`:
 
 ```
-> set colorscheme typx-dark
-> set colorscheme typx-light
+> set colorscheme catppuccin-mocha
+> set colorscheme github-light
 ```

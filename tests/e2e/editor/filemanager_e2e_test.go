@@ -32,7 +32,7 @@ func TestE2E_FileManagerPluginTreeNavigationAndOps(t *testing.T) {
 		InitialName: "main.typ",
 		InitialText: "= Main\nRoot document.\n",
 		Settings: map[string]any{
-			"colorscheme":      "typx-dark",
+			"colorscheme":      "catppuccin-mocha",
 			"typst.lspEnabled": false,
 			"typst.keyHints":   true,
 			"ruler":            false,

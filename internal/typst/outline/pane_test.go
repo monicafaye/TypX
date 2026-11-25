@@ -769,7 +769,12 @@ func TestOutlineCurrentItemUsesCursorLineAsBackground(t *testing.T) {
 		config.DefStyle = origDef
 	})
 
-	for _, schemeName := range []string{"typx-dark", "typx-light"} {
+	for _, schemeName := range []string{
+		"default", "catppuccin-mocha", "github-light", "tokyo-night", "nord",
+		"rose-pine", "kanagawa", "everforest-dark", "github-dark",
+		"catppuccin-latte", "gruvbox-light", "solarized-light", "rose-pine-dawn", "everforest-light",
+		"monokai", "dracula-tc", "gruvbox-tc", "one-dark", "solarized-tc",
+	} {
 		t.Run(schemeName, func(t *testing.T) {
 			var parsed []string
 			cs, err := config.LoadColorscheme(schemeName, &parsed)

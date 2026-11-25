@@ -1,5 +1,5 @@
-# TypX Dark — High-contrast dark colorscheme for Typst authoring
-# Designed for both truecolor and 256-color terminals.
+# Catppuccin Mocha
+# High-contrast dark colorscheme for truecolor and 256-color terminals.
 
 color-link default "#CDD6F4,#1E1E2E"
 color-link comment "italic #6C7086"

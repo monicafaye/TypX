@@ -19,7 +19,7 @@ Press `Ctrl-e` to go to command mode, and type `set option value` (indicated
 below as `> set option value`). For example:
 
 ```
-> set colorscheme typx-dark
+> set colorscheme catppuccin-mocha
 > set typst.outlineWidth 32
 ```
 
@@ -31,7 +31,7 @@ In `settings.json`, you can scope options per filetype or glob:
 
 ```json
 {
-    "colorscheme": "typx-dark",
+    "colorscheme": "catppuccin-mocha",
     "ft:typst": {
         "typst.concealMode": "line",
         "tabsize": 2

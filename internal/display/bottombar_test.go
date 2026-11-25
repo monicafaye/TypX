@@ -85,7 +85,7 @@ func TestInfoWindowIdleBottomBarAndHitboxes(t *testing.T) {
 	config.GlobalSettings["infobar"] = true
 	config.GlobalSettings["keymenu"] = false
 	config.GlobalSettings["typst.keyHints"] = true
-	config.Colorscheme, err = config.LoadColorscheme("typx-dark", nil)
+	config.Colorscheme, err = config.LoadColorscheme("catppuccin-mocha", nil)
 	require.NoError(t, err)
 
 	SetBottomBarProvider(func() BottomBarContext {
@@ -187,7 +187,7 @@ func TestStatusLineSemanticStylingAndCleanOverflow(t *testing.T) {
 	defer cleanup()
 
 	var err error
-	config.Colorscheme, err = config.LoadColorscheme("typx-dark", nil)
+	config.Colorscheme, err = config.LoadColorscheme("catppuccin-mocha", nil)
 	require.NoError(t, err)
 
 	win.Buf.Settings["statusline"] = true
@@ -242,7 +242,7 @@ func TestStatusLineCompactsLongFilenameOnNarrowPane(t *testing.T) {
 	defer cleanup()
 
 	var err error
-	config.Colorscheme, err = config.LoadColorscheme("typx-dark", nil)
+	config.Colorscheme, err = config.LoadColorscheme("catppuccin-mocha", nil)
 	require.NoError(t, err)
 
 	win.Buf.Settings["statusline"] = true

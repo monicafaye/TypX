@@ -36,7 +36,7 @@ func TestE2E_TemplatesGalleryEmptyHintSaveAndMockTinymistInit(t *testing.T) {
 		InitialName: "blank.typ",
 		InitialText: "",
 		Settings: map[string]any{
-			"colorscheme":          "typx-dark",
+			"colorscheme":          "catppuccin-mocha",
 			"typst.lspEnabled":     true,
 			"typst.tinymistPath":   mockBin,
 			"typst.debounceMs":     float64(30),
@@ -172,7 +172,7 @@ func TestE2E_TemplateGalleryLiveVisualPreview(t *testing.T) {
 		InitialName: "live-gallery.typ",
 		InitialText: "= Existing Doc\n",
 		Settings: map[string]any{
-			"colorscheme":          "typx-dark",
+			"colorscheme":          "catppuccin-mocha",
 			"typst.lspEnabled":     false,
 			"typst.keyHints":       true,
 			"typst.templatesWidth": float64(30),

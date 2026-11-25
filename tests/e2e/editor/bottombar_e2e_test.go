@@ -20,7 +20,7 @@ func TestE2E_BottomBarContextHintsClicksAndKeyMenu(t *testing.T) {
 		InitialName: "paper.typ",
 		InitialText: "= Intro\nSome prose.\n$alpha + beta$\n#let x = 1\n",
 		Settings: map[string]any{
-			"colorscheme":      "typx-dark",
+			"colorscheme":      "catppuccin-mocha",
 			"typst.lspEnabled": false,
 			"typst.keyHints":   true,
 			"ruler":            false,
