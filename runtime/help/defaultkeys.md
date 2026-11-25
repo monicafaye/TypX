@@ -47,7 +47,7 @@ editor defaults.
 | Up / Down or k / j   | Move selection up / down (skipping section headers)              |
 | Home / End           | Jump to first / last selectable template                         |
 | PgUp / PgDn          | Page up / down through template rows                             |
-| Enter                | Apply starter/personal template or scaffold multi-file project   |
+| Enter                | Apply personal/project template or scaffold multi-file project   |
 | v                    | Toggle live Sixel preview (or read-only `.typ` source split)     |
 | p                    | Insert preamble or package entrypoint at top of current buffer   |
 | n                    | Scaffold template into a new project directory                   |

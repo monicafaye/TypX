@@ -98,7 +98,7 @@ Gallery sidebar, or start a document directly from the command line:
 
 ```
 typx --new list
-typx --new notes hw3.typ
+typx --new my-notes hw3.typ
 typx --new @preview/charged-ieee my-paper
 ```
 
@@ -109,17 +109,15 @@ typx --new @preview/charged-ieee my-paper
 2. **Personal**: `<config-dir>/templates/` (supports optional leading
    `// @title:`, `// @desc:`, `// @category:` comments and `{{title}}`,
    `{{author}}`, `{{date}}` variables).
-3. **Built-in starters**: `minimal`, `article`, `notes`, `report`, `slides`,
-   `cv`, `letter`, `paper`.
-4. **Local & Cached**: Typst `@local` and already-cached `@preview` template
+3. **Local & Cached**: Typst `@local` and already-cached `@preview` template
    packages discovered from Typst's package directories.
-5. **Typst Universe (`@preview`)**: Loaded on demand with `u` in the Gallery or
+4. **Typst Universe (`@preview`)**: Loaded on demand with `u` in the Gallery or
    `> templates universe` and cached locally with ETag/TTL.
 
 ### Template Commands & Gallery Controls
 
-- `> template [name] [dir|--preamble]`: Open Gallery, insert a starter or
-  personal template, scaffold a multi-file/package project, or insert just its
+- `> template [name] [dir|--preamble]`: Open Gallery, insert a personal or
+  project template, scaffold a multi-file/package project, or insert just its
   preamble.
 - `> template-save <name> [--preamble] [--force]`: Save the active buffer (or
   its preamble above the first `=` heading) to `<config-dir>/templates/<name>.typ`.

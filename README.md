@@ -24,7 +24,7 @@ TypX includes:
 - **Typst syntax and themes.** The built-in `typst.yaml` grammar highlights Markup, Math, and Code modes alongside `typx-dark` and `typx-light` colorschemes and companion formats (`bibtex`, `markdown`, `yaml`, `toml`, `json`, `ini`, `patch`).
 - **Cursor-aware Unicode math concealment.** Non-cursor lines display Greek letters, arrows, relations, set and logic operators, big operators, simple super/subscripts, and typographic dashes (`---`, `--`, `...`), while the active line stays unconcealed for editing. Concealment never alters the `.typ` file on disk.
 - **Structural and math shortcuts.** Keybindings insert inline or display math (`Alt+M` and `Alt+Shift+M`), bold or italic wrappers (`Alt+B` and `Alt+E`), heading level changes (`Alt+Left` and `Alt+Right`), indentation-aware snippets (`:insert` or `Alt+I`), and Typst-aware smart pairs.
-- **Template Gallery and project scaffolding.** Start documents with `typx --new <template> [path]`, press `Alt+Shift+N` or run `:templates` for a docked gallery of built-in starters (`article`, `notes`, `report`, `slides`, `cv`, `letter`, `paper`, `minimal`), personal/project templates (`<config-dir>/templates/`, `.typx/templates/`), `@local` packages, and on-demand Typst Universe `@preview` templates via `tinymist` — with live in-terminal Sixel visual preview enabled by default while browsing. Save reusable preambles or documents with `:template-save`.
+- **Template Gallery and project scaffolding.** Start documents with `typx --new <template> [path]`, press `Alt+Shift+N` or run `:templates` for a docked gallery of project/personal templates (`.typx/templates/`, `<config-dir>/templates/`), `@local` packages, and on-demand Typst Universe `@preview` templates via `tinymist` — with live in-terminal Sixel visual preview enabled by default while browsing. Save reusable preambles or documents with `:template-save`.
 - **Document Outline sidebar.** Press `Alt+O` or run `:outline` to toggle a docked sidebar powered by an incremental Go parser, with optional `tinymist` `textDocument/documentSymbol` enrichment, live cursor tracking, keyboard or mouse jump, and `/` filtering.
 - **File Manager sidebar.** Press `Alt+T` or run `:tree` to browse directories, expand folders inline, open files in splits, and run `:touch`, `:mkdir`, `:rename`, and `:rm`.
 - **In-terminal Sixel and browser preview.** Press `Alt+P` or run `:preview inline` for a right-docked Sixel preview in Sixel-capable terminals with zoom, color inversion, and margin trimming, or run `:preview browser` for an auto-reloading browser preview with cursor sync.
@@ -131,8 +131,8 @@ Open any `.typ` document with TypX:
 
 ```bash
 typx paper.typ                   # open with LSP, math concealment, and outline
-typx --new list                  # list available starters, personal, and cached templates
-typx --new notes hw3.typ         # create hw3.typ from the built-in notes starter and open it
+typx --new list                  # list available project, personal, and cached templates
+typx --new my-notes hw3.typ      # create hw3.typ from a personal/project template and open it
 typx --new @preview/charged-ieee # scaffold a Typst Universe template project into ./charged-ieee
 typx --no-lsp paper.typ          # offline mode without starting tinymist
 typx --preview paper.typ         # open file and start live preview
@@ -169,8 +169,8 @@ Press `Ctrl+E` to open the command bar (`>` prompt). All TypX keybindings apply 
 | Inline Math | `:math-inline` | `Alt+M` | Insert `$|$`, wrap selection in `$...$`, or exit inline math. |
 | Display Math | `:math-display` | `Alt+Shift+M` | Insert a multi-line display math block `$\n  |\n$`. |
 | Insert Palette | `:insert [name]` | `Alt+I` | Open the snippet insert palette (`figure`, `table`, `frac`, `matrix`, `cases`, `code`, `callout`, `vec`, `hat`, `bar`). |
-| Template Gallery | `:templates` | `Alt+Shift+N` | Toggle the docked Template Gallery sidebar (starters, personal/project, `@local`, Typst Universe `@preview`). |
-| Apply Template | `:template [name] [dir\|--preamble]` | None | Insert a starter/personal template, scaffold a multi-file/`@preview` project, or insert its preamble. |
+| Template Gallery | `:templates` | `Alt+Shift+N` | Toggle the docked Template Gallery sidebar (project/personal, `@local`, Typst Universe `@preview`). |
+| Apply Template | `:template [name] [dir\|--preamble]` | None | Insert a personal/project template, scaffold a multi-file/`@preview` project, or insert its preamble. |
 | Save Template | `:template-save <name> [--preamble]` | None | Save the active buffer or preamble into `<config-dir>/templates/<name>.typ`. |
 | Bold | `:wrap-bold` | `Alt+B` | Wrap selection or insert `*bold*` delimiters. |
 | Italic | `:wrap-italic` | `Alt+E` | Wrap selection or insert `_italic_` delimiters. |
@@ -220,8 +220,8 @@ When the Template Gallery (`Alt+Shift+N` / `:templates`) is focused:
 
 | Key or Action | Behavior |
 |---|---|
-| `Up` / `Down` or `k` / `j` | Move selection across Project/Personal, Built-in Starters, Local/Cached, and Typst Universe rows. |
-| `Enter` or Click | Apply starter/personal template (prompts insert vs. new tab on non-empty buffers) or scaffold multi-file/`@preview` project. |
+| `Up` / `Down` or `k` / `j` | Move selection across Project & Personal, Local & Cached, and Typst Universe rows. |
+| `Enter` or Click | Apply personal/project template (prompts insert vs. new tab on non-empty buffers) or scaffold multi-file/`@preview` project. |
 | `v` | Toggle live Sixel preview (on by default in Sixel-capable terminals, or a read-only `.typ` source split otherwise). |
 | `p` | Insert preamble (`--preamble`) or package entrypoint at line 1 of the active buffer. |
 | `n` | Prompt for a target directory and scaffold a new project folder. |

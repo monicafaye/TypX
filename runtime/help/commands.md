@@ -31,7 +31,7 @@ See `> help typst` for a walkthrough of Typst authoring workflows.
    `Alt-Shift-n`).
 
 * `template ['name'] ['dir'|--preamble]`: opens the Template Gallery if no
-   name is given, applies a starter/personal template, or scaffolds a
+   name is given, applies a personal/project template, or scaffolds a
    multi-file/`@local`/`@preview` template into a project folder.
 
 * `template-save 'name' [--preamble] [--force]`: saves the active buffer (or
