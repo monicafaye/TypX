@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -221,7 +222,11 @@ func runLSP() {
 					"hoverProvider":          true,
 					"documentSymbolProvider": true,
 					"executeCommandProvider": map[string]any{
-						"commands": []string{"tinymist.startDefaultPreview"},
+						"commands": []string{
+							"tinymist.startDefaultPreview",
+							"tinymist.doInitTemplate",
+							"tinymist.doGetTemplateEntry",
+						},
 					},
 				},
 				"serverInfo": map[string]any{
@@ -405,7 +410,8 @@ func runLSP() {
 				ID:     msg.ID,
 				Params: msg.Params,
 			})
-			if p.Command == "tinymist.startDefaultPreview" {
+			switch {
+			case p.Command == "tinymist.startDefaultPreview":
 				ln, err := net.Listen("tcp", "127.0.0.1:0")
 				addr := "127.0.0.1:0"
 				if err == nil {
@@ -425,7 +431,49 @@ func runLSP() {
 					"staticServerAddr": addr,
 					"url":              "http://" + addr,
 				}, nil)
-			} else {
+			case p.Command == "tinymist.doInitTemplate":
+				var spec, targetDir string
+				if len(p.Arguments) > 0 {
+					_ = json.Unmarshal(p.Arguments[0], &spec)
+				}
+				if len(p.Arguments) > 1 {
+					_ = json.Unmarshal(p.Arguments[1], &targetDir)
+				}
+				if targetDir == "" {
+					writeRPCResponse(msg.ID, nil, map[string]any{
+						"code":    -32602,
+						"message": "missing targetDir",
+					})
+					break
+				}
+				if err := os.MkdirAll(targetDir, 0o755); err != nil {
+					writeRPCResponse(msg.ID, nil, map[string]any{
+						"code":    -32000,
+						"message": err.Error(),
+					})
+					break
+				}
+				entryBody := fmt.Sprintf("// mock template for %s\n#import %q: *\n= Mock Template\n", spec, spec)
+				if err := os.WriteFile(filepath.Join(targetDir, "main.typ"), []byte(entryBody), 0o644); err != nil {
+					writeRPCResponse(msg.ID, nil, map[string]any{
+						"code":    -32000,
+						"message": err.Error(),
+					})
+					break
+				}
+				writeRPCResponse(msg.ID, map[string]any{
+					"entryPath": "main.typ",
+				}, nil)
+
+			case p.Command == "tinymist.doGetTemplateEntry":
+				var spec string
+				if len(p.Arguments) > 0 {
+					_ = json.Unmarshal(p.Arguments[0], &spec)
+				}
+				entryBody := fmt.Sprintf("// mock entry for %s\n#import %q: *\n", spec, spec)
+				writeRPCResponse(msg.ID, entryBody, nil)
+
+			default:
 				writeRPCResponse(msg.ID, nil, nil)
 			}
 
