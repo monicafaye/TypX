@@ -14,14 +14,14 @@ editor defaults.
 
 | Key           | Command            | Description of function                                                   |
 |---------------|--------------------|---------------------------------------------------------------------------|
-| Alt-p         | `> preview`        | Toggle live preview (in-terminal Sixel pane or browser preview)           |
+| Alt-p         | `> preview`        | Toggle live preview (in-terminal Kitty or Sixel pane, or browser preview) |
 | Alt-o         | `> outline`        | Toggle docked Document Outline sidebar                                    |
 | Alt-t         | `> tree`           | Toggle built-in File Manager sidebar (see `> help filemanager`)           |
 | Alt-c         | `> conceal`        | Toggle live Unicode math/typography concealment                           |
 | Alt-m         | `> math-inline`    | Insert inline math `$|$`, wrap selection, or exit inline math             |
 | Alt-M         | `> math-display`   | Insert multi-line display math block (`Alt-Shift-m`)                      |
 | Alt-i         | `> insert`         | Open Typst snippet insert palette                                         |
-| Alt-N         | `> templates`      | Toggle docked Template Gallery sidebar (`Alt-Shift-n`)                    |
+| Alt-N         | `> templates`      | Toggle docked Template Gallery sidebar (`Alt-Shift-n`, works in any buffer) |
 | Alt-b         | `> wrap-bold`      | Wrap selection or insert `*bold*`                                         |
 | Alt-e         | `> wrap-italic`    | Wrap selection or insert `_italic_`                                       |
 | Alt-Left      | `> heading-promote`| Promote heading level (`== ` -> `= `)                                     |
@@ -37,9 +37,10 @@ editor defaults.
 | F8            | `> diag-next`      | Jump to next diagnostic in buffer (wraps around)                          |
 | Shift-F8      | `> diag-prev`      | Jump to previous diagnostic in buffer (wraps around)                      |
 
-### In-Terminal Sixel Preview (when focused)
+### In-Terminal Preview (Kitty & Sixel, when focused)
 
-Open with `:preview inline` or focus with `:preview focus`:
+Open with `:preview inline`, `:preview kitty`, or `:preview sixel`, or focus
+with `:preview focus`:
 
 | Key                              | Description of function                               |
 |----------------------------------|-------------------------------------------------------|
@@ -73,9 +74,9 @@ Open with `:preview inline` or focus with `:preview focus`:
 | Up / Down or k / j   | Move selection up / down (skipping section headers)              |
 | Home / End           | Jump to first / last selectable template                         |
 | PgUp / PgDn          | Page up / down through template rows                             |
-| Enter                | Apply personal/project template or scaffold multi-file project   |
-| v                    | Toggle live Sixel preview (or read-only `.typ` source split)     |
-| p                    | Insert preamble or package entrypoint at top of current buffer   |
+| Enter                | Apply template (or open a new `.typ` tab on non-Typst/read-only buffers) or create a multi-file project |
+| v                    | Toggle live Kitty or Sixel preview (or read-only `.typ` source split) |
+| p                    | Insert preamble/entrypoint into `.typ`/unnamed buffer (or open in a new `.typ` tab) |
 | n                    | Scaffold template into a new project directory                   |
 | u                    | Load or refresh Typst Universe (`@preview`) online catalog       |
 | /                    | Filter templates (`Esc` clears, `Enter` accepts)                 |

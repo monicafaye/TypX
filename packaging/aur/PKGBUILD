@@ -2,7 +2,7 @@
 pkgname=typx-bin
 pkgver=0.3.0
 pkgrel=1
-pkgdesc='Terminal editor for Typst with live math concealment, document outline, tinymist LSP, and Sixel preview'
+pkgdesc='Terminal editor for Typst with live math concealment, document outline, tinymist LSP, and Kitty/Sixel preview'
 arch=('x86_64' 'aarch64')
 url='https://github.com/monicafaye/TypX'
 license=('MIT')

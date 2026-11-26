@@ -37,9 +37,9 @@ All external publishing steps in `.github/workflows/release.yaml` are gated on r
 Render the updated `PKGBUILD` from a release's `SHA256SUMS.txt`:
 
 ```bash
-bash packaging/scripts/update-manifests.sh 0.4.0 SHA256SUMS.txt /tmp/typx-pkg
+bash packaging/scripts/update-manifests.sh 0.5.0 SHA256SUMS.txt /tmp/typx-pkg
 cp /tmp/typx-pkg/aur/PKGBUILD /path/to/aur-typx-bin/PKGBUILD
 cd /path/to/aur-typx-bin
 makepkg --printsrcinfo > .SRCINFO
-git commit -am "Update to 0.4.0" && git push
+git commit -am "Update to 0.5.0" && git push
 ```

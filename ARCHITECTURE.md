@@ -125,7 +125,7 @@ Filesystem inspection does not reveal runtime ordering constraints; these sequen
    - Run plugin `init` → `postinit` → `config.InitColorscheme()` → `StartAutoSave()`, then enter `DoEvent()`.
 3. **Single `DoEvent()` Iteration (`cmd/typx/typx.go`)**:
    1. `buffer.FlushObservers()` — delivers coalesced edits/cursor moves before rendering so conceal caches, outline highlights, and LSP state reflect the current frame.
-   2. Render all panes, tabs, and `InfoBar` → `screen.Screen.Show()` → **`screen.RunPostShowHooks()`** (emits Sixel frames *after* `tcell` cell diffing completes).
+   2. Render all panes, tabs, and `InfoBar` → `screen.Screen.Show()` → **`screen.RunPostShowHooks()`** (emits Kitty or Sixel frames *after* `tcell` cell diffing completes).
    3. Block on `select` across shell jobs, autosave, `screen.Events`, `screen.DrawChan()`, **`action.UIQueueReady()`** (`action.DrainUIQueue()`), and termination signals.
    4. Dispatch terminal events in precedence order: `EventResize` → active `InfoBar` prompt → **`action.HandleBottomBarEvent`** (bottom bar / `Alt+G` key menu) → `action.Tabs.HandleEvent`.
 4. **Teardown (`exit(rc)` in `cmd/typx/typx.go`)**:
@@ -156,11 +156,11 @@ To keep upstream `micro` diffs minimal and localized, TypX interacts with `micro
 | Seam | Interface | Production Adapter (`features.Init()`) | Purpose |
 | --- | --- | --- | --- |
 | `lsp.SetInlinePreviewHandler` | `lsp.InlinePreviewHandler` (`SupportsInline`, `IsOpen`, `Open`, `Toggle`, `ToggleProtocol`, `Close`, `ToggleInvert`, `ToggleTrim`) | `inlinePreviewAdapter` delegating to `internal/typst/preview` | Routes `:preview` / `Alt+P` / `--preview` between inline Kitty/Sixel preview and browser preview without `lsp` <-> `preview` imports. |
-| `lsp.PinnedMain` & `lsp.SetPinChangeHandler` | `func() string`, `func(func(string))` | `preview.SetMainFileResolver` & `preview.NotifyMainFileChanged` | Redirects Sixel preview compiles to the pinned project entrypoint on subfile edits/saves without `lsp` ↔ `preview` imports. |
+| `lsp.PinnedMain` & `lsp.SetPinChangeHandler` | `func() string`, `func(func(string))` | `preview.SetMainFileResolver` & `preview.NotifyMainFileChanged` | Redirects inline preview compiles to the pinned project entrypoint on subfile edits/saves without `lsp` ↔ `preview` imports. |
 | `preview.SetCompiler` | `preview.Compiler` (`CompilePages(ctx, CompileRequest) (*DocumentDeck, error)`) | `&preview.TinymistCompiler{...}` (swapped for fakes in tests) | Isolates PNG/PDF subprocess compilation from `PreviewPane` state and viewport rendering. |
 | `preview.TinymistCompiler.DiscoverFn` & `preview.SetRootResolver` | `TinymistDiscoveryFunc`, `RootResolverFunc` | `lsp.Discover` and `lsp.FindProjectRoot` | Reuses LSP binary discovery and multi-file root resolution without importing `internal/lsp`. |
 | `outline.SetSymbolProvider` | `outline.SymbolProvider` | `lsp.RequestDocumentSymbols` → `convertLSPSymbols` | Enriches the pure-Go outline parser with `tinymist` `textDocument/documentSymbol` results when LSP is active. |
-| `outline.SetJumpHandler` | `outline.JumpHandler` | `syncPreviewToOutlineItem` → `preview.PreviewPane.ScrollToSection` & `lsp.ScrollPreviewTo` | Repositions inline Sixel and/or browser preview when an outline entry is selected without coupling `outline` to `preview` or `lsp`. |
+| `outline.SetJumpHandler` | `outline.JumpHandler` | `syncPreviewToOutlineItem` → `preview.PreviewPane.ScrollToSection` & `lsp.ScrollPreviewTo` | Repositions inline and/or browser preview when an outline entry is selected without coupling `outline` to `preview` or `lsp`. |
 | `templates.SetExternalBackend`, `templates.SetRootResolver` & `templates.SetPreviewProvider` | `templates.ExternalBackend`, `func(string) string`, `templates.PreviewProvider` | `lspTemplateAdapter`, `lsp.FindProjectRoot`, `previewTemplateAdapter` | Lets `TemplatePane` scaffold `@preview`/`@local` packages via `tinymist` and render live gallery previews in `PreviewPane` without importing `internal/lsp` or `internal/typst/preview`. |
 | `shortcuts.SetModeDetector` | `func(lines [][]byte, line, col int) shortcuts.Mode` | `typst.DetectModeAt` (with rune-to-character cluster column mapping) | Injects rune-aware lexical mode detection; `shortcuts/mode.go` delegates directly to `internal/typst.DetectModeAt` while preserving test swappability. |
 
@@ -236,11 +236,11 @@ To keep upstream `micro` diffs minimal and localized, TypX interacts with `micro
 - **Implementation**:
   - Offline registry scans project-local (`.typx/templates/`), personal (`<ConfigDir>/templates/`), and OS Typst `@local` / cached `@preview` package directories (with a pure-Go `typst.toml` parser, never invoking `tinymist.getResources([])`).
   - `UniverseClient` loads and caches Typst Universe `@preview/index.json` only on demand (ETag + 24h TTL stripped cache) and provides a zip-slip-guarded `.tar.gz` extraction fallback into Typst's package cache directory.
-  - `TemplatePane` renders grouped template sections in a `DockLeft` pane with `/` live filtering, `cursor-line` fg-as-bg selection highlighting, 3-row footer preview, default-on debounced live visual preview in Sixel terminals (full-res `.webp` Typst Universe thumbnail decode with `-small.webp` 404 fallback, opaque paper-white compositing, Catmull-Rom Sixel scaling via `golang.org/x/image/draw`, and SHA-256 PNG cache for personal/project templates; `v` toggle or read-only `.typ` source fallback), and async `tinymist.doInitTemplate` / `tinymist.doGetTemplateEntry` execution marshaling UI updates via `action.EnqueueUI`.
+  - `TemplatePane` renders grouped template sections in a `DockLeft` pane with `/` live filtering, `cursor-line` fg-as-bg selection highlighting, 3-row footer preview, default-on debounced live visual preview in Kitty or Sixel terminals (full-res `.webp` Typst Universe thumbnail decode with `-small.webp` 404 fallback, opaque paper-white compositing, Catmull-Rom scaling via `golang.org/x/image/draw`, and SHA-256 PNG cache for personal/project templates; `v` toggle or read-only `.typ` source fallback), and async `tinymist.doInitTemplate` / `tinymist.doGetTemplateEntry` execution marshaling UI updates via `action.EnqueueUI`. It opens without requiring an active `.typ` file: applying a template or preamble into an unnamed editable buffer sets `filetype` to `typst`, while non-Typst or read-only buffers open the result in a new `.typ` tab.
 - **Invariants**:
   - Never perform network calls at startup; all Universe/package operations run off the main loop and capture `canceled := ctx.Err() == context.Canceled` before `cancel()`.
   - Never overwrite non-empty destination files or directories unless explicitly forced/confirmed, and reject symlink/parent-traversal tar entries.
-  - Bind uppercase `Alt-N` only (`Alt-n` remains `micro`'s `SpawnMultiCursor`), and promote the `Templates` bottom bar hint only while the active `.typ` buffer is blank.
+  - Bind uppercase `Alt-N` only (`Alt-n` remains `micro`'s `SpawnMultiCursor`), promote the `Templates` bottom bar hint when the active `.typ` buffer or unnamed editable buffer is blank, and expose `Templates` in the generic `Alt+G` key menu.
 
 ---
 

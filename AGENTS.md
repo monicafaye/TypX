@@ -23,8 +23,8 @@ CGO_ENABLED=1 go test -race ./...
 
 ## Top-Level Layout
 
-- `cmd/typx/` — CLI flags (`--check`, `--no-lsp`, `--preview`), startup wiring, main event loop, and teardown.
-- `internal/typst/` — Pure-Go Typst modules (`mode.go`, `conceal/`, `shortcuts/`, `outline/`, `preview/`, and composition root `features/`).
+- `cmd/typx/` — CLI flags (`--check`, `--new`, `--no-lsp`, `--preview`), startup wiring, main event loop, and teardown.
+- `internal/typst/` — Pure-Go Typst modules (`mode.go`, `conceal/`, `shortcuts/`, `outline/`, `templates/`, `preview/`, and composition root `features/`).
 - `internal/lsp/` — `tinymist` JSON-RPC 2.0 client, discovery, project root resolution, browser preview proxy, and subprocess cleanup.
 - `internal/{action,buffer,config,display,screen,views}/` — Inherited `micro` core with narrow TypX seams.
 - `runtime/` — Embedded syntax grammars, colorschemes, help docs, and bundled Lua plugins (`filemanager`, Typst-guarded `autoclose`).
@@ -44,9 +44,10 @@ Read the relevant section of [ARCHITECTURE.md](ARCHITECTURE.md) before editing a
 - **`micro` core seams or cross-module wiring (`internal/typst/features/`, `internal/{action,buffer,display,screen,views}/`)** → §1, §3, §4, §6 (import graph, observer contract, seam-to-adapter table).
 - **Concealment (`internal/typst/conceal/`)** → §5.1 (zero buffer mutation, `VisualToBuf`/`BufToVisual` round-trips, dotted symbol registration like `in.not`).
 - **`tinymist` LSP, roots, or browser preview (`internal/lsp/`)** → §5.2 (`FindProjectRoot` precedence, `Options.InitialFiles`, `ServerInfo.Version` without startup `--version` probe, task ID `args[0]` protocol).
-- **Sixel preview, ConPTY ghosting, or PDF anchor sync (`internal/typst/preview/`)** → §5.3 (parallel PNG+PDF compile, 3-tier `ResolveSectionScrollY`, Windows `cmd.Dir = rootDir`, DEC Mode 2026 synchronized `ED 2` wipes, `tab.IsResizing()` deferral).
+- **In-terminal preview (Kitty & Sixel), ConPTY ghosting, or PDF anchor sync (`internal/typst/preview/`)** → §5.3 (Kitty Graphics Protocol `q=2`/`a=d` cleanup, `typst.previewProtocol`, parallel PNG+PDF compile, 3-tier `ResolveSectionScrollY`, Windows `cmd.Dir = rootDir`, DEC Mode 2026 synchronized `ED 2` wipes, `tab.IsResizing()` deferral).
 - **Document Outline (`internal/typst/outline/`)** → §5.4 (`cursor-line` foreground-as-background convention, `EffectiveWidth` clamping, `JumpHandler` preview sync).
 - **Shortcuts, bottom bar, or bundled Lua plugins (`internal/typst/shortcuts/`, `runtime/plugins/`)** → §5.5 (Windows `altShiftFallbackKeyEvents`, `os.Create` handle closing, `LocFromVisual`, `autoclose.lua` Typst yield, narrow-pane compaction).
+- **Template Gallery & project creation (`internal/typst/templates/`)** → §5.6 (offline discovery, on-demand Universe catalog, no startup network calls, non-destructive writes, works without an open `.typ` file, uppercase `Alt-N` binding).
 
 ## Licensing
 

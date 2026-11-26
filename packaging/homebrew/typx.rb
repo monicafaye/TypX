@@ -1,5 +1,5 @@
 class Typx < Formula
-  desc "Terminal editor for Typst with live math concealment, outline, tinymist LSP, and Sixel preview"
+  desc "Terminal editor for Typst with live math concealment, outline, tinymist LSP, and Kitty/Sixel preview"
   homepage "https://github.com/monicafaye/TypX"
   version "0.3.0"
   license "MIT"

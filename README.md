@@ -24,7 +24,7 @@ TypX includes:
 - **Typst syntax and themes.** The built-in `typst.yaml` grammar highlights Markup, Math, and Code modes alongside companion formats (`bibtex`, `markdown`, `yaml`, `toml`, `json`, `ini`, `patch`) and built-in dark and light themes (`monokai`, `catppuccin-mocha`, `catppuccin-latte`, `tokyo-night`, `nord`, `rose-pine`, `rose-pine-dawn`, `kanagawa`, `everforest-dark`, `everforest-light`, `github-dark`, `github-light`, `gruvbox-tc`, `gruvbox-light`, `solarized-tc`, `solarized-light`, `dracula-tc`, `one-dark`).
 - **Cursor-aware Unicode math concealment.** Non-cursor lines display Greek letters, arrows, relations, set and logic operators, big operators, simple super/subscripts, and typographic dashes (`---`, `--`, `...`), while the active line stays unconcealed for editing. Concealment never alters the `.typ` file on disk.
 - **Structural and math shortcuts.** Keybindings insert inline or display math (`Alt+M` and `Alt+Shift+M`), bold or italic wrappers (`Alt+B` and `Alt+E`), heading level changes (`Alt+Left` and `Alt+Right`), indentation-aware snippets (`:insert` or `Alt+I`), and Typst-aware smart pairs.
-- **Template Gallery and project scaffolding.** Start documents with `typx --new <template> [path]`, press `Alt+Shift+N` or run `:templates` for a docked gallery of project/personal templates (`.typx/templates/`, `<config-dir>/templates/`), `@local` packages, and on-demand Typst Universe `@preview` templates via `tinymist` — with live in-terminal Sixel visual preview enabled by default while browsing. Save reusable preambles or documents with `:template-save`.
+- **Template Gallery and project creation.** Start documents with `typx --new <template> [path]`, or press `Alt+Shift+N` (or run `:templates`) from any buffer, including an unnamed blank startup buffer, to open a docked gallery of project and personal templates (`.typx/templates/`, `<config-dir>/templates/`), `@local` packages, and on-demand Typst Universe `@preview` templates via `tinymist`, with live Kitty graphics or Sixel visual preview enabled by default while browsing. Save reusable preambles or documents with `:template-save`.
 - **Document Outline sidebar.** Press `Alt+O` or run `:outline` to toggle a docked sidebar powered by an incremental Go parser, with optional `tinymist` `textDocument/documentSymbol` enrichment, live cursor tracking, keyboard or mouse jump, and `/` filtering.
 - **File Manager sidebar.** Press `Alt+T` or run `:tree` to browse directories, expand folders inline, open files in splits, and run `:touch`, `:mkdir`, `:rename`, and `:rm`.
 - **In-terminal and browser preview.** Press `Alt+P` or run `:preview inline` for a right-docked inline preview using the Kitty Graphics Protocol or Sixel with zoom, color inversion, and margin trimming, or run `:preview browser` for an auto-reloading browser preview with cursor sync.
@@ -220,7 +220,7 @@ typx --preview paper.typ         # open file and start live preview
 
 ## Default keybindings and commands
 
-Press `Ctrl+E` to open the command bar (`>` prompt). All TypX keybindings apply in `.typ` buffers, falling back to standard `micro` actions in other file types, and can be customized in `bindings.json`.
+Press `Ctrl+E` to open the command bar (`>` prompt). Most TypX keybindings apply in `.typ` buffers and fall back to standard `micro` actions in other file types; `Alt+Shift+N` (`:templates`) and `Alt+T` (`:tree`) work in any buffer. All bindings can be customized in `bindings.json`.
 
 ### TypX and Typst shortcuts
 
@@ -233,7 +233,7 @@ Press `Ctrl+E` to open the command bar (`>` prompt). All TypX keybindings apply 
 | Inline Math | `:math-inline` | `Alt+M` | Insert `$|$`, wrap selection in `$...$`, or exit inline math. |
 | Display Math | `:math-display` | `Alt+Shift+M` | Insert a multi-line display math block `$\n  |\n$`. |
 | Insert Palette | `:insert [name]` | `Alt+I` | Open the snippet insert palette (`figure`, `table`, `frac`, `matrix`, `cases`, `code`, `callout`, `vec`, `hat`, `bar`). |
-| Template Gallery | `:templates` | `Alt+Shift+N` | Toggle the docked Template Gallery sidebar (project/personal, `@local`, Typst Universe `@preview`). |
+| Template Gallery | `:templates` | `Alt+Shift+N` | Toggle the docked Template Gallery sidebar (works in any buffer; includes project/personal, `@local`, and Typst Universe `@preview`). |
 | Apply Template | `:template [name] [dir\|--preamble]` | None | Insert a personal/project template, scaffold a multi-file/`@preview` project, or insert its preamble. |
 | Save Template | `:template-save <name> [--preamble]` | None | Save the active buffer or preamble into `<config-dir>/templates/<name>.typ`. |
 | Bold | `:wrap-bold` | `Alt+B` | Wrap selection or insert `*bold*` delimiters. |
@@ -258,17 +258,18 @@ Press `Ctrl+E` to open the command bar (`>` prompt). All TypX keybindings apply 
 
 Direct snippet commands are also registered for every template: `:insert-figure`, `:insert-table`, `:insert-frac`, `:insert-matrix`, `:insert-cases`, `:insert-code`, `:insert-callout`, `:insert-vec`, `:insert-hat`, and `:insert-bar`.
 
-### In-terminal Sixel preview navigation
+### In-terminal preview navigation
 
-When the right-docked Sixel preview pane is focused via `:preview inline` or `:preview focus`:
+When the right-docked inline preview pane (Kitty graphics or Sixel) is focused via `:preview inline`, `:preview kitty`, `:preview sixel`, or `:preview focus`:
 
 | Key or Action | Behavior |
 |---|---|
-| `Up` / `Down`, `k` / `j`, `w` / `s` | Scroll up or down through pages. |
+| `Up` / `Down`, `k` / `j`, `w` / `s`, Mouse Wheel | Scroll up or down through pages. |
 | `PgUp` / `PgDn`, `Ctrl+U` / `Ctrl+D`, `Space` | Page up or down through the document. |
 | `[` / `]` or `Left` / `Right` | Jump to previous or next page. |
 | `g` / `G` or `Home` / `End` | Jump to top or bottom of document. |
 | `+` / `-` | Zoom preview in or out. |
+| `<` / `>` | Widen or narrow the docked preview pane. |
 | `t` | Toggle dark-mode color inversion (`typst.previewInvert`). |
 | `m` | Toggle page margin trimming (`typst.previewTrimMargins`). |
 | `r` | Force recompile and redraw preview. |
@@ -295,9 +296,9 @@ When the Template Gallery (`Alt+Shift+N` / `:templates`) is focused:
 | Key or Action | Behavior |
 |---|---|
 | `Up` / `Down` or `k` / `j` | Move selection across Project & Personal, Local & Cached, and Typst Universe rows. |
-| `Enter` or Click | Apply personal/project template (prompts insert vs. new tab on non-empty buffers) or scaffold multi-file/`@preview` project. |
-| `v` | Toggle live Sixel preview (on by default in Sixel-capable terminals, or a read-only `.typ` source split otherwise). |
-| `p` | Insert preamble (`--preamble`) or package entrypoint at line 1 of the active buffer. |
+| `Enter` or Click | Apply personal or project template (inserts into a blank `.typ` or unnamed buffer and sets `typst` filetype, prompts insert vs. new tab on non-empty `.typ` buffers, opens a new `.typ` tab on non-Typst or read-only files), or create a multi-file/`@preview` project. |
+| `v` | Toggle live in-terminal preview (on by default in Kitty graphics or Sixel terminals, or a read-only `.typ` source split otherwise). |
+| `p` | Insert preamble (`--preamble`) or package entrypoint at line 1 of an editable `.typ` or unnamed buffer (or open it in a new `.typ` tab otherwise). |
 | `n` | Prompt for a target directory and scaffold a new project folder. |
 | `u` | Load or refresh the online Typst Universe (`@preview`) catalog on demand. |
 | `/` | Filter templates (`Esc` clears filter, `Enter` applies). |
@@ -338,8 +339,8 @@ TypX resolves its configuration directory in this order:
 | `typst.exportOnSave` | global | `"off"` | Auto-export `.typ` buffers on explicit save (`"off"`, `"pdf"`, `"png"`, `"svg"`, `"html"`). |
 | `typst.formatOnSave` | global | `false` | Format `.typ` buffers via `tinymist` before explicit save (falls back to saving after 1s timeout). |
 | `typst.formatter` | global | `"typstyle"` | Typst formatter backend passed to `tinymist` (`"typstyle"`, `"typstfmt"`, `"disable"`). |
-| `typst.gotoOpenMode` | global | `"tab"` | How `F12` / `:definition` opens unopened targets (`"tab"`, `"vsplit"`, `"current"`). |
-| `typst.listPaneHeight` | global | `10` | Preferred row height for bottom-docked drawers (`:diagnostics`, multi-target `:definition`). |
+| `typst.gotoOpenMode` | global | `"tab"` | How `:definition`, `:references`, `:symbols`, and `:diagnostics` open unopened targets (`"tab"`, `"vsplit"`, `"current"`). |
+| `typst.listPaneHeight` | global | `10` | Preferred row height for bottom-docked drawers (`:diagnostics`, multi-target `:definition`, `:references`, `:code-action`, and `:symbols`). |
 
 Example `settings.json`:
 
@@ -405,7 +406,7 @@ Inside TypX, press `Ctrl+E` and run `help` or open a specific topic:
 
 ## Architecture and contributing
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) describes the system diagram, package layout, and subsystem designs, including the concealment coordinate mapper, `tinymist` JSON-RPC client, Sixel renderer, and incremental outline parser.
+- [ARCHITECTURE.md](ARCHITECTURE.md) describes the system diagram, package layout, and subsystem designs, including the concealment coordinate mapper, `tinymist` JSON-RPC client, Kitty and Sixel preview renderer, Template Gallery, and incremental outline parser.
 - [AGENTS.md](AGENTS.md) lists build and test commands (`go generate ./runtime`, `go test ./...`, `CGO_ENABLED=1 go test -race ./...`) and architectural invariants.
 
 ---

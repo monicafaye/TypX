@@ -135,13 +135,15 @@ globally, via CLI flag, or in an `"ft:typst"` block in `settings.json`.
 
     default value: `typstyle`
 
-* `typst.gotoOpenMode`: `global only`. How `:definition` (`F12`) and `:diagnostics`
-   open unopened files (`tab`, `vsplit`, or `current`).
+* `typst.gotoOpenMode`: `global only`. How `:definition` (`F12`), `:references`,
+   `:symbols`, and `:diagnostics` open unopened files (`tab`, `vsplit`, or
+   `current`).
 
     default value: `tab`
 
 * `typst.listPaneHeight`: `global only`. Preferred row height for bottom-docked
-   drawers (`:diagnostics` and multi-target `:definition` pickers).
+   drawers (`:diagnostics`, multi-target `:definition`, `:references`,
+   `:code-action`, and `:symbols`).
 
     default value: `10`
 

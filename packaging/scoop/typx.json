@@ -1,6 +1,6 @@
 {
     "version": "0.3.0",
-    "description": "Terminal editor for Typst with live math concealment, document outline, tinymist LSP, and Sixel preview",
+    "description": "Terminal editor for Typst with live math concealment, document outline, tinymist LSP, and Kitty/Sixel preview",
     "homepage": "https://github.com/monicafaye/TypX",
     "license": "MIT",
     "architecture": {

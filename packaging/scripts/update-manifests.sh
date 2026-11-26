@@ -41,7 +41,7 @@ mkdir -p "${OUT_DIR}/scoop" "${OUT_DIR}/homebrew" "${OUT_DIR}/aur"
 cat > "${OUT_DIR}/scoop/typx.json" <<EOF
 {
     "version": "${VERSION}",
-    "description": "Terminal editor for Typst with live math concealment, document outline, tinymist LSP, and Sixel preview",
+    "description": "Terminal editor for Typst with live math concealment, document outline, tinymist LSP, and Kitty/Sixel preview",
     "homepage": "https://github.com/monicafaye/TypX",
     "license": "MIT",
     "architecture": {
@@ -79,7 +79,7 @@ EOF
 
 cat > "${OUT_DIR}/homebrew/typx.rb" <<EOF
 class Typx < Formula
-  desc "Terminal editor for Typst with live math concealment, outline, tinymist LSP, and Sixel preview"
+  desc "Terminal editor for Typst with live math concealment, outline, tinymist LSP, and Kitty/Sixel preview"
   homepage "https://github.com/monicafaye/TypX"
   version "${VERSION}"
   license "MIT"
@@ -133,7 +133,7 @@ cat > "${OUT_DIR}/aur/PKGBUILD" <<EOF
 pkgname=typx-bin
 pkgver=${VERSION}
 pkgrel=1
-pkgdesc='Terminal editor for Typst with live math concealment, document outline, tinymist LSP, and Sixel preview'
+pkgdesc='Terminal editor for Typst with live math concealment, document outline, tinymist LSP, and Kitty/Sixel preview'
 arch=('x86_64' 'aarch64')
 url='https://github.com/monicafaye/TypX'
 license=('MIT')

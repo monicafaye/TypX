@@ -10,7 +10,7 @@ homepage: "https://github.com/monicafaye/TypX"
 license: "MIT"
 description: |
   Terminal editor for Typst with live math concealment, document outline,
-  tinymist LSP integration, and native in-terminal Sixel preview.
+  tinymist LSP integration, and native in-terminal Kitty and Sixel preview.
   Forked from zyedidia/micro.
 contents:
   - src: "${PKG_BINARY}"

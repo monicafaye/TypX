@@ -22,11 +22,12 @@ prompt, press tab, or view the help topic with `> help commands`.
 
 Key Typst authoring shortcuts in `.typ` buffers:
 
-* `Alt-p` (`> preview`): Toggle live preview (in-terminal Sixel pane or `tinymist` browser preview)
+* `Alt-p` (`> preview`): Toggle live preview (in-terminal Kitty or Sixel pane, or `tinymist` browser preview)
 * `Alt-o` (`> outline`): Toggle the docked Document Outline sidebar
 * `Alt-c` (`> conceal`): Toggle live Unicode math concealment
 * `Alt-m` / `Alt-M`: Insert inline (`$...$`) or display math block
 * `Alt-i` (`> insert`): Open the Typst snippet insert palette
+* `Alt-N` (`> templates`): Toggle the docked Template Gallery sidebar (works in any buffer)
 * `Ctrl-Space` / `Alt-k`: `tinymist` completion and hover documentation
 
 Move the cursor around with the mouse or with the arrow keys. Enter text simply

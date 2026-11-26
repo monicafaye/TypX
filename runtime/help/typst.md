@@ -3,7 +3,7 @@
 TypX (`typx`) is a terminal editor for Typst forked from `micro`, combining
 standard keybindings and live math concealment with structural/math shortcuts, a
 docked Document Outline sidebar, a Template Gallery, and `tinymist` LSP +
-side-by-side Sixel and browser live preview.
+side-by-side Kitty, Sixel, and browser live preview.
 
 ---
 
@@ -94,8 +94,9 @@ on the left edge of the active tab.
 
 ## 4. Document & Project Templates (`:templates` / `Alt-N` / `--new`)
 
-Press `Alt-Shift-n` (`Alt-N`) or run `> templates` to open the docked Template
-Gallery sidebar, or start a document directly from the command line:
+Press `Alt-Shift-n` (`Alt-N`) or run `> templates` from any buffer (including
+an unnamed blank startup buffer without an open `.typ` file) to open the docked
+Template Gallery sidebar, or start a document directly from the command line:
 
 ```
 typx --new list
@@ -124,8 +125,12 @@ typx --new @preview/charged-ieee my-paper
   its preamble above the first `=` heading) to `<config-dir>/templates/<name>.typ`.
 - Inside the Gallery: `Up`/`Down` (`k`/`j`) select, `v` toggles live visual
   preview (on by default in Kitty or Sixel terminals, or a read-only `.typ`
-  source split otherwise), `/` filters, `Enter` applies/scaffolds, `p` inserts
-  preamble/entrypoint in place, `n` scaffolds a new folder, `u` loads/refreshes
+  source split otherwise), `/` filters, `Enter` applies a template (inserting
+  into a blank `.typ` or unnamed buffer and setting `filetype` to `typst`,
+  prompting on non-empty `.typ` buffers, or opening a new `.typ` tab on
+  non-Typst or read-only files) or creates a project folder, `p` inserts the
+  preamble or entrypoint (or opens it in a new `.typ` tab on non-Typst or
+  read-only buffers), `n` creates a new project folder, `u` loads or refreshes
   Typst Universe, `Esc` returns to editor, `q` closes.
 
 ---
@@ -193,7 +198,7 @@ and `tinymist` discovery, or run `typx --no-lsp file.typ` for offline editing.
   the active file and workspace (`Enter` jumps, `/` filters text, `f` toggles
   errors only, `Esc`/`q` closes).
 - `:pin [path]` / `:unpin`: Pin or unpin the project's main `.typ` file for
-  `tinymist`, Sixel/browser live preview, and `:export` (shown as `PIN: <file>`
+  `tinymist`, inline/browser live preview, and `:export` (shown as `PIN: <file>`
   in the statusline and persisted per project root).
 - `:export [pdf|png|svg|html] [output]`: Export the active document (or pinned
   main file) via `tinymist compile`.
@@ -203,11 +208,11 @@ and `tinymist` discovery, or run `typx --no-lsp file.typ` for offline editing.
   and stderr log.
 - `:tinymist-restart`: Restart the `tinymist` subprocess.
 
-### In-Terminal Sixel Preview Controls
+### In-Terminal Preview Controls (Kitty & Sixel)
 
-When the right-docked Sixel preview pane is opened with `:preview inline` or
-focused with `:preview focus` (jumping from Document Outline also syncs the
-preview scroll position):
+When the right-docked inline preview pane is opened with `:preview inline`,
+`:preview kitty`, or `:preview sixel`, or focused with `:preview focus`
+(jumping from Document Outline also syncs the preview scroll position):
 
 - `Up` / `Down`, `k` / `j`, `w` / `s`, or Mouse Wheel: Scroll through pages.
 - `PgUp` / `PgDn`, `Ctrl-u` / `Ctrl-d`, or `Space`: Page up or down.
@@ -247,7 +252,7 @@ See `> help options` for the full list of editor options. TypX-specific keys:
 - `typst.exportOnSave` (default `"off"`): Auto-export on explicit save (`"off"`, `"pdf"`, `"png"`, `"svg"`, `"html"`).
 - `typst.formatOnSave` (default `false`): Format `.typ` buffers before explicit save (with 1s timeout fallback).
 - `typst.formatter` (default `"typstyle"`): Formatter backend passed to `tinymist` (`"typstyle"`, `"typstfmt"`, `"disable"`).
-- `typst.gotoOpenMode` (default `"tab"`): How `:definition` / `:diagnostics` open unopened files (`"tab"`, `"vsplit"`, `"current"`).
+- `typst.gotoOpenMode` (default `"tab"`): How `:definition`, `:references`, `:symbols`, and `:diagnostics` open unopened files (`"tab"`, `"vsplit"`, `"current"`).
 - `typst.listPaneHeight` (default `10`): Preferred height in rows for bottom-docked drawers (`ListPane`).
 
 ### Colorschemes

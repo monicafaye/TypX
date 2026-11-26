@@ -33,8 +33,9 @@ See `> help typst` for a walkthrough of Typst authoring workflows.
    docked Document Outline sidebar (default key: `Alt-o`).
 
 * `templates ['toggle'|'open'|'close'|'focus'|'universe'|'refresh']`: toggles
-   or controls the docked Template Gallery sidebar (default key: `Alt-N` /
-   `Alt-Shift-n`).
+   or controls the docked Template Gallery sidebar in any buffer, including
+   unnamed blank startup buffers without an open `.typ` file (default key:
+   `Alt-N` / `Alt-Shift-n`).
 
 * `template ['name'] ['dir'|--preamble]`: opens the Template Gallery if no
    name is given, applies a personal/project template, or scaffolds a

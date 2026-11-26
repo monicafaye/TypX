@@ -343,12 +343,14 @@ ClearInfo
 None
 ```
 
-TypX also registers the following Typst-specific bindable buffer actions (each
-returns `false` on non-Typst buffers so fallback chains with `|` work cleanly):
+TypX also registers the following Typst-specific bindable buffer actions
+(`ToggleTemplates` works in any buffer; the others return `false` on non-Typst
+buffers so fallback chains with `|` work cleanly):
 
 ```
 ToggleConceal
 ToggleOutline
+ToggleTemplates
 TogglePreview
 MathInline
 MathDisplay
@@ -359,6 +361,15 @@ HeadingDemote
 InsertPalette
 LspComplete
 LspHover
+LspFormat
+LspDefinition
+LspJumpBack
+LspReferences
+LspRename
+LspCodeAction
+LspWorkspaceSymbols
+NextDiagnostic
+PrevDiagnostic
 ```
 
 The `StartOfTextToggle` and `SelectToStartOfTextToggle` actions toggle between
