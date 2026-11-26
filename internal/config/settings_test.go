@@ -21,6 +21,7 @@ func TestTypstSettingsDefaultsAndValidation(t *testing.T) {
 	assert.Equal(t, true, DefaultGlobalOnlySettings["typst.lspEnabled"])
 	assert.Equal(t, float64(150), DefaultGlobalOnlySettings["typst.debounceMs"])
 	assert.Equal(t, true, DefaultGlobalOnlySettings["typst.previewOpenBrowser"])
+	assert.Equal(t, "auto", DefaultGlobalOnlySettings["typst.previewProtocol"])
 	assert.Equal(t, float64(30), DefaultGlobalOnlySettings["typst.outlineWidth"])
 	assert.Equal(t, false, DefaultGlobalOnlySettings["typst.outlineShowLabels"])
 
@@ -33,6 +34,7 @@ func TestTypstSettingsDefaultsAndValidation(t *testing.T) {
 		"typst.lspEnabled",
 		"typst.debounceMs",
 		"typst.previewOpenBrowser",
+		"typst.previewProtocol",
 		"typst.outlineWidth",
 		"typst.outlineShowLabels",
 	} {
@@ -52,6 +54,11 @@ func TestTypstSettingsDefaultsAndValidation(t *testing.T) {
 	require.NoError(t, OptionIsValid("typst.outlineWidth", float64(30)))
 	assert.Error(t, OptionIsValid("typst.outlineWidth", float64(0)))
 	assert.Error(t, OptionIsValid("typst.outlineWidth", float64(-5)))
+
+	require.NoError(t, OptionIsValid("typst.previewProtocol", "auto"))
+	require.NoError(t, OptionIsValid("typst.previewProtocol", "kitty"))
+	require.NoError(t, OptionIsValid("typst.previewProtocol", "sixel"))
+	assert.Error(t, OptionIsValid("typst.previewProtocol", "iterm2"))
 }
 
 func TestTypstFileTypeDefaults(t *testing.T) {

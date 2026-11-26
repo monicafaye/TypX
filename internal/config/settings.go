@@ -44,9 +44,10 @@ var optionValidators = map[string]optionValidator{
 	"typst.gotoOpenMode": validateChoice,
 	"typst.listPaneHeight": validatePositiveValue,
 	"typst.outlineWidth": validatePositiveValue,
-	"typst.previewMode":  validateChoice,
-	"typst.previewPPI":     validatePositiveValue,
-	"typst.previewWidth":   validatePositiveValue,
+	"typst.previewMode":     validateChoice,
+	"typst.previewPPI":      validatePositiveValue,
+	"typst.previewProtocol": validateChoice,
+	"typst.previewWidth":    validatePositiveValue,
 	"typst.templatesWidth": validatePositiveValue,
 }
 
@@ -63,7 +64,8 @@ var OptionChoices = map[string][]string{
 	"typst.exportOnSave": {"off", "pdf", "png", "svg", "html"},
 	"typst.formatter":    {"typstyle", "typstfmt", "disable"},
 	"typst.gotoOpenMode": {"tab", "vsplit", "current"},
-	"typst.previewMode":  {"auto", "inline", "browser"},
+	"typst.previewMode":     {"auto", "inline", "browser"},
+	"typst.previewProtocol": {"auto", "kitty", "sixel"},
 }
 
 // a list of settings that can be globally and locally modified and their
@@ -164,6 +166,7 @@ var DefaultGlobalOnlySettings = map[string]any{
 	"typst.previewMode":        "auto",
 	"typst.previewOpenBrowser": true,
 	"typst.previewPPI":         float64(144),
+	"typst.previewProtocol":    "auto",
 	"typst.previewTrimMargins": false,
 	"typst.previewWidth":       float64(48),
 	"typst.templatesWidth":     float64(36),

@@ -23,6 +23,7 @@ type InlinePreviewHandler interface {
 	IsOpen(tab *action.Tab) bool
 	Open(bp *action.BufPane, focus bool) bool
 	Toggle(bp *action.BufPane) bool
+	ToggleProtocol(bp *action.BufPane, protocol string) bool
 	Close(tab *action.Tab) bool
 	ToggleInvert(tab *action.Tab) bool
 	ToggleTrim(tab *action.Tab) bool
@@ -57,7 +58,7 @@ func ShouldUseInlinePreview() bool {
 	}
 	mode := strings.ToLower(strings.TrimSpace(readGlobalString("typst.previewMode", "auto")))
 	switch mode {
-	case "inline", "terminal", "sixel":
+	case "inline", "terminal", "sixel", "kitty":
 		return true
 	case "browser", "web":
 		return false
@@ -314,12 +315,18 @@ func PreviewCommand() func(*action.BufPane, []string) {
 		switch sub {
 		case "":
 			TogglePreviewAction()(bp)
-		case "inline", "terminal", "sixel":
+		case "inline", "terminal":
 			if h == nil {
 				notifyInfoError("Inline preview is unavailable")
 				return
 			}
 			h.Toggle(bp)
+		case "kitty", "sixel":
+			if h == nil {
+				notifyInfoError("Inline preview is unavailable")
+				return
+			}
+			h.ToggleProtocol(bp, sub)
 		case "focus":
 			if h == nil {
 				notifyInfoError("Inline preview is unavailable")
@@ -329,12 +336,12 @@ func PreviewCommand() func(*action.BufPane, []string) {
 		case "browser", "web":
 			defaultManager.togglePreview(bp)
 		default:
-			notifyInfoError(fmt.Sprintf("Invalid preview argument %q (use inline, browser, focus, invert, trim, or stop)", args[0]))
+			notifyInfoError(fmt.Sprintf("Invalid preview argument %q (use inline, kitty, sixel, browser, focus, invert, trim, or stop)", args[0]))
 		}
 	}
 }
 
-var previewArgChoices = []string{"inline", "browser", "focus", "invert", "trim", "stop"}
+var previewArgChoices = []string{"inline", "kitty", "sixel", "browser", "focus", "invert", "trim", "stop"}
 
 func previewCompleter(b *buffer.Buffer) ([]string, []string) {
 	if b == nil {

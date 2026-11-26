@@ -27,7 +27,7 @@ TypX includes:
 - **Template Gallery and project scaffolding.** Start documents with `typx --new <template> [path]`, press `Alt+Shift+N` or run `:templates` for a docked gallery of project/personal templates (`.typx/templates/`, `<config-dir>/templates/`), `@local` packages, and on-demand Typst Universe `@preview` templates via `tinymist` — with live in-terminal Sixel visual preview enabled by default while browsing. Save reusable preambles or documents with `:template-save`.
 - **Document Outline sidebar.** Press `Alt+O` or run `:outline` to toggle a docked sidebar powered by an incremental Go parser, with optional `tinymist` `textDocument/documentSymbol` enrichment, live cursor tracking, keyboard or mouse jump, and `/` filtering.
 - **File Manager sidebar.** Press `Alt+T` or run `:tree` to browse directories, expand folders inline, open files in splits, and run `:touch`, `:mkdir`, `:rename`, and `:rm`.
-- **In-terminal Sixel and browser preview.** Press `Alt+P` or run `:preview inline` for a right-docked Sixel preview in Sixel-capable terminals with zoom, color inversion, and margin trimming, or run `:preview browser` for an auto-reloading browser preview with cursor sync.
+- **In-terminal and browser preview.** Press `Alt+P` or run `:preview inline` for a right-docked inline preview using the Kitty Graphics Protocol or Sixel with zoom, color inversion, and margin trimming, or run `:preview browser` for an auto-reloading browser preview with cursor sync.
 - **`tinymist` LSP and multi-file projects.** TypX resolves project roots from `typst.toml`, root-relative `/...` imports, `.git`, or `../` imports, and provides `:pin [path]`/`:unpin` main-file pinning (`PIN:` statusline indicator), `:export [pdf|png|svg|html]` (`typst.exportOnSave`), `:format` (`typst.formatOnSave`), go-to-definition across `.typ`/`.bib`/packages (`F12`, `Alt+U` back), find references (`Shift+F12`), cross-file symbol rename (`F2` / `:lsp-rename`), code actions (`Alt+A`), workspace symbol search (`Alt+S`), interactive `:diagnostics` drawer (`F8`/`Shift+F8` jump, `/` filter), completion (`Ctrl+Space`), and hover docs (`Alt+K` or `:hover`). Pass `--no-lsp` to run offline without `tinymist`.
 
 <p align="center">
@@ -206,10 +206,10 @@ typx --preview paper.typ         # open file and start live preview
 
 | Flag | Description |
 |---|---|
-| `--check` | Verify config directory, embedded Typst syntax, Unicode and Sixel terminal capability, and `tinymist` discovery and version, then exit. |
+| `--check` | Verify config directory, embedded Typst syntax, Unicode and Kitty or Sixel terminal capability, and `tinymist` discovery and version, then exit. |
 | `--new <tmpl>` | Scaffold a document or project from a template (`--new list` lists offline/cached templates) and open it. |
 | `--no-lsp` | Launch without starting `tinymist` (offline mode). |
-| `--preview` | Start live preview on the opened `.typ` file (inline Sixel or browser per `typst.previewMode`). |
+| `--preview` | Start live preview on the opened `.typ` file (inline Kitty/Sixel or browser per `typst.previewMode`). |
 | `--version` | Show TypX version, upstream `micro` base version, commit hash, and compile date. |
 | `--options` | List all configuration options and their default values. |
 | `-config-dir <dir>` | Use a custom configuration directory for this session. |
@@ -226,7 +226,7 @@ Press `Ctrl+E` to open the command bar (`>` prompt). All TypX keybindings apply 
 
 | Feature | Command | Default Keybinding | Description |
 |---|---|---|---|
-| Live Preview | `:preview [inline\|browser\|focus\|invert\|trim\|stop]` | `Alt+P` | Toggle live preview (`auto` chooses in-terminal Sixel when supported, otherwise browser preview). |
+| Live Preview | `:preview [inline\|kitty\|sixel\|browser\|focus\|invert\|trim\|stop]` | `Alt+P` | Toggle live preview (`auto` chooses Kitty graphics or Sixel when supported, otherwise browser preview). |
 | Document Outline | `:outline` | `Alt+O` | Toggle the docked Document Outline sidebar. |
 | File Manager | `:tree` | `Alt+T` | Toggle the built-in file tree sidebar (`:touch`, `:mkdir`, `:rename`, `:rm`). |
 | Math Concealment | `:conceal [on\|off]` | `Alt+C` | Toggle live Unicode math and symbol concealment in the active buffer. |
@@ -325,11 +325,12 @@ TypX resolves its configuration directory in this order:
 | `typst.lspEnabled` | global | `true` | Enable `tinymist` LSP integration (`false` is equivalent to `--no-lsp`). |
 | `typst.tinymistPath` | global | `""` | Explicit path to `tinymist` or `tinymist.exe` (empty uses auto-discovery). |
 | `typst.debounceMs` | global | `150` | Debounce interval in milliseconds for `textDocument/didChange` updates. |
-| `typst.previewMode` | global | `"auto"` | Live preview mode: `"auto"` (inline Sixel when supported, else browser), `"inline"`, or `"browser"`. |
-| `typst.previewWidth` | global | `48` | Preferred width percentage for the docked in-terminal Sixel preview pane. |
-| `typst.previewPPI` | global | `144` | Render resolution (PPI) for in-terminal Sixel preview pages. |
-| `typst.previewInvert` | global | `false` | Invert colors in the in-terminal Sixel preview for dark terminals. |
-| `typst.previewTrimMargins` | global | `false` | Trim excess outer page margins in the in-terminal Sixel preview. |
+| `typst.previewMode` | global | `"auto"` | Live preview mode: `"auto"` (inline Kitty or Sixel when supported, else browser), `"inline"`, or `"browser"`. |
+| `typst.previewProtocol` | global | `"auto"` | Inline preview graphics protocol: `"auto"` (prefers Kitty over Sixel), `"kitty"`, or `"sixel"`. |
+| `typst.previewWidth` | global | `48` | Preferred width percentage for the docked in-terminal preview pane. |
+| `typst.previewPPI` | global | `144` | Render resolution (PPI) for in-terminal preview pages. |
+| `typst.previewInvert` | global | `false` | Invert colors in the in-terminal preview for dark terminals. |
+| `typst.previewTrimMargins` | global | `false` | Trim excess outer page margins in the in-terminal preview. |
 | `typst.previewOpenBrowser` | global | `true` | Open the local preview URL in the OS browser when browser preview starts. |
 | `typst.outlineWidth` | global | `30` | Preferred width in columns for the Document Outline sidebar (auto-hides if terminal width `< 50`). |
 | `typst.outlineShowLabels` | global | `false` | Include standalone `<label>` anchors in the Document Outline alongside headings and figures. |
@@ -379,11 +380,11 @@ The default theme is `default` (`monokai`). Dark themes with full Typst and UI s
 
 ## Terminal compatibility notes
 
-- **Windows.** Use [Windows Terminal](https://apps.microsoft.com/detail/9n0dx20hk701), which supports Sixel graphics and truecolor, with a Unicode-capable font such as Cascadia Mono, JetBrains Mono, Iosevka, or JuliaMono for full math glyph rendering.
-- **macOS.** Use a Sixel-capable terminal such as WezTerm or iTerm2 for in-terminal preview (other terminals fall back to browser preview). Configure the Option key to act as Meta/Alt so `Alt+*` shortcuts work:
+- **Windows.** Use [Windows Terminal](https://apps.microsoft.com/detail/9n0dx20hk701) (Sixel) or WezTerm (Kitty graphics and Sixel), with a Unicode-capable font such as Cascadia Mono, JetBrains Mono, Iosevka, or JuliaMono for full math glyph rendering.
+- **macOS.** Use a terminal with Kitty graphics or Sixel support such as Ghostty, Kitty, WezTerm, or iTerm2 for in-terminal preview. Other terminals fall back to browser preview. Configure the Option key to act as Meta/Alt so `Alt+*` shortcuts work:
   - In iTerm2, open Preferences, Profiles, Keys, and set Left Option Key to `Esc+`.
   - In Terminal.app, open Preferences, Profiles, Keyboard, and enable Use Option as Meta key.
-- **Linux.** Sixel preview works in terminals such as foot, WezTerm, Konsole, and xterm with Sixel enabled. Install `wl-clipboard` on Wayland, or `xclip` or `xsel` on X11, for system clipboard integration.
+- **Linux.** In-terminal preview works in terminals with Kitty graphics or Sixel support such as Kitty, Ghostty, WezTerm, Konsole, foot, and xterm with Sixel enabled. Install `wl-clipboard` on Wayland, or `xclip` or `xsel` on X11, for system clipboard integration.
 
 ---
 

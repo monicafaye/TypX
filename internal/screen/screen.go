@@ -43,13 +43,17 @@ var (
 var rawSeq = make([]string, 0)
 
 var (
-	postShowMu    sync.RWMutex
-	postShowHooks []func()
+	postShowMu       sync.RWMutex
+	postShowHooks    []func()
+	preFiniMu        sync.RWMutex
+	preFiniHooks     []func()
+	postRestartMu    sync.RWMutex
+	postRestartHooks []func()
 )
 
 // RegisterPostShowHook registers a callback executed on the main UI goroutine
 // immediately after screen.Screen.Show() flushes cell updates (used by inline
-// terminal graphics panes such as Sixel preview).
+// terminal graphics panes such as Sixel and Kitty preview).
 func RegisterPostShowHook(fn func()) {
 	if fn == nil {
 		return
@@ -65,6 +69,50 @@ func RunPostShowHooks() {
 	hooks := make([]func(), len(postShowHooks))
 	copy(hooks, postShowHooks)
 	postShowMu.RUnlock()
+
+	for _, fn := range hooks {
+		fn()
+	}
+}
+
+// RegisterPreFiniHook registers a callback executed immediately before TempFini
+// tears down the active screen (used to delete inline terminal graphics cleanly).
+func RegisterPreFiniHook(fn func()) {
+	if fn == nil {
+		return
+	}
+	preFiniMu.Lock()
+	preFiniHooks = append(preFiniHooks, fn)
+	preFiniMu.Unlock()
+}
+
+func runPreFiniHooks() {
+	preFiniMu.RLock()
+	hooks := make([]func(), len(preFiniHooks))
+	copy(hooks, preFiniHooks)
+	preFiniMu.RUnlock()
+
+	for _, fn := range hooks {
+		fn()
+	}
+}
+
+// RegisterPostRestartHook registers a callback executed after TempStart
+// reinitializes the screen (used to schedule inline graphics redraws).
+func RegisterPostRestartHook(fn func()) {
+	if fn == nil {
+		return
+	}
+	postRestartMu.Lock()
+	postRestartHooks = append(postRestartHooks, fn)
+	postRestartMu.Unlock()
+}
+
+func runPostRestartHooks() {
+	postRestartMu.RLock()
+	hooks := make([]func(), len(postRestartHooks))
+	copy(hooks, postRestartHooks)
+	postRestartMu.RUnlock()
 
 	for _, fn := range hooks {
 		fn()
@@ -201,6 +249,7 @@ func TempFini() bool {
 	screenWasNil := Screen == nil
 
 	if !screenWasNil {
+		runPreFiniHooks()
 		Screen.Fini()
 		Lock()
 		Screen = nil
@@ -217,6 +266,7 @@ func TempStart(screenWasNil bool) {
 		if RestartCallback != nil {
 			RestartCallback()
 		}
+		runPostRestartHooks()
 	}
 }
 

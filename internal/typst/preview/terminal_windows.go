@@ -3,7 +3,6 @@
 package preview
 
 import (
-	"bytes"
 	"os"
 	"syscall"
 	"time"
@@ -65,9 +64,15 @@ func probeTerminalPlatform() TerminalCaps {
 
 	inH, err := syscall.Open("CONIN$", syscall.O_RDWR, 0)
 	if err != nil {
+		if ok, name := envIndicatesKitty(); ok {
+			res.Kitty = true
+			res.Source = name
+		}
 		if ok, name := envIndicatesSixel(); ok {
 			res.Sixel = true
-			res.Source = name
+			if res.Source == "non-tty" {
+				res.Source = name
+			}
 		}
 		return res
 	}
@@ -75,9 +80,15 @@ func probeTerminalPlatform() TerminalCaps {
 
 	outH, err := syscall.Open("CONOUT$", syscall.O_RDWR, 0)
 	if err != nil {
+		if ok, name := envIndicatesKitty(); ok {
+			res.Kitty = true
+			res.Source = name
+		}
 		if ok, name := envIndicatesSixel(); ok {
 			res.Sixel = true
-			res.Source = name
+			if res.Source == "non-tty" {
+				res.Source = name
+			}
 		}
 		return res
 	}
@@ -95,7 +106,7 @@ func probeTerminalPlatform() TerminalCaps {
 	procSetConsoleMode.Call(uintptr(inH), uintptr(enableVirtualTerminalInput))
 	procFlushConsoleInput.Call(uintptr(inH))
 
-	query := []byte("\x1b[16t\x1b[14t\x1b[c")
+	query := []byte(probeQueryForEnv())
 	var written uint32
 	_ = syscall.WriteFile(outH, query, &written, nil)
 
@@ -116,7 +127,7 @@ func probeTerminalPlatform() TerminalCaps {
 			break
 		}
 		resp = append(resp, buf[:n]...)
-		if bytes.IndexByte(resp, 'c') >= 0 {
+		if da1Re.Match(resp) {
 			break
 		}
 	}
@@ -128,13 +139,24 @@ func probeTerminalPlatform() TerminalCaps {
 		rows = int(info.Window.Bottom-info.Window.Top) + 1
 	}
 
-	sixel, cw, ch, src := parseProbeResponse(resp, cols, rows)
+	gotDA1 := da1Re.Match(resp)
+	sixel, kitty, cw, ch, src := parseProbeResponse(resp, cols, rows)
 	if cw > 0 && ch > 0 {
 		res.CellW = cw
 		res.CellH = ch
 		res.Source = src
 	} else {
 		res.Source = "default"
+	}
+	if kitty {
+		res.Kitty = true
+	} else if !gotDA1 {
+		if ok, name := envIndicatesKitty(); ok {
+			res.Kitty = true
+			if res.Source == "default" {
+				res.Source = name
+			}
+		}
 	}
 	if sixel {
 		res.Sixel = true

@@ -35,9 +35,9 @@ func makeTestPage(w, h int, bg, ink color.RGBA) *image.RGBA {
 func TestParseProbeResponse(t *testing.T) {
 	// Windows Terminal style response: CSI 16t (21x10 cell) + DA1 with attr 4 (Sixel).
 	resp := []byte("\x1b[6;21;10t\x1b[4;966;1920t\x1b[?61;6;7;14;21;22;23;24;28;32;42;4c")
-	sixel, cw, ch, src := parseProbeResponse(resp, 192, 46)
-	if !sixel {
-		t.Fatal("expected sixel=true for DA1 containing 4")
+	sixel, kitty, cw, ch, src := parseProbeResponse(resp, 192, 46)
+	if !sixel || kitty {
+		t.Fatalf("expected sixel=true kitty=false, got sixel=%v kitty=%v", sixel, kitty)
 	}
 	if cw != 10 || ch != 21 || src != "CSI16t" {
 		t.Fatalf("got cell=%dx%d (%s), want 10x21 (CSI16t)", cw, ch, src)
@@ -45,16 +45,16 @@ func TestParseProbeResponse(t *testing.T) {
 
 	// Fallback to CSI 14t when CSI 16t is absent.
 	resp14 := []byte("\x1b[4;800;1600t\x1b[?62;4;22c")
-	sixel, cw, ch, src = parseProbeResponse(resp14, 160, 40)
-	if !sixel || cw != 10 || ch != 20 || src != "CSI14t" {
-		t.Fatalf("got sixel=%v cell=%dx%d (%s), want true 10x20 (CSI14t)", sixel, cw, ch, src)
+	sixel, kitty, cw, ch, src = parseProbeResponse(resp14, 160, 40)
+	if !sixel || kitty || cw != 10 || ch != 20 || src != "CSI14t" {
+		t.Fatalf("got sixel=%v kitty=%v cell=%dx%d (%s), want true false 10x20 (CSI14t)", sixel, kitty, cw, ch, src)
 	}
 
-	// Terminal without Sixel (no 4 in DA1).
+	// Terminal without Sixel or Kitty (no 4 in DA1, no Kitty OK).
 	respNo := []byte("\x1b[?62;22c")
-	sixel, _, _, _ = parseProbeResponse(respNo, 80, 24)
-	if sixel {
-		t.Fatal("expected sixel=false when DA1 omits 4")
+	sixel, kitty, _, _, _ = parseProbeResponse(respNo, 80, 24)
+	if sixel || kitty {
+		t.Fatalf("expected sixel=false kitty=false, got sixel=%v kitty=%v", sixel, kitty)
 	}
 }
 

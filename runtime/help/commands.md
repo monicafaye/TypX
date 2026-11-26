@@ -20,12 +20,13 @@ quotes here but these are not necessary when entering the command in TypX.
 
 See `> help typst` for a walkthrough of Typst authoring workflows.
 
-* `preview ['inline'|'browser'|'focus'|'invert'|'trim'|'stop']`: toggles live
-   preview for the active `.typ` buffer (default key: `Alt-p`). Without
-   arguments, `typst.previewMode` (`auto` by default) opens a right-docked
-   in-terminal Sixel preview when supported, otherwise `tinymist` browser
-   preview with debounced cursor synchronization. Subcommands toggle the
-   `inline` Sixel pane or `browser` preview, `focus` the inline pane, toggle
+* `preview ['inline'|'kitty'|'sixel'|'browser'|'focus'|'invert'|'trim'|'stop']`:
+   toggles live preview for the active `.typ` buffer (default key: `Alt-p`).
+   Without arguments, `typst.previewMode` (`auto` by default) opens a
+   right-docked in-terminal Kitty or Sixel preview when supported, otherwise
+   `tinymist` browser preview with debounced cursor synchronization. Subcommands
+   toggle the `inline` pane or `browser` preview, open or switch the inline pane
+   between `kitty` and `sixel` graphics, `focus` the inline pane, toggle
    `invert` (dark mode) or `trim` (margins), or `stop` any active preview.
 
 * `outline ['on'|'off'|'open'|'close'|'toggle']`: toggles or controls the

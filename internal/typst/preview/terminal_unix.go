@@ -3,7 +3,6 @@
 package preview
 
 import (
-	"bytes"
 	"os"
 	"time"
 
@@ -43,8 +42,21 @@ func probeTerminalPlatform() TerminalCaps {
 		}
 	}
 
+	if skipRawTerminalProbe() {
+		if res.Source == "non-tty" {
+			res.Source = "dumb"
+		}
+		return res
+	}
+
 	oldState, err := term.MakeRaw(inFd)
 	if err != nil {
+		if ok, name := envIndicatesKitty(); ok {
+			res.Kitty = true
+			if res.Source == "non-tty" {
+				res.Source = name
+			}
+		}
 		if ok, name := envIndicatesSixel(); ok {
 			res.Sixel = true
 			if res.Source == "non-tty" {
@@ -55,7 +67,7 @@ func probeTerminalPlatform() TerminalCaps {
 	}
 	defer func() { _ = term.Restore(inFd, oldState) }()
 
-	_, _ = os.Stdout.WriteString("\x1b[16t\x1b[14t\x1b[c")
+	_, _ = os.Stdout.WriteString(probeQueryForEnv())
 
 	var resp []byte
 	buf := make([]byte, 256)
@@ -75,18 +87,29 @@ func probeTerminalPlatform() TerminalCaps {
 			break
 		}
 		resp = append(resp, buf[:n]...)
-		if bytes.IndexByte(resp, 'c') >= 0 {
+		if da1Re.Match(resp) {
 			break
 		}
 	}
 
-	sixel, cw, ch, src := parseProbeResponse(resp, cols, rows)
+	gotDA1 := da1Re.Match(resp)
+	sixel, kitty, cw, ch, src := parseProbeResponse(resp, cols, rows)
 	if cw > 0 && ch > 0 {
 		res.CellW = cw
 		res.CellH = ch
 		res.Source = src
 	} else if res.Source == "non-tty" {
 		res.Source = "default"
+	}
+	if kitty {
+		res.Kitty = true
+	} else if !gotDA1 {
+		if ok, name := envIndicatesKitty(); ok {
+			res.Kitty = true
+			if res.Source == "default" {
+				res.Source = name
+			}
+		}
 	}
 	if sixel {
 		res.Sixel = true

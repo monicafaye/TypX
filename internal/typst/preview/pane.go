@@ -78,7 +78,7 @@ func EffectiveWidth(termWidth, configuredPct int) int {
 }
 
 // PreviewPane implements action.Pane, action.AuxiliaryPane, and display.Window
-// as a docked right-hand continuous Sixel live preview pane.
+// as a docked right-hand continuous inline (Kitty or Sixel) live preview pane.
 type PreviewPane struct {
 	view   *display.View
 	id     uint64
@@ -114,18 +114,20 @@ type PreviewPane struct {
 	lastCompiledMain   string
 	pinnedSubfileDirty bool
 	spinTick           atomic.Int32
-	spinStop      chan struct{}
-	hadOverlayTxt bool
+	spinStop           chan struct{}
+	hadOverlayTxt      bool
 
-	// Sixel emission tracking (main UI goroutine only).
-	sixelDirty   bool
-	clearPending bool
-	lastEmitX    int
-	lastEmitY    int
-	lastEmitW    int
-	lastEmitH    int
-	vpTargetW    int
-	vpTargetH    int
+	// Inline graphics emission tracking (main UI goroutine only).
+	frameDirty       bool
+	clearPending     bool
+	lastEmitX        int
+	lastEmitY        int
+	lastEmitW        int
+	lastEmitH        int
+	lastEmitProto    GraphicsProtocol
+	protocolOverride GraphicsProtocol
+	vpTargetW        int
+	vpTargetH        int
 
 	mu            sync.Mutex
 	closed        bool
@@ -234,7 +236,7 @@ func (pp *PreviewPane) Close() {
 	pp.overrideActive = false
 	pp.viewport = nil
 	pp.pendingSection = nil
-	pp.sixelDirty = false
+	pp.frameDirty = false
 
 	if !already && pp.mgr != nil && pp.tab != nil {
 		if cur := pp.mgr.panes[pp.tab]; cur == pp {
@@ -286,8 +288,11 @@ func (pp *PreviewPane) ShowOverrideLoading(title string) {
 	pp.overrideErr = ""
 	pp.viewport = nil
 	pp.scrollY = 0
-	pp.sixelDirty = false
+	pp.frameDirty = false
 	pp.clearPending = true
+	if pp.mgr != nil && pp.mgr.kittyActive {
+		pp.mgr.kittyDeletePending = true
+	}
 	pp.compileStart = time.Now()
 	pp.startSpinner()
 	screen.Redraw()
@@ -334,8 +339,11 @@ func (pp *PreviewPane) ShowOverrideError(title, errMsg string) {
 	pp.overrideLoading = false
 	pp.overrideErr = firstUsefulErrorLine(errMsg)
 	pp.viewport = nil
-	pp.sixelDirty = false
+	pp.frameDirty = false
 	pp.clearPending = true
+	if pp.mgr != nil && pp.mgr.kittyActive {
+		pp.mgr.kittyDeletePending = true
+	}
 	screen.Redraw()
 }
 
@@ -363,9 +371,12 @@ func (pp *PreviewPane) ClearOverride() {
 			pp.deck.ComputeLayout(dstW, pp.trimMargins)
 		}
 		pp.rebuildViewport(true)
-		pp.sixelDirty = true
+		pp.frameDirty = true
 		pp.clearPending = true
 	} else {
+		if pp.mgr != nil && pp.mgr.kittyActive {
+			pp.mgr.kittyDeletePending = true
+		}
 		pp.ScheduleCompile(true)
 	}
 	screen.Redraw()
@@ -478,6 +489,21 @@ func (pp *PreviewPane) preserveRatioRebuild() {
 	pp.rebuildViewport(true)
 }
 
+func (pp *PreviewPane) targetProtocol() GraphicsProtocol {
+	if pp.protocolOverride != ProtocolNone {
+		return pp.protocolOverride
+	}
+	return ActiveProtocol()
+}
+
+func (pp *PreviewPane) effectiveEmitProtocol() GraphicsProtocol {
+	p := pp.targetProtocol()
+	if p == ProtocolNone {
+		return ProtocolSixel
+	}
+	return p
+}
+
 func (pp *PreviewPane) rebuildViewport(clearRight bool) bool {
 	deck := pp.activeDeck()
 	if deck == nil {
@@ -487,7 +513,7 @@ func (pp *PreviewPane) rebuildViewport(clearRight bool) bool {
 	if dstW <= 0 || viewH <= 0 {
 		return false
 	}
-	vp, err := deck.RenderViewport(dstW, viewH, pp.scrollY, pp.invert, pp.trimMargins)
+	vp, err := deck.RenderViewportWithProtocol(dstW, viewH, pp.scrollY, pp.invert, pp.trimMargins, pp.targetProtocol())
 	if err != nil {
 		if pp.overrideActive {
 			pp.overrideErr = err.Error()
@@ -501,7 +527,7 @@ func (pp *PreviewPane) rebuildViewport(clearRight bool) bool {
 	pp.viewport = vp
 	pp.vpTargetW = dstW
 	pp.vpTargetH = viewH
-	pp.sixelDirty = true
+	pp.frameDirty = true
 	if clearRight || prev == nil || prev.DstW != vp.DstW || prev.DstH != vp.DstH || pp.hadOverlayTxt {
 		pp.clearPending = true
 	}
@@ -893,17 +919,22 @@ func (pp *PreviewPane) Display() {
 
 	imgRows := pp.imageRows()
 
-	// While the user drags a split border, clear any visible Sixel once and show
-	// a lightweight placeholder so resizing is lag-free and never ghosts Sixel.
+	// While the user drags a split border, clear any visible bitmap once and show
+	// a lightweight placeholder so resizing is lag-free and never ghosts images.
 	if pp.isTabResizing() {
 		if pp.lastEmitX >= 0 {
 			if pp.mgr != nil {
-				pp.mgr.pendingSync = true
+				if pp.lastEmitProto == ProtocolKitty || pp.mgr.kittyActive {
+					pp.mgr.kittyDeletePending = true
+				} else {
+					pp.mgr.pendingSync = true
+				}
 			}
 			pp.lastEmitX = -1
 			pp.lastEmitY = -1
+			pp.lastEmitProto = ProtocolNone
 		}
-		pp.sixelDirty = false
+		pp.frameDirty = false
 		if imgRows > 0 {
 			pp.hadOverlayTxt = true
 			pp.drawResizePlaceholder(imgRows)
@@ -918,10 +949,16 @@ func (pp *PreviewPane) Display() {
 	if pp.lastEmitX != pp.view.X || pp.lastEmitY != pp.view.Y ||
 		pp.lastEmitW != pp.view.Width || pp.lastEmitH != pp.view.Height {
 		if pp.lastEmitX >= 0 && pp.mgr != nil {
-			// Force a synchronized full-screen erase + tcell sync so ConPTY /
-			// terminals wipe stale Sixel pixels in any newly exposed area before
-			// re-emitting the relocated preview.
-			pp.mgr.pendingSync = true
+			if pp.lastEmitProto == ProtocolKitty || pp.mgr.kittyActive {
+				// Kitty graphics deletes the previous image ID atomically inside
+				// the next synchronized update without needing a full-screen ED 2 wipe.
+				pp.mgr.kittyDeletePending = true
+			} else {
+				// Force a synchronized full-screen erase + tcell sync so ConPTY /
+				// terminals wipe stale Sixel pixels in any newly exposed area before
+				// re-emitting the relocated preview.
+				pp.mgr.pendingSync = true
+			}
 		}
 		if pp.activeDeck() != nil {
 			dstW, viewH := pp.targetPixelSize()
@@ -929,19 +966,34 @@ func (pp *PreviewPane) Display() {
 				pp.preserveRatioRebuild()
 			}
 		}
-		pp.sixelDirty = true
+		pp.frameDirty = true
 		pp.clearPending = true
 	}
 
-	// Only write cell text into the image area when we have NO rendered Sixel yet.
+	// Detect live protocol switch (for example via `> set typst.previewProtocol`).
+	if pp.viewport != nil && pp.viewport.Protocol != pp.effectiveEmitProtocol() {
+		if pp.mgr != nil {
+			if pp.lastEmitProto == ProtocolKitty || pp.mgr.kittyActive {
+				pp.mgr.kittyDeletePending = true
+			} else if pp.lastEmitX >= 0 {
+				pp.mgr.pendingSync = true
+			}
+		}
+		pp.rebuildViewport(true)
+	}
+
+	// Only write cell text into the image area when we have NO rendered frame yet.
 	if pp.viewport == nil && imgRows > 0 {
+		if pp.mgr != nil && pp.mgr.kittyActive {
+			pp.mgr.kittyDeletePending = true
+		}
 		pp.hadOverlayTxt = true
 		pp.drawPlaceholder(imgRows)
 	} else if pp.hadOverlayTxt && pp.viewport != nil {
 		// Previous frame had placeholder text; screen.Fill already cleared it to spaces.
-		// Mark clearPending so postShow cleanly emits the Sixel over the blank cells.
+		// Mark clearPending so postShow cleanly emits the image over the blank cells.
 		pp.hadOverlayTxt = false
-		pp.sixelDirty = true
+		pp.frameDirty = true
 		pp.clearPending = true
 	}
 
@@ -1173,24 +1225,25 @@ func (pp *PreviewPane) pageLabel() string {
 	return fmt.Sprintf("p.%d/%d", pp.viewport.FirstPage, pp.viewport.PageCount)
 }
 
-// emitSixelIfDirty writes the Sixel sequence after screen.Show().
+// emitFrameIfDirty writes the encoded Kitty or Sixel sequence after screen.Show().
 // When wrapSync is true, the sequence is wrapped in DEC Mode 2026 synchronized
 // output markers; callers already inside a synchronized frame pass false.
-func (pp *PreviewPane) emitSixelIfDirty(out io.Writer, wrapSync bool) {
-	if !pp.sixelDirty || pp.viewport == nil || len(pp.viewport.Sixel) == 0 {
+func (pp *PreviewPane) emitFrameIfDirty(out io.Writer, wrapSync bool) {
+	if !pp.frameDirty || pp.viewport == nil || len(pp.viewport.Payload) == 0 {
 		return
 	}
 	if pp.view.Width <= 0 || pp.imageRows() <= 0 {
 		return
 	}
 
-	pp.sixelDirty = false
+	pp.frameDirty = false
 	clearRight := pp.clearPending
 	pp.clearPending = false
 	pp.lastEmitX = pp.view.X
 	pp.lastEmitY = pp.view.Y
 	pp.lastEmitW = pp.view.Width
 	pp.lastEmitH = pp.view.Height
+	pp.lastEmitProto = pp.viewport.Protocol
 
 	if out == nil {
 		return
@@ -1201,21 +1254,38 @@ func (pp *PreviewPane) emitSixelIfDirty(out io.Writer, wrapSync bool) {
 	imgRows := pp.imageRows()
 
 	var buf bytes.Buffer
-	buf.Grow(len(pp.viewport.Sixel) + 256)
+	buf.Grow(len(pp.viewport.Payload) + 256)
 	if wrapSync {
 		buf.WriteString("\x1b[?2026h") // begin synchronized update
 	}
 	buf.WriteString("\x1b7")     // DECSC: save editor cursor & SGR state
-	buf.WriteString("\x1b[?25l") // hide cursor during sixel draw
-	buf.WriteString("\x1b[0m")   // reset SGR so clearing spaces use default bg
-	if clearRight {
-		blank := strings.Repeat(" ", pp.view.Width)
-		for r := 0; r < imgRows; r++ {
-			fmt.Fprintf(&buf, "\x1b[%d;%dH%s", topRow+r, leftCol, blank)
+	buf.WriteString("\x1b[?25l") // hide cursor during graphics draw
+	if pp.viewport.Protocol == ProtocolKitty {
+		if pp.mgr != nil && (pp.mgr.kittyActive || pp.mgr.kittyDeletePending) {
+			buf.WriteString(kittyDeleteSeq)
 		}
+		fmt.Fprintf(&buf, "\x1b[%d;%dH", topRow, leftCol)
+		buf.Write(pp.viewport.Payload)
+		if pp.mgr != nil {
+			pp.mgr.kittyActive = true
+			pp.mgr.kittyDeletePending = false
+		}
+	} else {
+		if pp.mgr != nil && (pp.mgr.kittyActive || pp.mgr.kittyDeletePending) {
+			buf.WriteString(kittyDeleteSeq)
+			pp.mgr.kittyActive = false
+			pp.mgr.kittyDeletePending = false
+		}
+		buf.WriteString("\x1b[0m") // reset SGR so clearing spaces use default bg
+		if clearRight {
+			blank := strings.Repeat(" ", pp.view.Width)
+			for r := 0; r < imgRows; r++ {
+				fmt.Fprintf(&buf, "\x1b[%d;%dH%s", topRow+r, leftCol, blank)
+			}
+		}
+		fmt.Fprintf(&buf, "\x1b[%d;%dH", topRow, leftCol)
+		buf.Write(pp.viewport.Payload)
 	}
-	fmt.Fprintf(&buf, "\x1b[%d;%dH", topRow, leftCol)
-	buf.Write(pp.viewport.Sixel)
 	buf.WriteString("\x1b8") // DECRC: restore cursor to editor position
 	if !pp.active && !screen.UseFake() {
 		buf.WriteString("\x1b[?25h")
@@ -1371,7 +1441,7 @@ func (pp *PreviewPane) HandleEvent(event tcell.Event) {
 			case 'm', 'M':
 				pp.ToggleTrimMargins()
 			case 'r', 'R':
-				pp.sixelDirty = true
+				pp.frameDirty = true
 				pp.clearPending = true
 				if pp.overrideActive {
 					pp.rebuildViewport(true)
@@ -1450,13 +1520,15 @@ func findNodeParent(n *views.Node, id uint64) (*views.Node, int) {
 type MainFileResolverFunc func(bufPath string) string
 
 // Manager coordinates per-tab docked PreviewPanes, compiler wiring, buffer
-// observers, resize handling, and post-show Sixel emission.
+// observers, resize handling, and post-show inline graphics emission.
 type Manager struct {
 	buffer.NopObserver
 
-	panes       map[*action.Tab]*PreviewPane
-	autoHidden  map[*action.Tab]bool
-	pendingSync bool
+	panes              map[*action.Tab]*PreviewPane
+	autoHidden         map[*action.Tab]bool
+	pendingSync        bool
+	kittyActive        bool
+	kittyDeletePending bool
 
 	cfgMu            sync.RWMutex
 	compiler         Compiler
@@ -1478,7 +1550,7 @@ func newManager() *Manager {
 	}
 }
 
-// Init registers buffer observers, tab/resize hooks, and the post-show Sixel emitter.
+// Init registers buffer observers, tab/resize hooks, and inline graphics lifecycle hooks.
 // Safe to call multiple times (idempotent).
 func Init() {
 	initOnce.Do(func() {
@@ -1488,6 +1560,8 @@ func Init() {
 		action.RegisterTabSwitchHook(defaultManager.onTabSwitch)
 		action.RegisterPaneFocusHook(defaultManager.onPaneFocus)
 		screen.RegisterPostShowHook(defaultManager.postShow)
+		screen.RegisterPreFiniHook(defaultManager.onPreFini)
+		screen.RegisterPostRestartHook(defaultManager.onPostRestart)
 	})
 }
 
@@ -1534,6 +1608,13 @@ func Open(bp *action.BufPane, focus bool) (*PreviewPane, bool) {
 // Toggle toggles the inline preview pane on bp's tab.
 func Toggle(bp *action.BufPane) bool {
 	return defaultManager.Toggle(bp)
+}
+
+// ToggleWithProtocol opens the inline preview pane using proto, switches an open
+// pane to proto if it currently uses another protocol, or closes the pane if it
+// is already displaying proto.
+func ToggleWithProtocol(bp *action.BufPane, proto GraphicsProtocol) bool {
+	return defaultManager.ToggleWithProtocol(bp, proto)
 }
 
 // OpenForOverride opens (or reuses) the right-docked Sixel PreviewPane in
@@ -1633,8 +1714,36 @@ func (m *Manager) resolveOutput() io.Writer {
 	return os.Stdout
 }
 
-// Shutdown closes every tracked preview pane and removes temp PNG directories.
+func (m *Manager) deleteKittyNow(out io.Writer) {
+	hadKitty := m.kittyActive || m.kittyDeletePending
+	m.kittyActive = false
+	m.kittyDeletePending = false
+	if !hadKitty || out == nil {
+		return
+	}
+	EnableVTOutput()
+	_, _ = io.WriteString(out, kittyDeleteSeq)
+}
+
+func (m *Manager) onPreFini() {
+	m.deleteKittyNow(m.resolveOutput())
+}
+
+func (m *Manager) onPostRestart() {
+	for t, pp := range m.panes {
+		if m.paneForTab(t) == nil {
+			continue
+		}
+		pp.frameDirty = true
+		pp.clearPending = true
+	}
+}
+
+// Shutdown closes every tracked preview pane, deletes any active Kitty graphics
+// placement, and removes temp PNG directories.
 func (m *Manager) Shutdown() {
+	m.deleteKittyNow(m.resolveOutput())
+	m.pendingSync = false
 	for tab, pp := range m.panes {
 		pp.Close()
 		delete(m.panes, tab)
@@ -1675,8 +1784,51 @@ func (m *Manager) Toggle(bp *action.BufPane) bool {
 	return ok
 }
 
-// Open docks the continuous Sixel PreviewPane on the right edge of bp's tab.
+// ToggleWithProtocol opens, switches, or closes the inline preview pane with proto.
+func (m *Manager) ToggleWithProtocol(bp *action.BufPane, proto GraphicsProtocol) bool {
+	if bp == nil || bp.Tab() == nil {
+		return false
+	}
+	if proto == ProtocolNone {
+		return m.Toggle(bp)
+	}
+	tab := bp.Tab()
+	if existing := m.paneForTab(tab); existing != nil {
+		cur := existing.lastEmitProto
+		if cur == ProtocolNone && existing.viewport != nil {
+			cur = existing.viewport.Protocol
+		}
+		if cur == ProtocolNone {
+			cur = existing.effectiveEmitProtocol()
+		}
+		if cur == proto {
+			return m.CloseForTab(tab)
+		}
+		existing.protocolOverride = proto
+		if cur == ProtocolKitty || m.kittyActive {
+			m.kittyDeletePending = true
+		} else if existing.lastEmitX >= 0 {
+			m.pendingSync = true
+		}
+		if existing.activeDeck() != nil {
+			existing.rebuildViewport(true)
+		}
+		existing.frameDirty = true
+		existing.clearPending = true
+		screen.Redraw()
+		notifyMessage(fmt.Sprintf("Inline preview switched to %s", proto.String()))
+		return true
+	}
+	pp, ok := m.openWithProtocol(bp, proto, false)
+	return ok && pp != nil
+}
+
+// Open docks the continuous inline PreviewPane on the right edge of bp's tab.
 func (m *Manager) Open(bp *action.BufPane, focus bool) (*PreviewPane, bool) {
+	return m.openWithProtocol(bp, ProtocolNone, focus)
+}
+
+func (m *Manager) openWithProtocol(bp *action.BufPane, proto GraphicsProtocol, focus bool) (*PreviewPane, bool) {
 	if bp == nil || bp.Buf == nil || bp.Tab() == nil {
 		return nil, false
 	}
@@ -1685,7 +1837,10 @@ func (m *Manager) Open(bp *action.BufPane, focus bool) (*PreviewPane, bool) {
 
 	if existing := m.paneForTab(tab); existing != nil {
 		existing.target = bp
-		existing.sixelDirty = true
+		if proto != ProtocolNone {
+			existing.protocolOverride = proto
+		}
+		existing.frameDirty = true
 		existing.clearPending = true
 		existing.ScheduleCompile(true)
 		if focus {
@@ -1726,6 +1881,7 @@ func (m *Manager) Open(bp *action.BufPane, focus bool) (*PreviewPane, bool) {
 
 	delete(m.autoHidden, tab)
 	pp := newPreviewPane(tab, bp, m)
+	pp.protocolOverride = proto
 	pp.SetID(dockID)
 	m.panes[tab] = pp
 
@@ -1746,7 +1902,7 @@ func CloseForTab(tab *action.Tab) bool {
 }
 
 func (m *Manager) OpenForOverride(bp *action.BufPane, title string) (*PreviewPane, bool) {
-	if !SupportsSixel() || bp == nil || bp.Tab() == nil {
+	if !SupportsInline() || bp == nil || bp.Tab() == nil {
 		return nil, false
 	}
 	m.pruneStaleTabs()
@@ -1811,6 +1967,7 @@ func (m *Manager) detachFromTab(tab *action.Tab) bool {
 		return false
 	}
 	wasFocused := tab.ActivePane() == pp
+	wasKitty := pp.lastEmitProto == ProtocolKitty || m.kittyActive
 	target := pp.resolveTarget()
 	id := pp.ID()
 
@@ -1844,9 +2001,15 @@ func (m *Manager) detachFromTab(tab *action.Tab) bool {
 		}
 	}
 
-	// Schedule a full screen sync after the next frame draws so no stale Sixel
-	// pixels can linger over unchanged blank cells in the expanded editor.
-	m.pendingSync = true
+	if wasKitty {
+		// Explicitly delete the Kitty placement on the next frame (overwriting
+		// cells with spaces does not remove Kitty graphics placements).
+		m.kittyDeletePending = true
+	} else {
+		// Schedule a full screen sync after the next frame draws so no stale Sixel
+		// pixels can linger over unchanged blank cells in the expanded editor.
+		m.pendingSync = true
+	}
 	screen.Redraw()
 	return true
 }
@@ -1862,21 +2025,29 @@ func (m *Manager) postShow() {
 
 	if m.pendingSync {
 		m.pendingSync = false
-		// Wrap ED 2 + tcell Sync + Sixel re-emit in one synchronized update so
+		// Wrap ED 2 + tcell Sync + inline graphics re-emit in one synchronized update so
 		// Windows Terminal / ConPTY (where tcell's cScreen.Sync does not issue
 		// ED 2 and ConPTY skips unchanged blank cells) reliably wipes every
 		// stale Sixel bitmap with zero flicker.
 		if out != nil {
 			EnableVTOutput()
 			_, _ = io.WriteString(out, "\x1b[?2026h\x1b[?25l\x1b[0m\x1b[2J")
+			if m.kittyActive || m.kittyDeletePending {
+				_, _ = io.WriteString(out, kittyDeleteSeq)
+				m.kittyActive = false
+				m.kittyDeletePending = false
+			}
+		} else {
+			m.kittyActive = false
+			m.kittyDeletePending = false
 		}
 		if screen.Screen != nil {
 			screen.Screen.Sync()
 		}
 		if pp != nil && !pp.isTabResizing() {
-			pp.sixelDirty = true
+			pp.frameDirty = true
 			pp.clearPending = false // ED 2 just cleared the entire viewport
-			pp.emitSixelIfDirty(out, false)
+			pp.emitFrameIfDirty(out, false)
 		}
 		if out != nil {
 			_, _ = io.WriteString(out, "\x1b[?2026l")
@@ -1884,10 +2055,21 @@ func (m *Manager) postShow() {
 		return
 	}
 
-	if pp == nil || pp.isTabResizing() {
+	if pp != nil && !pp.isTabResizing() && pp.frameDirty && pp.viewport != nil && len(pp.viewport.Payload) > 0 {
+		pp.emitFrameIfDirty(out, true)
 		return
 	}
-	pp.emitSixelIfDirty(out, true)
+
+	if m.kittyDeletePending {
+		m.kittyDeletePending = false
+		if m.kittyActive {
+			m.kittyActive = false
+			if out != nil {
+				EnableVTOutput()
+				_, _ = io.WriteString(out, "\x1b[?2026h"+kittyDeleteSeq+"\x1b[?2026l")
+			}
+		}
+	}
 }
 
 func (m *Manager) pruneStaleTabs() {
@@ -1900,6 +2082,9 @@ func (m *Manager) pruneStaleTabs() {
 	}
 	for t, pp := range m.panes {
 		if !live[t] {
+			if m.kittyActive {
+				m.kittyDeletePending = true
+			}
 			pp.Close()
 			delete(m.panes, t)
 		}
@@ -1952,23 +2137,27 @@ func (m *Manager) onPostResize(w, h int) {
 		if m.paneForTab(t) == nil {
 			continue
 		}
-		pp.sixelDirty = true
+		pp.frameDirty = true
 		pp.clearPending = true
 	}
 }
 
 func (m *Manager) onTabSwitch(tab *action.Tab) {
 	m.pruneStaleTabs()
-	// Switching tabs invalidates any Sixel bitmap from the previous tab.
+	// Switching tabs invalidates any inline bitmap from the previous tab.
 	if len(m.panes) > 0 {
-		m.pendingSync = true
+		if m.kittyActive {
+			m.kittyDeletePending = true
+		} else {
+			m.pendingSync = true
+		}
 	}
 	pp := m.paneForTab(tab)
 	if pp == nil {
 		return
 	}
 	if pp.overrideActive {
-		pp.sixelDirty = true
+		pp.frameDirty = true
 		pp.clearPending = true
 		return
 	}
@@ -1977,7 +2166,7 @@ func (m *Manager) onTabSwitch(tab *action.Tab) {
 		m.CloseForTab(tab)
 		return
 	}
-	pp.sixelDirty = true
+	pp.frameDirty = true
 	pp.clearPending = true
 	if pp.lastShared != target.Buf.SharedBuffer || pp.lastVersion != target.Buf.Version() {
 		pp.ScheduleCompile(true)
@@ -2157,6 +2346,20 @@ func readGlobalInt(key string, fallback int) int {
 		return n
 	default:
 		return fallback
+	}
+}
+
+func readGlobalString(key, fallback string) string {
+	v := config.GetGlobalOption(key)
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fallback
+}
+
+func notifyMessage(msg string) {
+	if action.InfoBar != nil {
+		action.InfoBar.Message(msg)
 	}
 }
 

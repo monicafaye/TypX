@@ -77,7 +77,7 @@ func InitFlags() {
 		fmt.Println("-no-lsp")
 		fmt.Println("    \tLaunch without starting the tinymist LSP server")
 		fmt.Println("-preview")
-		fmt.Println("    \tImmediately start live preview (inline Sixel or browser) on the opened .typ file")
+		fmt.Println("    \tImmediately start live preview (inline Kitty/Sixel or browser) on the opened .typ file")
 		fmt.Println("-new template")
 		fmt.Println("    \tCreate a new .typ file or project from a template (use `-new list` to list)")
 
@@ -397,7 +397,7 @@ func main() {
 		}
 	}
 
-	// Probe terminal inline graphics (Sixel) and cell pixel dimensions before
+	// Probe terminal inline graphics (Kitty / Sixel) and cell pixel dimensions before
 	// tcell takes over stdin/stdout. Safe no-op on non-TTY streams.
 	preview.ProbeTerminal()
 

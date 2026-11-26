@@ -22,7 +22,7 @@ flowchart TB
         Shortcuts["internal/typst/shortcuts (Wrappers, Snippets, Smart Pairs)"]
         Outline["internal/typst/outline (Incremental Parser, OutlinePane)"]
         Templates["internal/typst/templates (Offline Registry, Universe Client, TemplatePane)"]
-        Preview["internal/typst/preview (Sixel, PNG Deck, PDF Anchor Index, PreviewPane)"]
+        Preview["internal/typst/preview (Kitty/Sixel, PNG Deck, PDF Anchor Index, PreviewPane)"]
         LSP["internal/lsp (tinymist JSON-RPC Client, Root Resolver, Browser Proxy)"]
     end
 
@@ -145,7 +145,7 @@ To keep upstream `micro` diffs minimal and localized, TypX interacts with `micro
 | **Statusline & Bottom Bar** | `internal/display/statusline.go`, `internal/display/bottombar.go`, `internal/action/bottombar.go` | `display.SetStatusInfoFn` feeds `$(typst.mode)`, `$(typst.words)`, and `$(typst.lsp)` (with `PIN:` accent rendering). `display.SetBottomBarProvider` supplies context hints and `Alt+G` menu rows; `action.HandleBottomBarEvent` intercepts clicks and menu keys before pane dispatch. |
 | **Display-Only Concealment** | `internal/display/bufwindow.go`, `internal/display/softwrap.go` | `BufWindow` renders `conceal.LineView` glyphs on `.typ` buffers without altering buffer bytes, and `LocFromVisual` maps clicks/visual coordinates back to buffer rune indices via `LineView.VisualToBuf`. |
 | **Docked Split Panes** | `internal/views/splits.go` | `Node.DockLeft(width)` (Outline/Templates), `Node.DockRight(width)` (Preview), and `Node.DockBottom(height)` (`ListPane` drawer) attach auxiliary panes alongside normal editor splits. |
-| **Post-Show Graphics** | `internal/screen/screen.go` | `screen.RegisterPostShowHook` runs after `tcell.Screen.Show()` so raw terminal graphics (Sixel) paint over reserved cells without `tcell` overwriting them. |
+| **Post-Show & Screen Lifecycle Graphics** | `internal/screen/screen.go` | `screen.RegisterPostShowHook` runs after `tcell.Screen.Show()` so raw terminal graphics (Kitty or Sixel) paint over reserved cells without `tcell` overwriting them; `RegisterPreFiniHook` and `RegisterPostRestartHook` delete and restore Kitty placements around `TempFini`/`TempStart`. |
 
 ---
 
@@ -155,7 +155,7 @@ To keep upstream `micro` diffs minimal and localized, TypX interacts with `micro
 
 | Seam | Interface | Production Adapter (`features.Init()`) | Purpose |
 | --- | --- | --- | --- |
-| `lsp.SetInlinePreviewHandler` | `lsp.InlinePreviewHandler` (`SupportsInline`, `IsOpen`, `Open`, `Toggle`, `Close`, `ToggleInvert`, `ToggleTrim`) | `inlinePreviewAdapter` delegating to `internal/typst/preview` | Routes `:preview` / `Alt+P` / `--preview` between inline Sixel preview and browser preview without `lsp` ↔ `preview` imports. |
+| `lsp.SetInlinePreviewHandler` | `lsp.InlinePreviewHandler` (`SupportsInline`, `IsOpen`, `Open`, `Toggle`, `ToggleProtocol`, `Close`, `ToggleInvert`, `ToggleTrim`) | `inlinePreviewAdapter` delegating to `internal/typst/preview` | Routes `:preview` / `Alt+P` / `--preview` between inline Kitty/Sixel preview and browser preview without `lsp` <-> `preview` imports. |
 | `lsp.PinnedMain` & `lsp.SetPinChangeHandler` | `func() string`, `func(func(string))` | `preview.SetMainFileResolver` & `preview.NotifyMainFileChanged` | Redirects Sixel preview compiles to the pinned project entrypoint on subfile edits/saves without `lsp` ↔ `preview` imports. |
 | `preview.SetCompiler` | `preview.Compiler` (`CompilePages(ctx, CompileRequest) (*DocumentDeck, error)`) | `&preview.TinymistCompiler{...}` (swapped for fakes in tests) | Isolates PNG/PDF subprocess compilation from `PreviewPane` state and viewport rendering. |
 | `preview.TinymistCompiler.DiscoverFn` & `preview.SetRootResolver` | `TinymistDiscoveryFunc`, `RootResolverFunc` | `lsp.Discover` and `lsp.FindProjectRoot` | Reuses LSP binary discovery and multi-file root resolution without importing `internal/lsp`. |
@@ -196,18 +196,19 @@ To keep upstream `micro` diffs minimal and localized, TypX interacts with `micro
   - Pre-save format failures or timeouts never block `Save()` (guarded via per-buffer `formattingOnSave` re-entry map on the main loop).
   - Child processes never leak stdout/stderr onto the `tcell` screen and are reaped on exit (including Windows Job Objects with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`).
 
-### 5.3 Native In-Terminal Sixel Preview & PDF Anchor Sync (`internal/typst/preview`)
+### 5.3 Native In-Terminal Preview (Kitty & Sixel) and PDF Anchor Sync (`internal/typst/preview`)
 
-- **Interface**: `preview.ProbeTerminal`, `preview.SupportsSixel`, `preview.Init`, `preview.Shutdown`, `preview.Open` / `Toggle` / `CloseForTab` / `PaneForTab`, `preview.OpenForOverride` / `ClearOverrideForTab` / `CompileTypstToImages`, `PreviewPane.ScrollToSection(SectionTarget)`, `DocumentDeck.ResolveSectionScrollY`, and `ParsePDFAnchors([]byte) *DocumentAnchors`.
+- **Interface**: `preview.ProbeTerminal`, `preview.SupportsInline`, `preview.SupportsKitty`, `preview.SupportsSixel`, `preview.ActiveProtocol`, `preview.ParseProtocol`, `preview.Init`, `preview.Shutdown`, `preview.Open` / `Toggle` / `ToggleWithProtocol` / `CloseForTab` / `PaneForTab`, `preview.OpenForOverride` / `ClearOverrideForTab` / `CompileTypstToImages`, `PreviewPane.ScrollToSection(SectionTarget)`, `DocumentDeck.ResolveSectionScrollY`, and `ParsePDFAnchors([]byte) *DocumentAnchors`.
 - **Implementation**:
-  - **Terminal probe**: Cross-platform Sixel & cell-pixel detection (CSI `16t`/`14t`, DA1, `TIOCGWINSZ`, Windows Terminal / Konsole / foot / WezTerm / xterm).
+  - **Terminal probe**: Cross-platform Kitty graphics (APC `a=q` 1x1 test action), Sixel (DA1 attribute 4), and cell-pixel detection (CSI `16t`/`14t`, `TIOCGWINSZ`) across Kitty, Ghostty, WezTerm, Konsole, Windows Terminal, foot, iTerm2, and xterm. Prefers Kitty graphics when both Kitty and Sixel are available, supports explicit override via `typst.previewProtocol` (`"auto"`, `"kitty"`, `"sixel"`) and `:preview kitty` / `:preview sixel`, skips raw escape probing on `dumb`/`linux` terminals, and omits the Kitty APC query inside `tmux`, GNU Screen, and macOS Terminal.app.
   - **Parallel PNG + PDF compile (`TinymistCompiler.CompilePages`)**: Stages unsaved buffers to a sibling shadow file so relative/root imports still resolve, runs `tinymist compile --format png` for per-page raster images, and in parallel runs a non-fatal `tinymist compile --format pdf` to extract rendered coordinates via the zero-dependency PDF parser (`ParsePDFAnchors`, walking `/Pages`, `/Names /Dests`, and `/Outlines`).
   - **Three-tier section jump (`ResolveSectionScrollY`)**: Resolves an outline target to a continuous pixel `scrollY` (accounting for margin trimming) via (1) exact `<label>` named destination from `/Names /Dests`, (2) DP monotonic alignment of source headings against PDF `/Outlines` bookmarks (with 1-to-1 sandwiched-gap filling for math/macro headings), and (3) bracketed interpolation between surrounding PDF anchors or proportional buffer-line fallback.
-  - **Continuous deck, override mode & Sixel output**: Lazily decodes visible pages, resamples with Catmull-Rom filtering (`golang.org/x/image/draw`), encodes 248-color RLE Sixel streams, and supports clamped scrolling, zoom, margin trimming, dark-mode inversion, keyboard (`<`/`>`) + mouse-drag width resizing inside a `DockRight` pane, and temporary override decks for Template Gallery live preview (restoring any pre-existing document deck and scroll position on exit).
+  - **Continuous deck, override mode & dual graphics output**: Lazily decodes visible pages, resamples with Catmull-Rom filtering (`golang.org/x/image/draw`), and encodes either 24-bit lossless PNG chunks via the Kitty Graphics Protocol (`a=T,f=100,i=1,p=1,q=2,C=1`, 4096-byte base64 chunks) or 248-color RLE Sixel streams. Supports clamped scrolling, zoom, margin trimming, dark-mode inversion, keyboard (`<`/`>`) + mouse-drag width resizing inside a `DockRight` pane, and temporary override decks for Template Gallery live preview (restoring any pre-existing document deck and scroll position on exit).
 - **Invariants**:
   - Set `cmd.Dir = rootDir` alongside `--root` when invoking `tinymist compile` so Windows relative ancestor checks do not fail.
   - Capture `canceled := ctx.Err() == context.Canceled` *before* calling `cancel()` when dispatching compile results to `action.EnqueueUI`.
-  - On Windows ConPTY, any preview geometry shift, pane close, tab switch, or divider drag start triggers `pendingSync` and wipes atomically inside DEC Mode 2026 (`\x1b[?2026h` + `\x1b[0m\x1b[2J` → `screen.Screen.Sync()` → Sixel emit → `\x1b[?2026l`). Always reset SGR (`\x1b[0m`) before clearing Sixel regions and defer Sixel redraws while `tab.IsResizing()` is true.
+  - Always pass `q=2` on Kitty transmit and delete sequences so terminal responses never leak into `tcell`'s stdin reader. Explicitly emit `\x1b_Ga=d,d=I,i=1,q=2\x1b\\` on frame replacement, pane close, tab switch, divider drag start, placeholder/error transitions, `TempFini`, and `Shutdown()`.
+  - On Sixel / Windows ConPTY, any preview geometry shift, pane close, tab switch, or divider drag start triggers `pendingSync` and wipes atomically inside DEC Mode 2026 (`\x1b[?2026h` + `\x1b[0m\x1b[2J` -> `screen.Screen.Sync()` -> Sixel emit -> `\x1b[?2026l`). Always reset SGR (`\x1b[0m`) before clearing Sixel regions and defer redraws while `tab.IsResizing()` is true.
 
 ### 5.4 Document Outline Sidebar (`internal/typst/outline`)
 

@@ -123,19 +123,19 @@ typx --new @preview/charged-ieee my-paper
 - `> template-save <name> [--preamble] [--force]`: Save the active buffer (or
   its preamble above the first `=` heading) to `<config-dir>/templates/<name>.typ`.
 - Inside the Gallery: `Up`/`Down` (`k`/`j`) select, `v` toggles live visual
-  preview (on by default in Sixel-capable terminals, or a read-only `.typ`
+  preview (on by default in Kitty or Sixel terminals, or a read-only `.typ`
   source split otherwise), `/` filters, `Enter` applies/scaffolds, `p` inserts
   preamble/entrypoint in place, `n` scaffolds a new folder, `u` loads/refreshes
   Typst Universe, `Esc` returns to editor, `q` closes.
 
 ---
 
-## 5. `tinymist` LSP & Live Preview (Sixel & Browser)
+## 5. `tinymist` LSP & Live Preview (Kitty, Sixel & Browser)
 
 TypX integrates with `tinymist` for diagnostics, completion, hover docs,
-document symbols, and live preview—either as a docked in-terminal Sixel pane
-in Sixel-capable terminals or an auto-reloading browser preview with cursor
-synchronization.
+document symbols, and live preview, either as a docked in-terminal pane
+(Kitty Graphics Protocol or Sixel) or an auto-reloading browser preview with
+cursor synchronization.
 
 ### Installing `tinymist`
 
@@ -159,19 +159,20 @@ If `tinymist` is installed in a non-standard path, set:
 > set typst.tinymistPath /path/to/tinymist
 ```
 
-Run `typx --check` from your shell to verify Sixel terminal detection and
-`tinymist` discovery, or run `typx --no-lsp file.typ` for offline editing.
+Run `typx --check` from your shell to verify Kitty or Sixel terminal detection
+and `tinymist` discovery, or run `typx --no-lsp file.typ` for offline editing.
 
 ### LSP & Preview Commands
 
-- `:preview [inline|browser|focus|invert|trim|stop]` (`Alt-p`): Toggle live
-  preview. With no arguments, `typst.previewMode` (`"auto"` by default) uses
-  the right-docked Sixel pane when Sixel is supported and otherwise launches
-  `tinymist` browser preview (auto-opening the OS browser when
-  `typst.previewOpenBrowser` is `true`). Use `inline` or `browser` to toggle
-  a specific mode, `focus` to focus the inline Sixel pane, `invert` / `trim` to
-  toggle dark-mode inversion or margin trimming, and `stop` to close any active
-  preview.
+- `:preview [inline|kitty|sixel|browser|focus|invert|trim|stop]` (`Alt-p`):
+  Toggle live preview. With no arguments, `typst.previewMode` (`"auto"` by
+  default) uses the right-docked inline pane when Kitty graphics or Sixel is
+  supported and otherwise launches `tinymist` browser preview (auto-opening the
+  OS browser when `typst.previewOpenBrowser` is `true`). Use `inline` or
+  `browser` to toggle a specific mode, `kitty` or `sixel` to open or switch the
+  inline graphics protocol, `focus` to focus the inline pane, `invert` / `trim`
+  to toggle dark-mode inversion or margin trimming, and `stop` to close any
+  active preview.
 - `:lsp-complete` (`Ctrl-Space`): Trigger `tinymist` autocompletion.
 - `:hover` (`Alt-k`): Display `tinymist` hover documentation at the cursor.
 - `:definition` (`F12`): Jump to the definition of the symbol or citation under
@@ -234,10 +235,11 @@ See `> help options` for the full list of editor options. TypX-specific keys:
 - `typst.tinymistPath` (default `""`): Custom path to `tinymist` binary.
 - `typst.debounceMs` (default `150`): Debounce delay (ms) for LSP edits.
 - `typst.previewMode` (default `"auto"`): Live preview mode (`"auto"`, `"inline"`, or `"browser"`).
-- `typst.previewWidth` (default `48`): Preferred width percentage (`20`–`80`) for the docked Sixel preview pane.
-- `typst.previewPPI` (default `144`): Render resolution in PPI (`72`–`300`) for Sixel preview pages.
-- `typst.previewInvert` (default `false`): Invert colors in the in-terminal Sixel preview for dark terminals.
-- `typst.previewTrimMargins` (default `false`): Trim excess outer page margins in the in-terminal Sixel preview.
+- `typst.previewProtocol` (default `"auto"`): Inline graphics protocol (`"auto"`, `"kitty"`, or `"sixel"`).
+- `typst.previewWidth` (default `48`): Preferred width percentage (`20` to `80`) for the docked preview pane.
+- `typst.previewPPI` (default `144`): Render resolution in PPI (`72` to `300`) for inline preview pages.
+- `typst.previewInvert` (default `false`): Invert colors in the in-terminal preview for dark terminals.
+- `typst.previewTrimMargins` (default `false`): Trim excess outer page margins in the in-terminal preview.
 - `typst.previewOpenBrowser` (default `true`): Auto-open preview URL in browser when browser preview starts.
 - `typst.outlineWidth` (default `30`): Preferred Outline sidebar width (columns).
 - `typst.outlineShowLabels` (default `false`): Show standalone `<labels>` in Outline.

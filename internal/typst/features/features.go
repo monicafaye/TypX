@@ -139,7 +139,7 @@ func Init() {
 type previewTemplateAdapter struct{}
 
 func (previewTemplateAdapter) SupportsVisual() bool {
-	return preview.SupportsSixel()
+	return preview.SupportsInline()
 }
 
 func (previewTemplateAdapter) OpenLoading(tab *action.Tab, bp *action.BufPane, title string) bool {
@@ -190,7 +190,7 @@ func (lspTemplateAdapter) GetTemplateEntry(ctx context.Context, spec string) (st
 
 type inlinePreviewAdapter struct{}
 
-func (inlinePreviewAdapter) SupportsInline() bool { return preview.SupportsSixel() }
+func (inlinePreviewAdapter) SupportsInline() bool { return preview.SupportsInline() }
 func (inlinePreviewAdapter) IsOpen(tab *action.Tab) bool {
 	return preview.PaneForTab(tab) != nil
 }
@@ -200,6 +200,9 @@ func (inlinePreviewAdapter) Open(bp *action.BufPane, focus bool) bool {
 }
 func (inlinePreviewAdapter) Toggle(bp *action.BufPane) bool {
 	return preview.Toggle(bp)
+}
+func (inlinePreviewAdapter) ToggleProtocol(bp *action.BufPane, protocol string) bool {
+	return preview.ToggleWithProtocol(bp, preview.ParseProtocol(protocol))
 }
 func (inlinePreviewAdapter) Close(tab *action.Tab) bool {
 	return preview.CloseForTab(tab)

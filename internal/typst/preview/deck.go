@@ -522,8 +522,10 @@ func (d *DocumentDeck) visiblePageRange(scrollY, viewH int) (firstPage, lastPage
 	return first, last
 }
 
-// ViewportRender holds a single Sixel-encoded continuous viewport frame.
+// ViewportRender holds a single encoded continuous viewport frame (Sixel or Kitty).
 type ViewportRender struct {
+	Protocol   GraphicsProtocol
+	Payload    []byte
 	Sixel      []byte
 	DstW       int
 	DstH       int
@@ -538,8 +540,14 @@ type ViewportRender struct {
 
 // RenderViewport composites the visible slice [scrollY, scrollY+viewH) across
 // all intersecting pages, strictly clamping scrollY to [0, MaxScrollY] so there
-// is never any overscroll debt.
+// is never any overscroll debt, and encodes it using the active terminal protocol.
 func (d *DocumentDeck) RenderViewport(dstW, viewH, scrollY int, invert, trim bool) (*ViewportRender, error) {
+	return d.RenderViewportWithProtocol(dstW, viewH, scrollY, invert, trim, ActiveProtocol())
+}
+
+// RenderViewportWithProtocol renders the visible viewport slice encoded with proto.
+// ProtocolNone falls back to Sixel so forced `:preview inline` calls remain usable.
+func (d *DocumentDeck) RenderViewportWithProtocol(dstW, viewH, scrollY int, invert, trim bool, proto GraphicsProtocol) (*ViewportRender, error) {
 	if d == nil || len(d.pages) == 0 {
 		return nil, fmt.Errorf("empty document deck")
 	}
@@ -637,11 +645,21 @@ func (d *DocumentDeck) RenderViewport(dstW, viewH, scrollY int, invert, trim boo
 	composeDur := time.Since(t0)
 
 	tEnc := time.Now()
-	sixel := EncodeSixel(canvas)
+	var payload []byte
+	var sixel []byte
+	if proto == ProtocolKitty {
+		payload = EncodeKitty(canvas)
+	} else {
+		proto = ProtocolSixel
+		sixel = EncodeSixel(canvas)
+		payload = sixel
+	}
 	encodeDur := time.Since(tEnc)
 
 	fp, lp := d.visiblePageRange(scrollY, outH)
 	return &ViewportRender{
+		Protocol:   proto,
+		Payload:    payload,
 		Sixel:      sixel,
 		DstW:       dstW,
 		DstH:       outH,

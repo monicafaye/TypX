@@ -59,31 +59,39 @@ globally, via CLI flag, or in an `"ft:typst"` block in `settings.json`.
 
 * `typst.previewMode`: `global only`. Controls which live preview mode `:preview`
    (`Alt-p`) and `--preview` launch:
-   * `auto`: use the docked in-terminal Sixel preview pane when supported by the
-     terminal, otherwise use `tinymist` browser preview.
-   * `inline`: use the docked in-terminal Sixel preview pane.
+   * `auto`: use the docked in-terminal preview pane (Kitty graphics or Sixel)
+     when supported by the terminal, otherwise use `tinymist` browser preview.
+   * `inline`: use the docked in-terminal preview pane.
    * `browser`: use `tinymist` browser preview.
 
     default value: `"auto"`
 
-* `typst.previewWidth`: `global only`. Preferred width percentage (`20`–`80`)
-   for the docked in-terminal Sixel preview pane (requires terminal width >= 60
+* `typst.previewProtocol`: `global only`. Controls which inline terminal
+   graphics protocol the preview pane uses:
+   * `auto`: prefer the Kitty Graphics Protocol when supported, otherwise Sixel.
+   * `kitty`: force the Kitty Graphics Protocol.
+   * `sixel`: force Sixel graphics.
+
+    default value: `"auto"`
+
+* `typst.previewWidth`: `global only`. Preferred width percentage (`20` to `80`)
+   for the docked in-terminal preview pane (requires terminal width >= 60
    columns).
 
     default value: `48`
 
 * `typst.previewPPI`: `global only`. Render resolution in pixels per inch (PPI,
-   clamped to `72`–`300`) for in-terminal Sixel preview pages.
+   clamped to `72` to `300`) for in-terminal preview pages.
 
     default value: `144`
 
 * `typst.previewInvert`: `global only`. Invert page colors by default in the
-   in-terminal Sixel preview for dark terminal backgrounds.
+   in-terminal preview for dark terminal backgrounds.
 
     default value: `false`
 
 * `typst.previewTrimMargins`: `global only`. Trim excess outer page margins by
-   default in the in-terminal Sixel preview.
+   default in the in-terminal preview.
 
     default value: `false`
 
@@ -776,6 +784,7 @@ options in JSON format:
     "typst.previewMode": "auto",
     "typst.previewOpenBrowser": true,
     "typst.previewPPI": 144,
+    "typst.previewProtocol": "auto",
     "typst.previewTrimMargins": false,
     "typst.previewWidth": 48,
     "typst.smartPairs": true,
