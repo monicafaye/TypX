@@ -176,6 +176,7 @@ type TextDocumentClientCapabilities struct {
 	Synchronization    *TextDocumentSyncClientCapabilities   `json:"synchronization,omitempty"`
 	Completion         *CompletionClientCapabilities         `json:"completion,omitempty"`
 	Hover              *HoverClientCapabilities              `json:"hover,omitempty"`
+	SignatureHelp      *SignatureHelpClientCapabilities      `json:"signatureHelp,omitempty"`
 	PublishDiagnostics *PublishDiagnosticsClientCapabilities `json:"publishDiagnostics,omitempty"`
 	DocumentSymbol     *DocumentSymbolClientCapabilities     `json:"documentSymbol,omitempty"`
 	Definition         *DefinitionClientCapabilities         `json:"definition,omitempty"`
@@ -250,6 +251,25 @@ type HoverClientCapabilities struct {
 	ContentFormat       []string `json:"contentFormat,omitempty"`
 }
 
+// ParameterInformationClientCapabilities describes signature parameter support.
+type ParameterInformationClientCapabilities struct {
+	LabelOffsetSupport bool `json:"labelOffsetSupport,omitempty"`
+}
+
+// SignatureInformationClientCapabilities describes signature info support.
+type SignatureInformationClientCapabilities struct {
+	DocumentationFormat  []string                                `json:"documentationFormat,omitempty"`
+	ParameterInformation *ParameterInformationClientCapabilities `json:"parameterInformation,omitempty"`
+	ActiveParameterSupport bool                                  `json:"activeParameterSupport,omitempty"`
+}
+
+// SignatureHelpClientCapabilities describes textDocument/signatureHelp capabilities.
+type SignatureHelpClientCapabilities struct {
+	DynamicRegistration  bool                                    `json:"dynamicRegistration,omitempty"`
+	SignatureInformation *SignatureInformationClientCapabilities `json:"signatureInformation,omitempty"`
+	ContextSupport       bool                                    `json:"contextSupport,omitempty"`
+}
+
 // PublishDiagnosticsClientCapabilities describes diagnostics capabilities.
 type PublishDiagnosticsClientCapabilities struct {
 	RelatedInformation bool `json:"relatedInformation,omitempty"`
@@ -287,8 +307,9 @@ type ExecuteCommandOptions struct {
 type ServerCapabilities struct {
 	PositionEncoding       string                 `json:"positionEncoding,omitempty"`
 	TextDocumentSync       any                    `json:"textDocumentSync,omitempty"`
-	CompletionProvider     any                    `json:"completionProvider,omitempty"`
-	HoverProvider          any                    `json:"hoverProvider,omitempty"`
+	CompletionProvider         any                    `json:"completionProvider,omitempty"`
+	HoverProvider              any                    `json:"hoverProvider,omitempty"`
+	SignatureHelpProvider      any                    `json:"signatureHelpProvider,omitempty"`
 	DocumentSymbolProvider     any                    `json:"documentSymbolProvider,omitempty"`
 	DefinitionProvider         any                    `json:"definitionProvider,omitempty"`
 	ReferencesProvider         any                    `json:"referencesProvider,omitempty"`
@@ -597,7 +618,7 @@ func DefaultClientCapabilities() ClientCapabilities {
 			Completion: &CompletionClientCapabilities{
 				DynamicRegistration: false,
 				CompletionItem: &CompletionItemClientCapabilities{
-					SnippetSupport:       false,
+					SnippetSupport:       true,
 					DocumentationFormat:  []string{"markdown", "plaintext"},
 					InsertReplaceSupport: false,
 					DeprecatedSupport:    true,
@@ -606,6 +627,17 @@ func DefaultClientCapabilities() ClientCapabilities {
 			Hover: &HoverClientCapabilities{
 				DynamicRegistration: false,
 				ContentFormat:       []string{"markdown", "plaintext"},
+			},
+			SignatureHelp: &SignatureHelpClientCapabilities{
+				DynamicRegistration: false,
+				SignatureInformation: &SignatureInformationClientCapabilities{
+					DocumentationFormat: []string{"plaintext", "markdown"},
+					ParameterInformation: &ParameterInformationClientCapabilities{
+						LabelOffsetSupport: true,
+					},
+					ActiveParameterSupport: true,
+				},
+				ContextSupport: true,
 			},
 			PublishDiagnostics: &PublishDiagnosticsClientCapabilities{
 				RelatedInformation: true,
@@ -648,6 +680,183 @@ func DefaultClientCapabilities() ClientCapabilities {
 			PositionEncodings: []string{"utf-16"},
 		},
 	}
+}
+
+// SignatureHelpTriggerKind values defined by LSP 3.17.
+const (
+	SignatureHelpTriggerInvoked       = 1
+	SignatureHelpTriggerCharacter     = 2
+	SignatureHelpTriggerContentChange = 3
+)
+
+// SignatureHelpContext carries trigger details for textDocument/signatureHelp.
+type SignatureHelpContext struct {
+	TriggerKind      int    `json:"triggerKind"`
+	TriggerCharacter string `json:"triggerCharacter,omitempty"`
+	IsRetrigger      bool   `json:"isRetrigger"`
+}
+
+// SignatureHelpParams is sent with textDocument/signatureHelp.
+type SignatureHelpParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+	Context      *SignatureHelpContext  `json:"context,omitempty"`
+}
+
+// ParameterInformation describes one parameter of a callable signature.
+type ParameterInformation struct {
+	Label         json.RawMessage `json:"label"`
+	Documentation json.RawMessage `json:"documentation,omitempty"`
+}
+
+// SignatureInformation describes one callable signature overload.
+type SignatureInformation struct {
+	Label           string                 `json:"label"`
+	Documentation   json.RawMessage        `json:"documentation,omitempty"`
+	Parameters      []ParameterInformation `json:"parameters,omitempty"`
+	ActiveParameter *int                   `json:"activeParameter,omitempty"`
+}
+
+// SignatureHelp is returned by textDocument/signatureHelp.
+type SignatureHelp struct {
+	Signatures      []SignatureInformation `json:"signatures"`
+	ActiveSignature *int                   `json:"activeSignature,omitempty"`
+	ActiveParameter *int                   `json:"activeParameter,omitempty"`
+}
+
+// ParseSignatureHelp parses a textDocument/signatureHelp response (supporting null).
+func ParseSignatureHelp(raw json.RawMessage) (*SignatureHelp, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	var sh SignatureHelp
+	if err := json.Unmarshal(trimmed, &sh); err != nil {
+		return nil, err
+	}
+	if len(sh.Signatures) == 0 {
+		return nil, nil
+	}
+	return &sh, nil
+}
+
+// FormatSignatureHelp renders the active signature and highlighted active
+// parameter as a single-line infobar hint.
+func FormatSignatureHelp(sh *SignatureHelp) string {
+	if sh == nil || len(sh.Signatures) == 0 {
+		return ""
+	}
+	sigIdx := 0
+	if sh.ActiveSignature != nil && *sh.ActiveSignature >= 0 && *sh.ActiveSignature < len(sh.Signatures) {
+		sigIdx = *sh.ActiveSignature
+	}
+	sig := sh.Signatures[sigIdx]
+	label := collapseWhitespace(sig.Label)
+	if label == "" {
+		return ""
+	}
+
+	paramIdx := -1
+	if sig.ActiveParameter != nil {
+		paramIdx = *sig.ActiveParameter
+	} else if sh.ActiveParameter != nil {
+		paramIdx = *sh.ActiveParameter
+	}
+
+	if paramIdx >= 0 && paramIdx < len(sig.Parameters) {
+		label = highlightSignatureParameter(sig.Label, sig.Parameters[paramIdx].Label)
+		label = collapseWhitespace(label)
+	}
+
+	prefix := ""
+	if len(sh.Signatures) > 1 {
+		prefix = fmt.Sprintf("(%d/%d) ", sigIdx+1, len(sh.Signatures))
+	}
+
+	doc := ""
+	if paramIdx >= 0 && paramIdx < len(sig.Parameters) {
+		doc = collapseWhitespace(ExtractHoverText(sig.Parameters[paramIdx].Documentation))
+	}
+	if doc == "" {
+		doc = collapseWhitespace(ExtractHoverText(sig.Documentation))
+	}
+	if doc != "" {
+		const maxDocRunes = 80
+		dr := []rune(doc)
+		if len(dr) > maxDocRunes {
+			doc = string(dr[:maxDocRunes-1]) + "…"
+		}
+		return prefix + label + " | " + doc
+	}
+	return prefix + label
+}
+
+func highlightSignatureParameter(sigLabel string, rawParamLabel json.RawMessage) string {
+	trimmed := bytes.TrimSpace(rawParamLabel)
+	if len(trimmed) == 0 {
+		return sigLabel
+	}
+	// Offset tuple [startUTF16, endUTF16]
+	if trimmed[0] == '[' {
+		var span [2]int
+		if err := json.Unmarshal(trimmed, &span); err == nil {
+			lineBytes := []byte(sigLabel)
+			startRune := UTF16ToRuneCol(lineBytes, span[0])
+			endRune := UTF16ToRuneCol(lineBytes, span[1])
+			runes := []rune(sigLabel)
+			if startRune >= 0 && endRune > startRune && endRune <= len(runes) {
+				return string(runes[:startRune]) + "»" + string(runes[startRune:endRune]) + "«" + string(runes[endRune:])
+			}
+		}
+		return sigLabel
+	}
+	// Plain substring parameter label
+	var paramStr string
+	if err := json.Unmarshal(trimmed, &paramStr); err == nil && paramStr != "" {
+		if idx := strings.Index(sigLabel, paramStr); idx >= 0 {
+			return sigLabel[:idx] + "»" + paramStr + "«" + sigLabel[idx+len(paramStr):]
+		}
+	}
+	return sigLabel
+}
+
+func collapseWhitespace(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// ExtractTriggerChars extracts triggerCharacters (and optional
+// retriggerCharacters) from a ServerCapabilities provider field (completion or
+// signatureHelp). Returns nil when none are advertised.
+func ExtractTriggerChars(provider any, includeRetrigger bool) []string {
+	m, ok := provider.(map[string]any)
+	if !ok || m == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	appendFrom := func(key string) {
+		raw, ok := m[key].([]any)
+		if !ok {
+			return
+		}
+		for _, v := range raw {
+			s, ok := v.(string)
+			if !ok || s == "" || seen[s] {
+				continue
+			}
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	appendFrom("triggerCharacters")
+	if includeRetrigger {
+		appendFrom("retriggerCharacters")
+	}
+	return out
 }
 
 // ParseCompletionResult parses a textDocument/completion result that may be

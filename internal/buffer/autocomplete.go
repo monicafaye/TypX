@@ -34,6 +34,19 @@ func (b *Buffer) Autocomplete(c Completer) bool {
 	return true
 }
 
+// ShowSuggestions populates autocomplete candidates on the statusline without
+// mutating the buffer. Pressing Tab inserts and cycles via CycleAutocomplete.
+func (b *Buffer) ShowSuggestions(c Completer) bool {
+	b.Completions, b.Suggestions = c(b)
+	if len(b.Completions) != len(b.Suggestions) || len(b.Completions) == 0 {
+		b.HasSuggestions = false
+		return false
+	}
+	b.CurSuggestion = -1
+	b.HasSuggestions = true
+	return true
+}
+
 // CycleAutocomplete moves to the next suggestion
 func (b *Buffer) CycleAutocomplete(forward bool) {
 	prevSuggestion := b.CurSuggestion

@@ -17,7 +17,19 @@ var (
 	reSnippetStop   = regexp.MustCompile(`\$\{?\d+\}?`)
 )
 
+type completionCandidate struct {
+	label        string
+	suffix       string
+	rawInsert    string
+	prefixStartX int
+	isSnippet    bool
+}
+
 func (m *Manager) triggerCompletion(bp *action.BufPane) bool {
+	return m.requestCompletion(bp, "", true)
+}
+
+func (m *Manager) requestCompletion(bp *action.BufPane, triggerChar string, explicit bool) bool {
 	if bp == nil || bp.Buf == nil || !bp.Buf.IsTypst() {
 		return false
 	}
@@ -28,11 +40,14 @@ func (m *Manager) triggerCompletion(bp *action.BufPane) bool {
 	m.mu.Lock()
 	state := m.State()
 	c := m.client
+	gen := m.gen
 	m.mu.Unlock()
 
 	if state != StateReady || c == nil {
-		notifyInfoMessage(m.notReadyMessage(state, "LSP: offline"))
-		return true
+		if explicit {
+			notifyInfoMessage(m.notReadyMessage(state, "LSP: offline"))
+		}
+		return explicit
 	}
 
 	targetBuf := bp.Buf
@@ -45,6 +60,14 @@ func (m *Manager) triggerCompletion(bp *action.BufPane) bool {
 	utf16Col := RuneColToUTF16(lineCopy, locXToRuneCol(lineCopy, reqLoc.X))
 	uri := PathToURI(targetBuf.AbsPath)
 
+	compCtx := &CompletionContext{TriggerKind: 1}
+	if !explicit && triggerChar != "" {
+		compCtx = &CompletionContext{
+			TriggerKind:      2,
+			TriggerCharacter: triggerChar,
+		}
+	}
+
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -53,38 +76,120 @@ func (m *Manager) triggerCompletion(bp *action.BufPane) bool {
 		err := c.Call(ctx, "textDocument/completion", CompletionParams{
 			TextDocument: TextDocumentIdentifier{URI: uri},
 			Position:     Position{Line: reqLoc.Y, Character: utf16Col},
-			Context:      &CompletionContext{TriggerKind: 1},
+			Context:      compCtx,
 		}, &raw)
 		if err != nil {
-			notifyInfoError("LSP completion error: " + err.Error())
+			if explicit {
+				notifyInfoError("LSP completion error: " + err.Error())
+			}
 			return
 		}
 		items, perr := ParseCompletionResult(raw)
 		if perr != nil {
-			notifyInfoError("LSP completion parse error: " + perr.Error())
+			if explicit {
+				notifyInfoError("LSP completion parse error: " + perr.Error())
+			}
 			return
 		}
 
 		action.EnqueueUI(func() {
-			if !isBufferOpenAndAt(targetBuf, reqVersion, reqLoc, true) {
+			m.mu.Lock()
+			stale := m.shuttingDown || m.gen != gen
+			m.mu.Unlock()
+			if stale || !isBufferOpenAndAt(targetBuf, reqVersion, reqLoc, true) {
 				return
 			}
-			completions, suggestions := buildCompletions(targetBuf, lineCopy, reqLoc, items)
-			if len(suggestions) == 0 {
-				notifyInfoMessage("No completions")
+			candidates := buildCompletionCandidates(targetBuf, lineCopy, reqLoc, items)
+			if len(candidates) == 0 {
+				if explicit {
+					notifyInfoMessage("No completions")
+				}
 				return
 			}
-			targetBuf.Autocomplete(func(*buffer.Buffer) ([]string, []string) {
+
+			if explicit && len(candidates) == 1 && candidates[0].isSnippet {
+				if expand := getSnippetExpander(); expand != nil {
+					start := buffer.Loc{X: candidates[0].prefixStartX, Y: reqLoc.Y}
+					if expand(bp, start, reqLoc, candidates[0].rawInsert) {
+						return
+					}
+				}
+			}
+
+			completions := make([]string, len(candidates))
+			suggestions := make([]string, len(candidates))
+			for i, cand := range candidates {
+				completions[i] = cand.suffix
+				suggestions[i] = cand.label
+			}
+			completer := func(*buffer.Buffer) ([]string, []string) {
 				return completions, suggestions
-			})
+			}
+			if explicit {
+				targetBuf.Autocomplete(completer)
+			} else {
+				targetBuf.ShowSuggestions(completer)
+			}
 		})
 	}()
 	return true
 }
 
+func (m *Manager) scheduleAutoCompletion(bp *action.BufPane, triggerChar string) {
+	if bp == nil || bp.Buf == nil || bp.Cursor == nil || bp.Cursor.HasSelection() {
+		return
+	}
+	if !readGlobalBool("typst.autoComplete", true) {
+		return
+	}
+	targetBuf := bp.Buf
+	reqVersion := targetBuf.Version()
+	reqLoc := bp.Cursor.Loc
+
+	m.mu.Lock()
+	if m.shuttingDown || m.State() != StateReady || m.client == nil {
+		m.mu.Unlock()
+		return
+	}
+	if m.autoCompleteTimer != nil {
+		m.autoCompleteTimer.Stop()
+	}
+	gen := m.gen
+	m.autoCompleteTimer = time.AfterFunc(autoCompleteDelay, func() {
+		action.EnqueueUI(func() {
+			m.mu.Lock()
+			stale := m.shuttingDown || m.gen != gen
+			m.mu.Unlock()
+			if stale || !isBufferOpenAndAt(targetBuf, reqVersion, reqLoc, true) {
+				return
+			}
+			curBP := activeBufPaneForBuffer(targetBuf)
+			if curBP == nil {
+				return
+			}
+			m.requestCompletion(curBP, triggerChar, false)
+		})
+	})
+	m.mu.Unlock()
+}
+
 func buildCompletions(b *buffer.Buffer, lineBytes []byte, reqLoc buffer.Loc, items []CompletionItem) ([]string, []string) {
-	if len(items) == 0 {
+	candidates := buildCompletionCandidates(b, lineBytes, reqLoc, items)
+	if len(candidates) == 0 {
 		return nil, nil
+	}
+	completions := make([]string, len(candidates))
+	suggestions := make([]string, len(candidates))
+	for i, cand := range candidates {
+		completions[i] = cand.suffix
+		suggestions[i] = cand.label
+	}
+	return completions, suggestions
+}
+
+func buildCompletionCandidates(b *buffer.Buffer, lineBytes []byte, reqLoc buffer.Loc, items []CompletionItem) []completionCandidate {
+	if len(items) == 0 {
+		return nil
 	}
 
 	_, wordStart := b.GetWord()
@@ -93,12 +198,11 @@ func buildCompletions(b *buffer.Buffer, lineBytes []byte, reqLoc buffer.Loc, ite
 		defaultPrefixStart = wordStart
 	}
 
-	var completions []string
-	var suggestions []string
+	var candidates []completionCandidate
 	seen := make(map[string]bool)
 
 	for _, item := range items {
-		if len(suggestions) >= maxCompletionItems {
+		if len(candidates) >= maxCompletionItems {
 			break
 		}
 		label := strings.TrimSpace(item.Label)
@@ -119,8 +223,13 @@ func buildCompletions(b *buffer.Buffer, lineBytes []byte, reqLoc buffer.Loc, ite
 		if rawInsert == "" {
 			rawInsert = item.Label
 		}
-		if item.InsertTextFormat == InsertTextFormatSnippet || strings.Contains(rawInsert, "$") {
-			rawInsert = stripSnippetPlaceholders(rawInsert)
+		isSnippet := item.InsertTextFormat == InsertTextFormatSnippet
+		plainInsert := rawInsert
+		if isSnippet || strings.Contains(rawInsert, "$") {
+			plainInsert = stripSnippetPlaceholders(rawInsert)
+			if plainInsert != rawInsert {
+				isSnippet = true
+			}
 		}
 
 		typed := ""
@@ -130,10 +239,10 @@ func buildCompletions(b *buffer.Buffer, lineBytes []byte, reqLoc buffer.Loc, ite
 
 		var suffix string
 		if typed == "" {
-			suffix = rawInsert
-		} else if strings.HasPrefix(rawInsert, typed) {
-			suffix = rawInsert[len(typed):]
-		} else if foldSuffix, ok := trimFoldPrefix(rawInsert, typed); ok {
+			suffix = plainInsert
+		} else if strings.HasPrefix(plainInsert, typed) {
+			suffix = plainInsert[len(typed):]
+		} else if foldSuffix, ok := trimFoldPrefix(plainInsert, typed); ok {
 			suffix = foldSuffix
 		} else {
 			continue
@@ -144,11 +253,16 @@ func buildCompletions(b *buffer.Buffer, lineBytes []byte, reqLoc buffer.Loc, ite
 			continue
 		}
 		seen[dedupKey] = true
-		completions = append(completions, suffix)
-		suggestions = append(suggestions, label)
+		candidates = append(candidates, completionCandidate{
+			label:        label,
+			suffix:       suffix,
+			rawInsert:    rawInsert,
+			prefixStartX: prefixStartX,
+			isSnippet:    isSnippet,
+		})
 	}
 
-	return completions, suggestions
+	return candidates
 }
 
 func (m *Manager) triggerHover(bp *action.BufPane) bool {

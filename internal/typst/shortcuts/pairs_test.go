@@ -257,3 +257,93 @@ func TestPairsMultiCursor(t *testing.T) {
 		t.Fatalf("multi-cursor pair = %q, want %q", got, "a ()\nb ()")
 	}
 }
+
+func TestSmartListContinuationAndExit(t *testing.T) {
+	// 1. Bullet list continuation, nested indent, and empty-item exit
+	bp := newTestBufPane(t, "  - first item", "test.typ")
+	bp.Cursor.GotoLoc(buffer.Loc{X: 14, Y: 0})
+	if !HandleTypstNewline(bp) {
+		t.Fatal("bullet list newline returned false")
+	}
+	if got := bufferText(bp.Buf); got != "  - first item\n  - " {
+		t.Fatalf("bullet continuation = %q", got)
+	}
+	if bp.Cursor.Loc != (buffer.Loc{X: 4, Y: 1}) {
+		t.Fatalf("bullet continuation cursor = %v, want {4 1}", bp.Cursor.Loc)
+	}
+	// Second Enter on empty item exits list cleanly
+	if !HandleTypstNewline(bp) {
+		t.Fatal("empty bullet exit returned false")
+	}
+	if got := bufferText(bp.Buf); got != "  - first item\n" {
+		t.Fatalf("empty bullet exit = %q, want %q", got, "  - first item\n")
+	}
+	if bp.Cursor.Loc != (buffer.Loc{X: 0, Y: 1}) {
+		t.Fatalf("empty bullet exit cursor = %v, want {0 1}", bp.Cursor.Loc)
+	}
+
+	// 2. Auto-numbered (+), explicit numbered (1. -> 2.), and term list (/ Term: desc -> / )
+	cases := []struct {
+		name      string
+		in        string
+		cursorX   int
+		want      string
+		wantLoc   buffer.Loc
+	}{
+		{"plus", "+ alpha", 7, "+ alpha\n+ ", buffer.Loc{X: 2, Y: 1}},
+		{"numbered", "  1. first", 10, "  1. first\n  2. ", buffer.Loc{X: 5, Y: 1}},
+		{"term", "/ Typst: fast", 13, "/ Typst: fast\n/ ", buffer.Loc{X: 2, Y: 1}},
+		{"mid-line split", "- foo bar", 5, "- foo\n-  bar", buffer.Loc{X: 2, Y: 1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bp := newTestBufPane(t, tc.in, "test.typ")
+			bp.Cursor.GotoLoc(buffer.Loc{X: tc.cursorX, Y: 0})
+			if !HandleTypstNewline(bp) {
+				t.Fatalf("HandleTypstNewline(%q) returned false", tc.name)
+			}
+			if got := bufferText(bp.Buf); got != tc.want {
+				t.Fatalf("%s = %q, want %q", tc.name, got, tc.want)
+			}
+			if bp.Cursor.Loc != tc.wantLoc {
+				t.Fatalf("%s cursor = %v, want %v", tc.name, bp.Cursor.Loc, tc.wantLoc)
+			}
+		})
+	}
+
+	// 3. Non-list lines and mode/setting suppression
+	nonList := []struct {
+		name string
+		in   string
+		x    int
+	}{
+		{"en-dash", "-- heading", 10},
+		{"em-dash", "---", 3},
+		{"line comment", "// comment", 10},
+		{"math mode", "$ - x $", 5},
+		{"code mode", "#let a = 1", 10},
+		{"raw fence", "```\n- item\n```", 6},
+		{"cursor before marker", "- item", 0},
+	}
+	for _, tc := range nonList {
+		t.Run("skip_"+tc.name, func(t *testing.T) {
+			bp := newTestBufPane(t, tc.in, "test.typ")
+			y := 0
+			if tc.name == "raw fence" {
+				y = 1
+			}
+			bp.Cursor.GotoLoc(buffer.Loc{X: tc.x, Y: y})
+			if HandleTypstNewline(bp) {
+				t.Fatalf("HandleTypstNewline(%q) should return false", tc.name)
+			}
+		})
+	}
+
+	// autoindent=false suppresses list continuation
+	bpNoAI := newTestBufPane(t, "- item", "test.typ")
+	bpNoAI.Buf.Settings["autoindent"] = false
+	bpNoAI.Cursor.GotoLoc(buffer.Loc{X: 6, Y: 0})
+	if HandleTypstNewline(bpNoAI) {
+		t.Fatal("list continuation should respect autoindent=false")
+	}
+}

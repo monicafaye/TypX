@@ -159,8 +159,9 @@ func runMockTinymist() int {
 					Capabilities: ServerCapabilities{
 						PositionEncoding:           "utf-16",
 						TextDocumentSync:           1,
-						CompletionProvider:         map[string]any{},
+						CompletionProvider:         map[string]any{"triggerCharacters": []string{"#", ".", "@"}},
 						HoverProvider:              true,
+						SignatureHelpProvider:      map[string]any{"triggerCharacters": []string{"(", ","}},
 						DefinitionProvider:         true,
 						ReferencesProvider:         true,
 						RenameProvider:             map[string]any{"prepareProvider": true},
@@ -228,14 +229,51 @@ func runMockTinymist() int {
 					time.Sleep(time.Duration(ms) * time.Millisecond)
 				}
 			}
+			items := []CompletionItem{
+				{Label: "alpha", InsertText: "alpha"},
+				{Label: "algorithm", InsertText: "algorithm"},
+			}
+			if os.Getenv("TYPX_MOCK_SNIPPET_COMPLETE") == "1" {
+				items = []CompletionItem{
+					{
+						Label:            "table",
+						InsertText:       "table(columns: ${1:2}, ${2:body})$0",
+						InsertTextFormat: InsertTextFormatSnippet,
+					},
+				}
+			}
 			writeFrame(rpcResponse{
 				JSONRPC: "2.0",
 				ID:      msg.ID,
 				Result: CompletionList{
 					IsIncomplete: false,
-					Items: []CompletionItem{
-						{Label: "alpha", InsertText: "alpha"},
-						{Label: "algorithm", InsertText: "algorithm"},
+					Items:        items,
+				},
+			})
+
+		case "textDocument/signatureHelp":
+			var p SignatureHelpParams
+			_ = json.Unmarshal(msg.Params, &p)
+			appendLog(fmt.Sprintf("signatureHelp:%d:%d", p.Position.Line, p.Position.Character))
+			text := docs[p.TextDocument.URI]
+			lineText := mockLineAt(text, p.Position.Line)
+			activeParam := 0
+			if strings.Contains(lineText, ",") {
+				activeParam = 1
+			}
+			writeFrame(rpcResponse{
+				JSONRPC: "2.0",
+				ID:      msg.ID,
+				Result: SignatureHelp{
+					ActiveParameter: &activeParam,
+					Signatures: []SignatureInformation{
+						{
+							Label: "table(columns: auto, body: content)",
+							Parameters: []ParameterInformation{
+								{Label: json.RawMessage(`"columns: auto"`), Documentation: json.RawMessage(`"Column count"`)},
+								{Label: json.RawMessage(`"body: content"`), Documentation: json.RawMessage(`"Table cells"`)},
+							},
+						},
 					},
 				},
 			})

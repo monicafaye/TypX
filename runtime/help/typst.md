@@ -61,11 +61,15 @@ All TypX shortcuts apply in `.typ` buffers and fall back cleanly in other files:
 - `callout` (`:insert-callout`) — styled `#block(...)` callout box
 - `vec`, `hat`, `bar` — math accent and vector helpers
 
-### Typst-Aware Smart Pairing (`typst.smartPairs`)
+### Typst-Aware Smart Pairing & List Continuation (`typst.smartPairs`)
 
 When `typst.smartPairs` is `true` (default), TypX auto-closes `$`, `[`, `(`,
-`{`, and `"`, skips over closing delimiters when retyped, and deletes empty
-pairs on Backspace—while staying out of the way inside raw spans and strings.
+`{`, and `"`, skips over closing delimiters when retyped, deletes empty pairs on
+Backspace, and continues Typst markup lists (`-`, `+`, `N.`, `/`) on `Enter`
+(pressing `Enter` on an empty list item exits the list cleanly), while staying
+out of the way inside raw spans, math, code, and strings. Built-in `:insert`
+snippets and LSP snippet completions support `Tab` and `Shift-Tab` tabstop
+navigation (`Esc` exits the active snippet session).
 
 ---
 
@@ -183,8 +187,13 @@ and `tinymist` discovery, or run `typx --no-lsp file.typ` for offline editing.
   inline graphics protocol, `focus` to focus the inline pane, `invert` / `trim`
   to toggle dark-mode inversion or margin trimming, and `stop` to close any
   active preview.
-- `:lsp-complete` (`Ctrl-Space`): Trigger `tinymist` autocompletion.
+- `:lsp-complete` (`Ctrl-Space`): Trigger `tinymist` autocompletion (also
+  auto-suggests non-destructively on `#`, `@`, `.`, `<` when `typst.autoComplete`
+  is enabled; press `Tab` to accept and navigate snippet tabstops).
 - `:hover` (`Alt-k`): Display `tinymist` hover documentation at the cursor.
+- `:signature-help` (`Alt-h`): Display `tinymist` active function parameter
+  hints in the infobar (also triggers automatically on `(` and `,` when
+  `typst.signatureHelp` is enabled).
 - `:definition` (`F12`): Jump to the definition of the symbol or citation under
   the cursor (supports `.typ`, `.bib`, and read-only `@preview` packages; opens
   a bottom `ListPane` picker when multiple targets exist).
@@ -242,6 +251,8 @@ See `> help options` for the full list of editor options. TypX-specific keys:
 - `typst.smartPairs` (default `true`): Typst-aware delimiter auto-pairing.
 - `typst.keyHints` (default `true`): Show clickable context-aware shortcut hints on the bottom bar.
 - `typst.lspEnabled` (default `true`): Enable `tinymist` LSP integration.
+- `typst.autoComplete` (default `true`): Show non-mutating LSP completion suggestions on `#`, `@`, `.`, and `<`.
+- `typst.signatureHelp` (default `true`): Show LSP signature help in the infobar on `(` and `,`.
 - `typst.tinymistPath` (default `""`): Custom path to `tinymist` binary.
 - `typst.debounceMs` (default `150`): Debounce delay (ms) for LSP edits.
 - `typst.previewMode` (default `"auto"`): Live preview mode (`"auto"`, `"inline"`, or `"browser"`).

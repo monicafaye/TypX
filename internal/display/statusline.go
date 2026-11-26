@@ -130,7 +130,7 @@ func (s *StatusLine) Display() {
 
 	b := s.win.Buf
 	// autocomplete suggestions (for the buffer, not for the infowindow)
-	if b.HasSuggestions && len(b.Suggestions) > 1 {
+	if b.HasSuggestions && (len(b.Suggestions) > 1 || (len(b.Suggestions) == 1 && b.CurSuggestion < 0)) {
 		statusLineStyle := config.DefStyle.Reverse(true)
 		if style, ok := config.Colorscheme["statusline.suggestions"]; ok {
 			statusLineStyle = style

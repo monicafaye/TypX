@@ -1887,6 +1887,9 @@ func (h *BufPane) ToggleOverwriteMode() bool {
 
 // Escape leaves current mode
 func (h *BufPane) Escape() bool {
+	if runPreActionHooks("Escape", h) {
+		return true
+	}
 	return true
 }
 

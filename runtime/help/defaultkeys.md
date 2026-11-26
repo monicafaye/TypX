@@ -26,8 +26,10 @@ editor defaults.
 | Alt-e         | `> wrap-italic`    | Wrap selection or insert `_italic_`                                       |
 | Alt-Left      | `> heading-promote`| Promote heading level (`== ` -> `= `)                                     |
 | Alt-Right     | `> heading-demote` | Demote heading level (`= ` -> `== `)                                      |
-| Ctrl-Space    | `> lsp-complete`   | Trigger `tinymist` LSP completion                                         |
+| Ctrl-Space    | `> lsp-complete`   | Trigger `tinymist` LSP completion (with snippet tabstops)                 |
 | Alt-k         | `> hover`          | Show `tinymist` LSP hover documentation                                   |
+| Alt-h         | `> signature-help` | Show `tinymist` LSP function signature help in the infobar                |
+| Tab / Shift-Tab | (snippet)        | Jump to next or previous active snippet tabstop (`Esc` exits)             |
 | F12           | `> definition`     | Jump to definition across `.typ`, `.bib`, and `@preview` packages         |
 | Shift-F12     | `> references`     | Find symbol references across the workspace                               |
 | Alt-u         | `> jump-back`      | Return to the previous location in the tab's jump stack                   |

@@ -82,16 +82,19 @@ func Init() {
 		// 3. Register LyX-style actions, commands, templates, and bindings.
 		shortcuts.RegisterAll()
 
-		// 4. Hook Typst-aware smart pairing into rune insertion, Backspace, and Enter.
+		// 4. Hook Typst-aware smart pairing, list continuation, and snippet Escape into editing actions.
 		action.RegisterRuneHook(shortcuts.HandleTypstRune)
 		action.RegisterPreActionHook("Backspace", shortcuts.HandleTypstBackspace)
 		action.RegisterPreActionHook("InsertNewline", shortcuts.HandleTypstNewline)
+		action.RegisterPreActionHook("Escape", shortcuts.HandleSnippetEscape)
+		lsp.SetSnippetExpander(shortcuts.ExpandSnippetReplacing)
 
-		// 5. Register Phase 2 statusline providers, bottom bar provider, and cache eviction observer.
+		// 5. Register Phase 2 statusline providers, bottom bar provider, and cache eviction observers.
 		display.SetStatusInfoFn("typst.mode", modeStatusInfo)
 		display.SetStatusInfoFn("typst.words", wordCountStatusInfo)
 		display.SetBottomBarProvider(buildBottomBarContext)
 		buffer.RegisterObserver(cacheEvictObserver{})
+		buffer.RegisterObserver(shortcuts.SnippetEvictObserver())
 
 		// 6. Wire Phase 4 Document Outline sidebar with optional tinymist documentSymbol enrichment.
 		outline.SetSymbolProvider(func(b *buffer.Buffer, cb func(version uint64, symbols []outline.Symbol)) bool {

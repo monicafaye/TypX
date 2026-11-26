@@ -73,10 +73,15 @@ See `> help typst` for a walkthrough of Typst authoring workflows.
    `insert-code`).
 
 * `lsp-complete`: triggers `tinymist` LSP autocompletion at the cursor
-   (default key: `Ctrl-Space`).
+   (default key: `Ctrl-Space`; single-match snippets expand with `Tab` /
+   `Shift-Tab` tabstops).
 
 * `hover`: requests `tinymist` LSP hover documentation at the cursor
    (default key: `Alt-k`).
+
+* `signature-help`: requests `tinymist` LSP function signature and active
+   parameter hints in the infobar (default key: `Alt-h`; also triggers
+   automatically on `(` and `,`).
 
 * `definition`: jumps to the definition of the symbol or citation at the cursor
    via `tinymist` (supports `.typ`, `.bib`, and read-only `@preview` packages;

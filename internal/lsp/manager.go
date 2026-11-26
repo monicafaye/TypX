@@ -125,6 +125,8 @@ type Manager struct {
 	docDiagnostics     map[string][]Diagnostic
 	docDiagnosticPaths map[string]string
 	serverCommands     map[string]bool
+	completionTriggers map[string]bool
+	sigHelpTriggers    map[string]bool
 	jumpStacks         map[*action.Tab][]jumpOrigin
 
 	previewActive bool
@@ -137,7 +139,10 @@ type Manager struct {
 	previewProxy  *previewProxy
 	previewJob    *ProcessJob
 	previewDone   chan struct{}
-	cursorTimer   *time.Timer
+	cursorTimer       *time.Timer
+	autoCompleteTimer *time.Timer
+	sigHelpTimer      *time.Timer
+	lastSigMsg        string
 
 	hoverBuf  *buffer.Buffer
 	statusBuf *buffer.Buffer
@@ -298,6 +303,17 @@ func (m *Manager) Shutdown() {
 		m.cursorTimer.Stop()
 		m.cursorTimer = nil
 	}
+	if m.autoCompleteTimer != nil {
+		m.autoCompleteTimer.Stop()
+		m.autoCompleteTimer = nil
+	}
+	if m.sigHelpTimer != nil {
+		m.sigHelpTimer.Stop()
+		m.sigHelpTimer = nil
+	}
+	m.lastSigMsg = ""
+	m.completionTriggers = nil
+	m.sigHelpTriggers = nil
 	for _, doc := range m.docs {
 		if doc.timer != nil {
 			doc.timer.Stop()
@@ -670,6 +686,23 @@ func (m *Manager) handshake(gen uint64, sessionCtx context.Context, client *Clie
 		for _, cmdName := range res.Capabilities.ExecuteCommandProvider.Commands {
 			m.serverCommands[cmdName] = true
 		}
+	}
+	m.completionTriggers = make(map[string]bool)
+	for _, ch := range ExtractTriggerChars(res.Capabilities.CompletionProvider, false) {
+		m.completionTriggers[ch] = true
+	}
+	if len(m.completionTriggers) == 0 {
+		for _, ch := range []string{"#", ".", "@", "<"} {
+			m.completionTriggers[ch] = true
+		}
+	}
+	m.sigHelpTriggers = make(map[string]bool)
+	for _, ch := range ExtractTriggerChars(res.Capabilities.SignatureHelpProvider, true) {
+		m.sigHelpTriggers[ch] = true
+	}
+	if len(m.sigHelpTriggers) == 0 {
+		m.sigHelpTriggers["("] = true
+		m.sigHelpTriggers[","] = true
 	}
 	m.mu.Unlock()
 

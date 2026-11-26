@@ -29,9 +29,15 @@ type InlinePreviewHandler interface {
 	ToggleTrim(tab *action.Tab) bool
 }
 
+// SnippetExpanderFunc replaces [start, end) in bp with an LSP snippet and
+// activates multi-stop Tab / Shift+Tab navigation when applicable.
+type SnippetExpanderFunc func(bp *action.BufPane, start, end buffer.Loc, rawSnippet string) bool
+
 var (
-	inlinePreviewMu sync.RWMutex
-	inlinePreview   InlinePreviewHandler
+	inlinePreviewMu   sync.RWMutex
+	inlinePreview     InlinePreviewHandler
+	snippetExpanderMu sync.RWMutex
+	snippetExpander   SnippetExpanderFunc
 )
 
 // SetInlinePreviewHandler registers the in-terminal preview pane handler.
@@ -39,6 +45,20 @@ func SetInlinePreviewHandler(h InlinePreviewHandler) {
 	inlinePreviewMu.Lock()
 	inlinePreview = h
 	inlinePreviewMu.Unlock()
+}
+
+// SetSnippetExpander registers the snippet tabstop expander used by LSP completions.
+func SetSnippetExpander(fn SnippetExpanderFunc) {
+	snippetExpanderMu.Lock()
+	snippetExpander = fn
+	snippetExpanderMu.Unlock()
+}
+
+func getSnippetExpander() SnippetExpanderFunc {
+	snippetExpanderMu.RLock()
+	fn := snippetExpander
+	snippetExpanderMu.RUnlock()
+	return fn
 }
 
 func getInlinePreviewHandler() InlinePreviewHandler {
@@ -113,6 +133,7 @@ func Init(opts Options) {
 	registerOnce.Do(func() {
 		action.RegisterAction("LspComplete", LspCompleteAction())
 		action.RegisterAction("LspHover", LspHoverAction())
+		action.RegisterAction("LspSignatureHelp", LspSignatureHelpAction())
 		action.RegisterAction("TogglePreview", TogglePreviewAction())
 		action.RegisterAction("LspFormat", LspFormatAction())
 		action.RegisterAction("LspDefinition", LspDefinitionAction())
@@ -129,6 +150,7 @@ func Init(opts Options) {
 		action.RegisterCommand("tinymist-restart", TinymistRestartCommand(), nil)
 		action.RegisterCommand("preview", PreviewCommand(), previewCompleter)
 		action.RegisterCommand("hover", HoverCommand(), nil)
+		action.RegisterCommand("signature-help", SignatureHelpCommand(), nil)
 		action.RegisterCommand("lsp-complete", LspCompleteCommand(), nil)
 		action.RegisterCommand("pin", PinCommand(), buffer.FileComplete)
 		action.RegisterCommand("unpin", UnpinCommand(), nil)
@@ -147,6 +169,7 @@ func Init(opts Options) {
 
 		action.RegisterDefaultBinding("buffer", "CtrlSpace", "LspComplete")
 		action.RegisterDefaultBinding("buffer", "Alt-k", "LspHover")
+		action.RegisterDefaultBindingWithFallback("buffer", "Alt-h", "LspSignatureHelp")
 		action.RegisterDefaultBinding("buffer", "Alt-p", "TogglePreview|RemoveMultiCursor")
 		action.RegisterDefaultBindingWithFallback("buffer", "F12", "LspDefinition")
 		action.RegisterDefaultBindingWithFallback("buffer", "Shift-F12", "LspReferences")

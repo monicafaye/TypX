@@ -30,8 +30,9 @@ globally, via CLI flag, or in an `"ft:typst"` block in `settings.json`.
 
     default value: `"line"`
 
-* `typst.smartPairs`: enable Typst-aware smart pairing, skip-over, and
-   pair-backspace for `$`, `[`, `(`, `{`, and `"`.
+* `typst.smartPairs`: enable Typst-aware smart pairing, skip-over,
+   pair-backspace (`$`, `[`, `(`, `{`, `"`), and markup list continuation on
+   `Enter` (`-`, `+`, `N.`, `/`).
 
     default value: `true`
 
@@ -43,6 +44,18 @@ globally, via CLI flag, or in an `"ft:typst"` block in `settings.json`.
 
 * `typst.lspEnabled`: `global only`. Enable `tinymist` LSP integration. Set to
    `false` (or launch with `--no-lsp`) for offline editing.
+
+    default value: `true`
+
+* `typst.autoComplete`: `global only`. Automatically display non-mutating
+   `tinymist` completion suggestions in the statusline when typing trigger
+   characters (`#`, `@`, `.`, `<`). Press `Tab` to insert.
+
+    default value: `true`
+
+* `typst.signatureHelp`: `global only`. Automatically display `tinymist`
+   function signature and active parameter hints in the infobar when typing
+   `(` or `,`.
 
     default value: `true`
 

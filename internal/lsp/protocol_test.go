@@ -112,7 +112,7 @@ func TestParseCompletionResultAndExtractHoverText(t *testing.T) {
 	assert.Equal(t, "sig\n\ndoc", ExtractHoverText(json.RawMessage(`[{"language":"typst","value":"sig"},"doc"]`)))
 }
 
-func TestDefaultClientCapabilitiesDisablesSnippetsAndRequestsUTF16(t *testing.T) {
+func TestDefaultClientCapabilitiesEnablesSnippetsSignatureHelpAndUTF16(t *testing.T) {
 	caps := DefaultClientCapabilities()
 	require.NotNil(t, caps.Workspace)
 	assert.True(t, caps.Workspace.ApplyEdit)
@@ -121,7 +121,12 @@ func TestDefaultClientCapabilitiesDisablesSnippetsAndRequestsUTF16(t *testing.T)
 	require.NotNil(t, caps.TextDocument)
 	require.NotNil(t, caps.TextDocument.Completion)
 	require.NotNil(t, caps.TextDocument.Completion.CompletionItem)
-	assert.False(t, caps.TextDocument.Completion.CompletionItem.SnippetSupport)
+	assert.True(t, caps.TextDocument.Completion.CompletionItem.SnippetSupport)
+	require.NotNil(t, caps.TextDocument.SignatureHelp)
+	require.NotNil(t, caps.TextDocument.SignatureHelp.SignatureInformation)
+	require.NotNil(t, caps.TextDocument.SignatureHelp.SignatureInformation.ParameterInformation)
+	assert.True(t, caps.TextDocument.SignatureHelp.SignatureInformation.ParameterInformation.LabelOffsetSupport)
+	assert.True(t, caps.TextDocument.SignatureHelp.SignatureInformation.ActiveParameterSupport)
 	require.NotNil(t, caps.TextDocument.References)
 	require.NotNil(t, caps.TextDocument.Rename)
 	assert.True(t, caps.TextDocument.Rename.PrepareSupport)
@@ -130,6 +135,60 @@ func TestDefaultClientCapabilitiesDisablesSnippetsAndRequestsUTF16(t *testing.T)
 	assert.Contains(t, caps.TextDocument.CodeAction.CodeActionLiteralSupport.CodeActionKind.ValueSet, "quickfix")
 	require.NotNil(t, caps.General)
 	assert.Equal(t, []string{"utf-16"}, caps.General.PositionEncodings)
+}
+
+func TestParseAndFormatSignatureHelp(t *testing.T) {
+	sh, err := ParseSignatureHelp(json.RawMessage(`null`))
+	require.NoError(t, err)
+	assert.Nil(t, sh)
+
+	sh, err = ParseSignatureHelp(json.RawMessage(`{"signatures":[]}`))
+	require.NoError(t, err)
+	assert.Nil(t, sh)
+
+	// Substring parameter label + activeParameter + parameter doc
+	raw := `{
+		"activeSignature": 0,
+		"activeParameter": 1,
+		"signatures": [{
+			"label": "table(columns: auto, rows: auto)",
+			"parameters": [
+				{"label": "columns: auto", "documentation": "Number of columns"},
+				{"label": "rows: auto", "documentation": {"kind": "markdown", "value": "Number of rows"}}
+			]
+		}]
+	}`
+	sh, err = ParseSignatureHelp(json.RawMessage(raw))
+	require.NoError(t, err)
+	require.NotNil(t, sh)
+	assert.Equal(t, "table(columns: auto, »rows: auto«) | Number of rows", FormatSignatureHelp(sh))
+
+	// UTF-16 offset span label + multi-overload prefix
+	raw2 := `{
+		"activeSignature": 1,
+		"signatures": [
+			{"label": "f(a)"},
+			{
+				"label": "f(α, beta)",
+				"activeParameter": 1,
+				"parameters": [
+					{"label": [2, 3]},
+					{"label": [5, 9]}
+				]
+			}
+		]
+	}`
+	sh2, err := ParseSignatureHelp(json.RawMessage(raw2))
+	require.NoError(t, err)
+	assert.Equal(t, "(2/2) f(α, »beta«)", FormatSignatureHelp(sh2))
+
+	// ExtractTriggerChars merges triggerCharacters and retriggerCharacters cleanly
+	got := ExtractTriggerChars(map[string]any{
+		"triggerCharacters":   []any{"(", ","},
+		"retriggerCharacters": []any{",", " "},
+	}, true)
+	assert.Equal(t, []string{"(", ",", " "}, got)
+	assert.Nil(t, ExtractTriggerChars(true, true))
 }
 
 func TestParseDocumentSymbols(t *testing.T) {

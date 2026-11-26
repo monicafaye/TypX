@@ -1,7 +1,10 @@
 package shortcuts
 
 import (
+	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/monicafaye/TypX/internal/action"
 	"github.com/monicafaye/TypX/internal/buffer"
@@ -274,7 +277,8 @@ func HandleTypstBackspace(bp *action.BufPane) bool {
 }
 
 // HandleTypstNewline expands an empty pair ({}, [], (), $$) across lines with
-// autoindent-aware indentation. Does not expand "". Returns true if handled.
+// autoindent-aware indentation, and continues or exits Typst markup lists
+// (-, +, N., /). Does not expand "". Returns true if handled.
 func HandleTypstNewline(bp *action.BufPane) bool {
 	if !canEditTypst(bp) || !smartPairsEnabled(bp.Buf) {
 		return false
@@ -287,43 +291,105 @@ func HandleTypstNewline(bp *action.BufPane) bool {
 	pos := c.Loc
 	lineBytes := bp.Buf.LineBytes(pos.Y)
 	lineLen := util.CharacterCount(lineBytes)
-	if pos.X <= 0 || pos.X >= lineLen {
+	if pos.X > 0 && pos.X < lineLen {
+		openPos := buffer.Loc{X: pos.X - 1, Y: pos.Y}
+		prev := bp.Buf.RuneAt(openPos)
+		next := bp.Buf.RuneAt(pos)
+		if prev != '"' {
+			if closeR, ok := pairClose[prev]; ok && closeR == next &&
+				!isEscapedAt(bp.Buf, openPos) && detectModeAtLoc(bp.Buf, pos) != ModeRaw {
+				baseIndent := string(util.GetLeadingWhitespace(lineBytes))
+				autoindent := safeBoolSetting(bp.Buf, "autoindent", true)
+				indentUnit := safeIndentString(bp.Buf)
+
+				outerIndent := ""
+				innerIndent := ""
+				if autoindent {
+					outerIndent = baseIndent
+					innerIndent = baseIndent + indentUnit
+				}
+
+				bp.Buf.Insert(pos, "\n"+innerIndent+"\n"+outerIndent)
+				c.GotoLoc(buffer.Loc{X: util.CharacterCountInString(innerIndent), Y: pos.Y + 1})
+				if bp.BWindow != nil {
+					bp.Relocate()
+				}
+				return true
+			}
+		}
+	}
+
+	return handleTypstListNewline(bp, c, pos, lineBytes, lineLen)
+}
+
+func handleTypstListNewline(bp *action.BufPane, c *buffer.Cursor, pos buffer.Loc, lineBytes []byte, lineLen int) bool {
+	if !safeBoolSetting(bp.Buf, "autoindent", true) {
 		return false
 	}
 
-	openPos := buffer.Loc{X: pos.X - 1, Y: pos.Y}
-	prev := bp.Buf.RuneAt(openPos)
-	next := bp.Buf.RuneAt(pos)
-	if prev == '"' {
-		return false
-	}
-	if closeR, ok := pairClose[prev]; !ok || closeR != next {
-		return false
-	}
-	if isEscapedAt(bp.Buf, openPos) {
-		return false
-	}
-	if detectModeAtLoc(bp.Buf, pos) == ModeRaw {
+	indentBytes := util.GetLeadingWhitespace(lineBytes)
+	indent := string(indentBytes)
+	indentChars := util.CharacterCount(indentBytes)
+	rest := string(lineBytes[len(indentBytes):])
+
+	rawMarker, nextMarker, ok := parseTypstListMarker(rest)
+	if !ok {
 		return false
 	}
 
-	baseIndent := string(util.GetLeadingWhitespace(lineBytes))
-	autoindent := safeBoolSetting(bp.Buf, "autoindent", true)
-	indentUnit := safeIndentString(bp.Buf)
-
-	outerIndent := ""
-	innerIndent := ""
-	if autoindent {
-		outerIndent = baseIndent
-		innerIndent = baseIndent + indentUnit
+	markerEndChars := indentChars + util.CharacterCountInString(rawMarker)
+	if pos.X < markerEndChars {
+		return false
 	}
 
-	bp.Buf.Insert(pos, "\n"+innerIndent+"\n"+outerIndent)
-	c.GotoLoc(buffer.Loc{X: util.CharacterCountInString(innerIndent), Y: pos.Y + 1})
+	if detectModeAtLoc(bp.Buf, buffer.Loc{X: indentChars, Y: pos.Y}) != ModeMarkup ||
+		detectModeAtLoc(bp.Buf, pos) != ModeMarkup {
+		return false
+	}
+
+	afterMarker := strings.TrimSpace(rest[len(rawMarker):])
+	if afterMarker == "" {
+		// Empty list item: exit the list cleanly onto a blank line.
+		bp.Buf.Remove(buffer.Loc{X: 0, Y: pos.Y}, buffer.Loc{X: lineLen, Y: pos.Y})
+		c.GotoLoc(buffer.Loc{X: 0, Y: pos.Y})
+		if bp.BWindow != nil {
+			bp.Relocate()
+		}
+		return true
+	}
+
+	insertion := "\n" + indent + nextMarker
+	bp.Buf.Insert(pos, insertion)
+	c.GotoLoc(buffer.Loc{X: util.CharacterCountInString(indent + nextMarker), Y: pos.Y + 1})
 	if bp.BWindow != nil {
 		bp.Relocate()
 	}
 	return true
+}
+
+// parseTypstListMarker parses a Typst markup list prefix at the start of rest
+// (already stripped of leading whitespace):
+//   - "- " / "-\t" (bullet list)
+//   - "+ " / "+\t" (auto-numbered list)
+//   - "<N>. " / "<N>.\t" (explicitly numbered list, incremented to N+1)
+//   - "/ " / "/\t" (term list; never matches "//" or "/*")
+func parseTypstListMarker(rest string) (rawMarker, nextMarker string, ok bool) {
+	if len(rest) >= 2 && (rest[0] == '-' || rest[0] == '+' || rest[0] == '/') && (rest[1] == ' ' || rest[1] == '\t') {
+		return rest[:2], rest[:2], true
+	}
+	i := 0
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	if i > 0 && i+1 < len(rest) && rest[i] == '.' && (rest[i+1] == ' ' || rest[i+1] == '\t') {
+		n, err := strconv.Atoi(rest[:i])
+		if err != nil {
+			return "", "", false
+		}
+		sep := rest[i+1]
+		return rest[:i+2], fmt.Sprintf("%d.%c", n+1, sep), true
+	}
+	return "", "", false
 }
 
 func hasOddUnescapedQuotesBefore(lineBytes []byte, charCol int) bool {

@@ -13,6 +13,8 @@ func RegisterAll() {
 	action.RegisterAction("HeadingPromote", NewHeadingPromoteAction())
 	action.RegisterAction("HeadingDemote", NewHeadingDemoteAction())
 	action.RegisterAction("InsertPalette", NewInsertPaletteAction())
+	action.RegisterAction("SnippetNext", NewSnippetNextAction())
+	action.RegisterAction("SnippetPrev", NewSnippetPrevAction())
 
 	action.RegisterCommand("math-inline", NewMathInlineCmd(), nil)
 	action.RegisterCommand("math-display", NewMathDisplayCmd(), nil)
@@ -32,4 +34,6 @@ func RegisterAll() {
 	action.RegisterDefaultBindingWithFallback("buffer", "Alt-e", "WrapItalic")
 	action.RegisterDefaultBindingWithFallback("buffer", "AltLeft", "HeadingPromote")
 	action.RegisterDefaultBindingWithFallback("buffer", "AltRight", "HeadingDemote")
+	action.RegisterDefaultBindingWithFallback("buffer", "Tab", "SnippetNext")
+	action.RegisterDefaultBindingWithFallback("buffer", "Backtab", "SnippetPrev")
 }

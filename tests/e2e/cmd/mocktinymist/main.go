@@ -237,6 +237,9 @@ func runLSP() {
 						"triggerCharacters": []string{"#", ".", "@"},
 					},
 					"hoverProvider":              true,
+					"signatureHelpProvider": map[string]any{
+						"triggerCharacters": []string{"(", ","},
+					},
 					"documentSymbolProvider":     true,
 					"definitionProvider":         true,
 					"referencesProvider":         true,
@@ -388,6 +391,47 @@ func runLSP() {
 					{"label": "figure", "kind": 3, "detail": "Typst figure"},
 					{"label": "heading", "kind": 14, "detail": "Typst heading"},
 					{"label": "beta", "kind": 14, "detail": "Greek letter beta"},
+				},
+			}
+			writeRPCResponse(msg.ID, result, nil)
+
+		case "textDocument/signatureHelp":
+			var p struct {
+				TextDocument struct {
+					URI string `json:"uri"`
+				} `json:"textDocument"`
+				Position struct {
+					Line      int `json:"line"`
+					Character int `json:"character"`
+				} `json:"position"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			appendTrace(traceRecord{
+				Method: msg.Method,
+				ID:     msg.ID,
+				URI:    p.TextDocument.URI,
+				Params: msg.Params,
+			})
+			text := docs[p.TextDocument.URI]
+			lineText := ""
+			lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+			if p.Position.Line >= 0 && p.Position.Line < len(lines) {
+				lineText = lines[p.Position.Line]
+			}
+			activeParam := 0
+			if strings.Contains(lineText, ",") {
+				activeParam = 1
+			}
+			result := map[string]any{
+				"activeParameter": activeParam,
+				"signatures": []map[string]any{
+					{
+						"label": "table(columns: auto, body: content)",
+						"parameters": []map[string]any{
+							{"label": "columns: auto", "documentation": "Number of columns"},
+							{"label": "body: content", "documentation": "Cell contents"},
+						},
+					},
 				},
 			}
 			writeRPCResponse(msg.ID, result, nil)

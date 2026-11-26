@@ -10,16 +10,16 @@ import (
 )
 
 var typstTemplates = map[string]string{
-	"figure":  "#figure(\n  $0,\n  caption: [],\n) <fig:>",
-	"table":   "#table(\n  columns: 2,\n  [$0], [],\n)",
-	"frac":    "frac($0, )",
-	"matrix":  "mat($0, ; , )",
-	"cases":   "cases($0, )",
-	"code":    "```\n$0\n```",
-	"callout": "#block(\n  fill: luma(240),\n  inset: 8pt,\n  radius: 4pt,\n  width: 100%,\n)[$0]",
-	"vec":     "vec($0, )",
-	"hat":     "hat($0)",
-	"bar":     "bar($0)",
+	"figure":  "#figure(\n  $1,\n  caption: [$2],\n) <fig:$3>$0",
+	"table":   "#table(\n  columns: 2,\n  [$1], [$2],\n)$0",
+	"frac":    "frac($1, $2)$0",
+	"matrix":  "mat($1, $2; $3, $4)$0",
+	"cases":   "cases($1, $2)$0",
+	"code":    "```\n$1\n```$0",
+	"callout": "#block(\n  fill: luma(240),\n  inset: 8pt,\n  radius: 4pt,\n  width: 100%,\n)[$1]$0",
+	"vec":     "vec($1, $2)$0",
+	"hat":     "hat($1)$0",
+	"bar":     "bar($1)$0",
 }
 
 var sortedTemplateNames = func() []string {
@@ -91,6 +91,10 @@ func NewInsertCmd() func(bp *action.BufPane, args []string) {
 			}
 			return
 		}
+		if len(bp.Buf.GetCursors()) <= 1 {
+			ExpandSnippetAt(bp, tmpl)
+			return
+		}
 		forEachCursorReverse(bp, func(c *buffer.Cursor) {
 			expandTemplateAt(bp.Buf, c, tmpl)
 		})
@@ -108,6 +112,10 @@ func NewInsertTemplateCmd(name string) func(bp *action.BufPane, args []string) {
 			if action.InfoBar != nil {
 				action.InfoBar.Error("Unknown Typst template: ", name)
 			}
+			return
+		}
+		if len(bp.Buf.GetCursors()) <= 1 {
+			ExpandSnippetAt(bp, tmpl)
 			return
 		}
 		forEachCursorReverse(bp, func(c *buffer.Cursor) {
@@ -148,6 +156,10 @@ func openInsertPalette(bp *action.BufPane) bool {
 			return
 		}
 		if tmpl, ok := typstTemplates[resp]; ok {
+			if len(target.Buf.GetCursors()) <= 1 {
+				ExpandSnippetAt(target, tmpl)
+				return
+			}
 			forEachCursorReverse(target, func(c *buffer.Cursor) {
 				expandTemplateAt(target.Buf, c, tmpl)
 			})
@@ -165,51 +177,14 @@ func expandTemplateAt(b *buffer.Buffer, c *buffer.Cursor, tmpl string) {
 	}
 
 	insertLoc := c.Loc
-	ws := leadingWhitespaceBeforeLoc(b, insertLoc)
-	indentUnit := safeIndentString(b)
+	reindented := reindentSnippet(b, insertLoc, tmpl)
+	parsed := ParseSnippet(reindented)
+	startOff := locToCharOffset(b, insertLoc)
+	b.Insert(insertLoc, parsed.Text)
 
-	rawLines := strings.Split(tmpl, "\n")
-	outLines := make([]string, len(rawLines))
-	for i, line := range rawLines {
-		sp := 0
-		for sp < len(line) && line[sp] == ' ' {
-			sp++
-		}
-		levels := sp / 2
-		rem := sp % 2
-		reindented := strings.Repeat(indentUnit, levels) + strings.Repeat(" ", rem) + line[sp:]
-		if i > 0 {
-			reindented = ws + reindented
-		}
-		outLines[i] = reindented
-	}
-
-	relY := -1
-	charCol := 0
-	for i, line := range outLines {
-		if idx := strings.Index(line, "$0"); idx >= 0 {
-			relY = i
-			charCol = util.CharacterCountInString(line[:idx])
-			outLines[i] = line[:idx] + line[idx+2:]
-			break
-		}
-	}
-
-	rendered := strings.Join(outLines, "\n")
-	b.Insert(insertLoc, rendered)
-
-	var targetLoc buffer.Loc
-	if relY >= 0 {
-		if relY == 0 {
-			targetLoc = buffer.Loc{X: insertLoc.X + charCol, Y: insertLoc.Y}
-		} else {
-			targetLoc = buffer.Loc{X: charCol, Y: insertLoc.Y + relY}
-		}
-	} else if len(outLines) == 1 {
-		targetLoc = buffer.Loc{X: insertLoc.X + util.CharacterCountInString(outLines[0]), Y: insertLoc.Y}
+	if len(parsed.Stops) > 0 {
+		c.GotoLoc(charOffsetToLoc(b, startOff+parsed.Stops[0].StartChar))
 	} else {
-		last := outLines[len(outLines)-1]
-		targetLoc = buffer.Loc{X: util.CharacterCountInString(last), Y: insertLoc.Y + len(outLines) - 1}
+		c.GotoLoc(charOffsetToLoc(b, startOff+util.CharacterCountInString(parsed.Text)))
 	}
-	c.GotoLoc(targetLoc)
 }

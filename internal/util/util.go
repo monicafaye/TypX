@@ -29,7 +29,7 @@ var (
 	// These variables should be set by the linker when compiling
 
 	// TypXVersion is the TypX release version (overridable via ldflags)
-	TypXVersion = "0.5.1"
+	TypXVersion = "0.6.0-dev"
 	// MicroBaseVersion is the pinned upstream micro version TypX is forked from
 	MicroBaseVersion = "2.0.15"
 	// Version is the upstream-compatible micro version used by Lua plugin checks

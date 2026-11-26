@@ -25,12 +25,12 @@ TypX includes:
 - **Micro ergonomics.** Standard keybindings (`Ctrl+S`, `Ctrl+C`, `Ctrl+V`, `Ctrl+Z`, `Ctrl+F`), mouse support, splits, tabs, and Lua plugins work out of the box.
 - **Typst syntax and themes.** The built-in `typst.yaml` grammar highlights Markup, Math, and Code modes alongside companion formats (`bibtex`, `markdown`, `yaml`, `toml`, `json`, `ini`, `patch`) and built-in dark and light themes (`monokai`, `catppuccin-mocha`, `catppuccin-latte`, `tokyo-night`, `nord`, `rose-pine`, `rose-pine-dawn`, `kanagawa`, `everforest-dark`, `everforest-light`, `github-dark`, `github-light`, `gruvbox-tc`, `gruvbox-light`, `solarized-tc`, `solarized-light`, `dracula-tc`, `one-dark`).
 - **Cursor-aware Unicode math concealment.** Non-cursor lines display Greek letters, arrows, relations, set and logic operators, big operators, simple super/subscripts, and typographic dashes (`---`, `--`, `...`), while the active line stays unconcealed for editing. Concealment never alters the `.typ` file on disk.
-- **Structural and math shortcuts.** Keybindings insert inline or display math (`Alt+M` and `Alt+Shift+M`), bold or italic wrappers (`Alt+B` and `Alt+E`), heading level changes (`Alt+Left` and `Alt+Right`), indentation-aware snippets (`:insert` or `Alt+I`), and Typst-aware smart pairs.
+- **Structural and math shortcuts.** Keybindings insert inline or display math (`Alt+M` and `Alt+Shift+M`), bold or italic wrappers (`Alt+B` and `Alt+E`), heading level changes (`Alt+Left` and `Alt+Right`), indentation-aware snippets with multi-stop `Tab` and `Shift+Tab` navigation (`:insert` or `Alt+I`), Typst-aware smart pairs, and markup list continuation on `Enter` for `-`, `+`, `N.`, and `/`.
 - **Template Gallery and project creation.** Start documents with `typx --new <template> [path]`, or press `Alt+Shift+N` (or run `:templates`) from any buffer, including an unnamed blank startup buffer, to open a docked gallery of project and personal templates (`.typx/templates/`, `<config-dir>/templates/`), `@local` packages, and on-demand Typst Universe `@preview` templates via `tinymist`, with live Kitty graphics or Sixel visual preview enabled by default while browsing. Save reusable preambles or documents with `:template-save`.
 - **Document Outline sidebar.** Press `Alt+O` or run `:outline` to toggle a docked sidebar powered by an incremental Go parser, with optional `tinymist` `textDocument/documentSymbol` enrichment, live cursor tracking, keyboard or mouse jump, and `/` filtering.
 - **File Manager sidebar.** Press `Alt+T` or run `:tree` to browse directories, expand folders inline, open files in splits, and run `:touch`, `:mkdir`, `:rename`, and `:rm`.
 - **In-terminal and browser preview.** Press `Alt+P` or run `:preview inline` for a right-docked inline preview using the Kitty Graphics Protocol or Sixel with zoom, color inversion, and margin trimming, or run `:preview browser` for an auto-reloading browser preview with cursor sync.
-- **`tinymist` LSP and multi-file projects.** TypX resolves project roots from `typst.toml`, root-relative `/...` imports, `.git`, or `../` imports, and provides `:pin [path]`/`:unpin` main-file pinning (`PIN:` statusline indicator), `:export [pdf|png|svg|html]` (`typst.exportOnSave`), `:format` (`typst.formatOnSave`), go-to-definition across `.typ`/`.bib`/packages (`F12`, `Alt+U` back), find references (`Shift+F12`), cross-file symbol rename (`F2` / `:lsp-rename`), code actions (`Alt+A`), workspace symbol search (`Alt+S`), interactive `:diagnostics` drawer (`F8`/`Shift+F8` jump, `/` filter), completion (`Ctrl+Space`), and hover docs (`Alt+K` or `:hover`). Pass `--no-lsp` to run offline without `tinymist`.
+- **`tinymist` LSP and multi-file projects.** TypX resolves project roots from `typst.toml`, root-relative `/...` imports, `.git`, or `../` imports, and provides `:pin [path]`/`:unpin` main-file pinning (`PIN:` statusline indicator), `:export [pdf|png|svg|html]` (`typst.exportOnSave`), `:format` (`typst.formatOnSave`), go-to-definition across `.typ`/`.bib`/packages (`F12`, `Alt+U` back), find references (`Shift+F12`), cross-file symbol rename (`F2` / `:lsp-rename`), code actions (`Alt+A`), workspace symbol search (`Alt+S`), interactive `:diagnostics` drawer (`F8`/`Shift+F8` jump, `/` filter), auto-triggered and manual completion with snippet tabstops (`Ctrl+Space`), signature help (`Alt+H` or `:signature-help`, auto-triggered on `(` and `,`), and hover docs (`Alt+K` or `:hover`). Pass `--no-lsp` to run offline without `tinymist`.
 
 <p align="center">
   <img src="assets/typx-templates.png" alt="TypX Template Gallery sidebar browsing Typst Universe templates with live in-terminal Sixel preview of @preview/charged-vde" width="100%" /><br />
@@ -242,8 +242,9 @@ Press `Ctrl+E` to open the command bar (`>` prompt). Most TypX keybindings apply
 | Italic | `:wrap-italic` | `Alt+E` | Wrap selection or insert `_italic_` delimiters. |
 | Promote Heading | `:heading-promote` | `Alt+Left` | Decrease heading level (`== ` to `= `). |
 | Demote Heading | `:heading-demote` | `Alt+Right` | Increase heading level (`= ` to `== `). |
-| LSP Completion | `:lsp-complete` | `Ctrl+Space` | Trigger `tinymist` autocomplete popup. |
+| LSP Completion | `:lsp-complete` | `Ctrl+Space` | Trigger `tinymist` autocomplete (auto-suggests non-destructively on `#`, `@`, `.`, `<`; press `Tab` to accept and step through snippet tabstops). |
 | LSP Hover | `:hover` | `Alt+K` | Show `tinymist` documentation or type info at cursor. |
+| Signature Help | `:signature-help` | `Alt+H` | Show active function parameters from `tinymist` in the infobar (also triggers automatically on `(` and `,`). |
 | Go to Definition | `:definition` | `F12` | Jump to definition across `.typ`, `.bib`, and read-only `@preview` packages. |
 | Find References | `:references` | `Shift+F12` | List and jump to symbol references across the workspace (`/` filters). |
 | Jump Back | `:jump-back` | `Alt+U` | Return to the previous location on the tab's definition jump stack. |
@@ -323,9 +324,11 @@ TypX resolves its configuration directory in this order:
 |---|---|---|---|
 | `typst.conceal` | local/global | `true` | Enable live Unicode math and typography concealment in `.typ` buffers. |
 | `typst.concealMode` | local/global | `"line"` | Unconceal policy: `"line"` unconceals the active cursor line, and `"token"` unconceals only the token under the cursor. |
-| `typst.smartPairs` | local/global | `true` | Typst-aware smart pairing, skip-over, and pair-backspace for `$`, `[`, `(`, `{`, `"`. |
+| `typst.smartPairs` | local/global | `true` | Typst-aware smart pairing, skip-over, pair-backspace (`$`, `[`, `(`, `{`, `"`), and markup list continuation on `Enter` (`-`, `+`, `N.`, `/`). |
 | `typst.keyHints` | global | `true` | Show the context-aware, clickable shortcut hint bar on the bottom row and prompt helper hints. |
 | `typst.lspEnabled` | global | `true` | Enable `tinymist` LSP integration (`false` is equivalent to `--no-lsp`). |
+| `typst.autoComplete` | global | `true` | Show non-mutating `tinymist` completion suggestions in the statusline when typing `#`, `@`, `.`, or `<`. |
+| `typst.signatureHelp` | global | `true` | Show `tinymist` function parameter hints in the infobar when typing `(` or `,`. |
 | `typst.tinymistPath` | global | `""` | Explicit path to `tinymist` or `tinymist.exe` (empty uses auto-discovery). |
 | `typst.debounceMs` | global | `150` | Debounce interval in milliseconds for `textDocument/didChange` updates. |
 | `typst.previewMode` | global | `"auto"` | Live preview mode: `"auto"` (inline Kitty or Sixel when supported, else browser), `"inline"`, or `"browser"`. |

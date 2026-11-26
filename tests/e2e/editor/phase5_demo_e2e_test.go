@@ -237,15 +237,36 @@ func TestE2E_Phase5_DemoFixture_WithRealTinymist(t *testing.T) {
 	}
 	assert.True(t, foundIntentional, "expected real tinymist diagnostic on intentional error line %d", diagLine)
 
-	// 3. Hover via Alt+K on '#figure(' returns real hover docs from tinymist.
+	// 3. Hover via Alt+K on '#figure(' returns real hover docs from tinymist
+	// (either inline in InfoBar for short text or in a "Hover" split for multi-line docs).
+	action.InfoBar.Message("")
 	figLine := findLineIndex(t, ed.Buf(), "#figure(")
 	ed.Pane().Cursor.GotoLoc(buffer.Loc{X: 2, Y: figLine})
 	ed.InjectKey(tcell.KeyRune, 'k', tcell.ModAlt)
 	gotHover := ed.PumpUntil(5*time.Second, func() bool {
+		if len(action.MainTab().Panes) > 1 {
+			for _, p := range action.MainTab().Panes {
+				if bp, ok := p.(*action.BufPane); ok && bp.Buf != nil && bp.Buf.GetName() == "Hover" {
+					return strings.TrimSpace(string(bp.Buf.Bytes())) != ""
+				}
+			}
+		}
 		msg, _, _, _ := ed.InfoBarState()
 		return strings.TrimSpace(msg) != "" && !strings.Contains(strings.ToLower(msg), "no hover")
 	})
 	assert.True(t, gotHover, "expected non-empty hover response from real tinymist, got %q", ed.InfoBarText())
+	// Close any opened Hover split so subsequent outline assertions start from the single demo.typ pane.
+	for len(action.MainTab().Panes) > 1 {
+		for idx, p := range action.MainTab().Panes {
+			if bp, ok := p.(*action.BufPane); ok && bp.Buf != nil && bp.Buf.GetName() == "Hover" {
+				action.MainTab().SetActive(idx)
+				bp.Unsplit()
+				break
+			}
+		}
+		ed.Pump(4)
+	}
+	require.Len(t, action.MainTab().Panes, 1)
 
 	// 4. Outline sidebar stays healthy when LSP documentSymbol enrichment is active.
 	ed.InjectKey(tcell.KeyRune, 'o', tcell.ModAlt)

@@ -189,6 +189,7 @@ func (m *Manager) OnBufferChange(b *buffer.Buffer, ev buffer.ChangeEvent) {
 			},
 			ContentChanges: []TextDocumentContentChangeEvent{{Text: text}},
 		})
+		m.maybeAutoTriggerOnEdit(b)
 		return
 	}
 
@@ -197,6 +198,44 @@ func (m *Manager) OnBufferChange(b *buffer.Buffer, ev buffer.ChangeEvent) {
 		m.flushDocChange(key, gen, ver)
 	})
 	m.mu.Unlock()
+	m.maybeAutoTriggerOnEdit(b)
+}
+
+func (m *Manager) maybeAutoTriggerOnEdit(b *buffer.Buffer) {
+	bp := activeBufPaneForBuffer(b)
+	if bp == nil || bp.Cursor == nil || bp.Cursor.HasSelection() || len(b.GetCursors()) > 1 {
+		return
+	}
+	loc := bp.Cursor.Loc
+	if loc.X <= 0 {
+		return
+	}
+	prevRune := b.RuneAt(buffer.Loc{X: loc.X - 1, Y: loc.Y})
+	ch := string(prevRune)
+
+	if prevRune == ')' {
+		m.clearAutoSignatureMessage()
+	}
+
+	m.mu.Lock()
+	isSig := m.sigHelpTriggers[ch]
+	isComp := m.completionTriggers[ch]
+	if !isComp && m.autoCompleteTimer != nil {
+		m.autoCompleteTimer.Stop()
+		m.autoCompleteTimer = nil
+	}
+	m.mu.Unlock()
+
+	if isSig {
+		m.scheduleAutoSignatureHelp(bp, ch)
+	}
+	if isComp {
+		// Avoid auto-triggering completion on ".." ranges or "//" comments.
+		if (prevRune == '.' || prevRune == '/') && loc.X >= 2 && b.RuneAt(buffer.Loc{X: loc.X - 2, Y: loc.Y}) == prevRune {
+			return
+		}
+		m.scheduleAutoCompletion(bp, ch)
+	}
 }
 
 func (m *Manager) flushDocChange(key string, gen uint64, targetVer uint64) {
