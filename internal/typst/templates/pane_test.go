@@ -464,3 +464,112 @@ func TestUnnamedBufferScaffoldDirAndProjectRootUseCwd(t *testing.T) {
 	assert.Equal(t, filepath.Join(wd, "charged-ieee"), gotDir)
 	assert.Equal(t, wd, defaultManager.resolveProjectRoot(bp))
 }
+
+func TestTemplatePaneSearchBarCtrlFTabBrowseAndUniverseLoad(t *testing.T) {
+	t.Setenv("TYPST_PACKAGE_PATH", filepath.Join(t.TempDir(), "local-pkgs"))
+	t.Setenv("TYPST_PACKAGE_CACHE_PATH", filepath.Join(t.TempDir(), "cache-pkgs"))
+	initPaneTestEnv(t, 120, 30)
+
+	persDir := filepath.Join(config.ConfigDir, "templates")
+	require.NoError(t, os.MkdirAll(persDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(persDir, "notes.typ"),
+		[]byte("// @title: Study Notes\n// @tags: lecture, math\n= {{title}}\n"),
+		0o644,
+	))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"name":"charged-ieee","version":"0.1.4","description":"IEEE conference paper","categories":["paper"],"keywords":["two-column"],"template":{"path":"template","entrypoint":"main.typ"}},
+			{"name":"touying","version":"0.6.1","description":"Slides framework","categories":["presentation"],"template":{"path":"template","entrypoint":"slides.typ"}}
+		]`))
+	}))
+	defer srv.Close()
+
+	client := &UniverseClient{
+		BaseURL:    srv.URL,
+		CacheFile:  filepath.Join(t.TempDir(), "universe.json"),
+		HTTPClient: srv.Client(),
+	}
+	SetUniverseClient(client)
+	backend := &fakeBackend{}
+	SetExternalBackend(backend)
+
+	b := buffer.NewBufferFromString("", "search.typ", buffer.BTDefault)
+	action.InitTabs([]*buffer.Buffer{b})
+	action.Tabs.Resize()
+	tab := action.MainTab()
+	bp := tab.CurPane()
+
+	tp, ok := Open(bp, true)
+	require.True(t, ok)
+
+	// 1. Clicking row 1 (search bar) activates search typing mode.
+	tp.HandleEvent(tcell.NewEventMouse(tp.view.X+2, tp.view.Y+1, tcell.Button1, tcell.ModNone, ""))
+	tp.HandleEvent(tcell.NewEventMouse(tp.view.X+2, tp.view.Y+1, tcell.ButtonNone, tcell.ModNone, ""))
+	assert.True(t, tp.IsFiltering())
+
+	// 2. Typing a query with no local match before Universe loads selects the Universe action row.
+	for _, r := range "two-column" {
+		action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone, ""))
+	}
+	assert.Equal(t, "two-column", tp.FilterQuery())
+	rows := tp.Rows()
+	require.GreaterOrEqual(t, len(rows), 2)
+	assert.Equal(t, rowUniverseAction, rows[tp.selectedIdx].Kind)
+
+	// 3. Pressing Enter on the Universe action row loads Universe while preserving the search query.
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, ""))
+	assert.Equal(t, "two-column", tp.FilterQuery())
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		action.DrainUIQueue()
+		if defaultManager.isUniverseLoaded() {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.True(t, defaultManager.isUniverseLoaded())
+	sel, hasSel := tp.SelectedTemplate()
+	require.True(t, hasSel)
+	assert.Equal(t, "charged-ieee", sel.Name)
+
+	// 4. Ctrl-F re-focuses search keeping the current query, Ctrl-U clears it, and Tab commits to browse.
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyCtrlF, 0, tcell.ModCtrl, ""))
+	assert.True(t, tp.IsFiltering())
+	assert.Equal(t, "two-column", tp.FilterQuery())
+
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyCtrlU, 0, tcell.ModCtrl, ""))
+	assert.True(t, tp.IsFiltering())
+	assert.Equal(t, "", tp.FilterQuery())
+
+	for _, r := range "lecture math" {
+		action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone, ""))
+	}
+	// Alt+Backspace removes the last word ("math").
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyBackspace2, 0, tcell.ModAlt, ""))
+	assert.Equal(t, "lecture ", tp.FilterQuery())
+
+	// Tab exits search typing while preserving filtered results for normal-mode actions.
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone, ""))
+	assert.False(t, tp.IsFiltering())
+	assert.Equal(t, "lecture ", tp.FilterQuery())
+	sel, hasSel = tp.SelectedTemplate()
+	require.True(t, hasSel)
+	assert.Equal(t, "notes", sel.Name)
+
+	// 5. `:templates search` command opens and filters directly.
+	cmd := NewTemplatesCmd()
+	cmd(bp, []string{"search", "slides"})
+	assert.Equal(t, "slides", tp.FilterQuery())
+	assert.False(t, tp.IsFiltering())
+	sel, hasSel = tp.SelectedTemplate()
+	require.True(t, hasSel)
+	assert.Equal(t, "touying", sel.Name)
+
+	// `:templates search` with no query focuses the search bar for typing.
+	cmd(bp, []string{"search"})
+	assert.Equal(t, "", tp.FilterQuery())
+	assert.True(t, tp.IsFiltering())
+}

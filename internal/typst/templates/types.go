@@ -52,6 +52,10 @@ type Template struct {
 	Title         string
 	Description   string
 	Category      string
+	Categories    []string `json:"categories,omitempty"`
+	Keywords      []string `json:"keywords,omitempty"`
+	Disciplines   []string `json:"disciplines,omitempty"`
+	Authors       []string `json:"authors,omitempty"`
 	Version       string
 	Source        SourceKind
 	IsMultiFile   bool

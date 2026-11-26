@@ -26,7 +26,7 @@ func TestUniverseFetchCachingETagAndOfflineFallback(t *testing.T) {
 	indexJSON := `[
   {"name": "cetz", "version": "0.3.2", "description": "Drawing library"},
   {"name": "charged-ieee", "version": "0.1.2", "description": "Old IEEE", "categories": ["paper"], "template": {"path": "template", "entrypoint": "main.typ"}},
-  {"name": "charged-ieee", "version": "0.1.4", "description": "Latest IEEE", "categories": ["paper"], "template": {"path": "template", "entrypoint": "main.typ"}},
+  {"name": "charged-ieee", "version": "0.1.4", "description": "Latest IEEE", "authors": ["Typst GmbH"], "categories": ["paper", "report"], "disciplines": ["engineering"], "keywords": ["ieee", "conference"], "template": {"path": "template", "entrypoint": "main.typ"}},
   {"name": "touying", "version": "0.6.1", "description": "Slides framework", "categories": ["presentation"], "template": {"path": "template", "entrypoint": "slides.typ"}}
 ]`
 
@@ -64,6 +64,10 @@ func TestUniverseFetchCachingETagAndOfflineFallback(t *testing.T) {
 	assert.Equal(t, "0.1.4", items[0].Version)
 	assert.Equal(t, "@preview/charged-ieee:0.1.4", items[0].PackageSpec)
 	assert.Equal(t, SourceUniverse, items[0].Source)
+	assert.Equal(t, []string{"paper", "report"}, items[0].Categories)
+	assert.Equal(t, []string{"ieee", "conference"}, items[0].Keywords)
+	assert.Equal(t, []string{"engineering"}, items[0].Disciplines)
+	assert.Equal(t, []string{"Typst GmbH"}, items[0].Authors)
 	assert.Equal(t, "touying", items[1].Name)
 
 	// 2. Subsequent call within TTL uses disk cache with zero HTTP calls.

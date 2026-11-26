@@ -11,7 +11,10 @@ type TypstPackageMeta struct {
 	Version     string
 	Entrypoint  string
 	Description string
+	Authors     []string
 	Categories  []string
+	Disciplines []string
+	Keywords    []string
 }
 
 // TypstTemplateMeta holds relevant [template] fields from typst.toml.
@@ -89,8 +92,14 @@ func ParseTypstTOML(data []byte) (TypstManifest, error) {
 				if s, ok := parseTOMLString(valRaw); ok {
 					out.Package.Description = s
 				}
+			case "authors":
+				out.Package.Authors = parseTOMLStringArray(valRaw)
 			case "categories":
 				out.Package.Categories = parseTOMLStringArray(valRaw)
+			case "disciplines":
+				out.Package.Disciplines = parseTOMLStringArray(valRaw)
+			case "keywords":
+				out.Package.Keywords = parseTOMLStringArray(valRaw)
 			}
 		case "template":
 			switch key {

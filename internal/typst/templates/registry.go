@@ -126,10 +126,12 @@ func scanTemplateDir(dir string, source SourceKind, idPrefix string) []Template 
 			if err != nil {
 				continue
 			}
-			title, desc, cat, _ := ParseCommentMetadata(string(raw))
+			meta := ParseCommentMetadataFull(string(raw))
+			title := meta.Title
 			if title == "" {
 				title = humanizeSlug(stem)
 			}
+			cat := meta.Category
 			if cat == "" {
 				cat = source.String()
 			}
@@ -137,8 +139,9 @@ func scanTemplateDir(dir string, source SourceKind, idPrefix string) []Template 
 				ID:          idPrefix + stem,
 				Name:        stem,
 				Title:       title,
-				Description: desc,
+				Description: meta.Description,
 				Category:    cat,
+				Keywords:    meta.Keywords,
 				Source:      source,
 				FilePath:    full,
 				Entrypoint:  name,
@@ -167,6 +170,10 @@ func scanTemplateDir(dir string, source SourceKind, idPrefix string) []Template 
 						Title:       title,
 						Description: man.Package.Description,
 						Category:    cat,
+						Categories:  man.Package.Categories,
+						Keywords:    man.Package.Keywords,
+						Disciplines: man.Package.Disciplines,
+						Authors:     man.Package.Authors,
 						Version:     man.Package.Version,
 						Source:      source,
 						IsMultiFile: true,
@@ -181,10 +188,12 @@ func scanTemplateDir(dir string, source SourceKind, idPrefix string) []Template 
 
 		mainPath := filepath.Join(full, "main.typ")
 		if raw, err := os.ReadFile(mainPath); err == nil {
-			title, desc, cat, _ := ParseCommentMetadata(string(raw))
+			meta := ParseCommentMetadataFull(string(raw))
+			title := meta.Title
 			if title == "" {
 				title = humanizeSlug(name)
 			}
+			cat := meta.Category
 			if cat == "" {
 				cat = source.String()
 			}
@@ -192,8 +201,9 @@ func scanTemplateDir(dir string, source SourceKind, idPrefix string) []Template 
 				ID:          idPrefix + name,
 				Name:        name,
 				Title:       title,
-				Description: desc,
+				Description: meta.Description,
 				Category:    cat,
+				Keywords:    meta.Keywords,
 				Source:      source,
 				IsMultiFile: true,
 				DirPath:     full,
@@ -291,6 +301,10 @@ func scanPackageNamespace(nsDir, nsName string, source SourceKind) []Template {
 				Title:         pkgName + " (" + pkgVer + ")",
 				Description:   man.Package.Description,
 				Category:      cat,
+				Categories:    man.Package.Categories,
+				Keywords:      man.Package.Keywords,
+				Disciplines:   man.Package.Disciplines,
+				Authors:       man.Package.Authors,
 				Version:       pkgVer,
 				Source:        source,
 				IsMultiFile:   true,

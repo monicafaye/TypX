@@ -46,7 +46,7 @@ func NewToggleTemplatesAction() action.BufKeyAction {
 	}
 }
 
-// NewTemplatesCmd returns the `:templates [toggle|open|close|focus|universe|refresh]` command handler.
+// NewTemplatesCmd returns the `:templates [toggle|open|close|focus|search|universe|refresh]` command handler.
 func NewTemplatesCmd() func(bp *action.BufPane, args []string) {
 	return func(bp *action.BufPane, args []string) {
 		if bp == nil || bp.Tab() == nil {
@@ -79,6 +79,13 @@ func NewTemplatesCmd() func(bp *action.BufPane, args []string) {
 				}
 			}
 			defaultManager.Open(bp, true)
+		case "search", "find":
+			tp, ok := defaultManager.Open(bp, true)
+			if !ok || tp == nil {
+				return
+			}
+			query := strings.TrimSpace(strings.Join(args[1:], " "))
+			tp.SetSearchQuery(query, query == "")
 		case "universe":
 			defaultManager.Open(bp, true)
 			defaultManager.LoadUniverseAsync(false)
@@ -86,12 +93,12 @@ func NewTemplatesCmd() func(bp *action.BufPane, args []string) {
 			defaultManager.Open(bp, true)
 			defaultManager.LoadUniverseAsync(true)
 		default:
-			notifyError(fmt.Sprintf("Invalid templates argument %q (use open, close, focus, universe, refresh, or toggle)", args[0]))
+			notifyError(fmt.Sprintf("Invalid templates argument %q (use open, close, focus, search, universe, refresh, or toggle)", args[0]))
 		}
 	}
 }
 
-var templatesArgChoices = []string{"toggle", "open", "close", "focus", "universe", "refresh"}
+var templatesArgChoices = []string{"toggle", "open", "close", "focus", "search", "universe", "refresh"}
 
 func templatesCompleter(b *buffer.Buffer) ([]string, []string) {
 	return completeFromList(b, templatesArgChoices)

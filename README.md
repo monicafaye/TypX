@@ -303,7 +303,7 @@ When the Template Gallery (`Alt+Shift+N` / `:templates`) is focused:
 | `p` | Insert preamble (`--preamble`) or package entrypoint at line 1 of an editable `.typ` or unnamed buffer (or open it in a new `.typ` tab otherwise). |
 | `n` | Prompt for a target directory and scaffold a new project folder. |
 | `u` | Load or refresh the online Typst Universe (`@preview`) catalog on demand. |
-| `/` | Filter templates (`Esc` clears filter, `Enter` applies). |
+| `/` or `Ctrl+F` | Search templates by name, description, category, tags, or author (supports multi-word queries, fuzzy name matching, and `cat:`/`tag:`/`author:`/`src:` qualifiers; `Tab` browses results, `Ctrl+U` clears input, `Esc` clears search, `Enter` applies). Click the search bar or run `:templates search [query]`. |
 | `Esc` or `Tab` | Return focus to the editor. |
 | `q` or `Alt+Shift+N` | Close the Template Gallery sidebar. |
 

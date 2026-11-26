@@ -91,12 +91,19 @@ func TestE2E_TemplatesGalleryEmptyHintSaveAndMockTinymistInit(t *testing.T) {
 	assert.Equal(t, "Templates", tab.ActivePane().Name())
 	assert.Contains(t, ed.InfoBarText(), "TEMPLATES")
 	assert.Contains(t, ed.ScreenLine(0), "Templates (")
+	assert.Contains(t, ed.ScreenLine(1), "/ Search")
 
-	// Filter with '/' to "notes" and press Enter -> inserts template and returns focus.
+	// Filter with '/' to "notes", test Tab browse keeping filter, then Ctrl+F and Enter to apply.
 	for _, r := range "/notes" {
 		ed.InjectKey(tcell.KeyRune, r, tcell.ModNone)
 	}
-	assert.Contains(t, ed.InfoBarText(), "Esc Clear Filter")
+	assert.Contains(t, ed.InfoBarText(), "Esc Clear Search")
+	assert.Contains(t, ed.ScreenLine(1), "/ notes_")
+	ed.InjectKey(tcell.KeyTab, 0, tcell.ModNone)
+	assert.Contains(t, ed.ScreenLine(1), "/ notes")
+	assert.Contains(t, ed.InfoBarText(), "Esc Clear Search")
+	ed.InjectKey(tcell.KeyCtrlF, 0, tcell.ModCtrl)
+	assert.Contains(t, ed.ScreenLine(1), "/ notes_")
 	ed.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
 
 	assert.False(t, action.IsAuxiliaryPane(tab.ActivePane()), "applying template must return focus to editor")

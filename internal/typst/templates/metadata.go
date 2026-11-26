@@ -8,12 +8,29 @@ import (
 	"unicode"
 )
 
+// CommentMetadata holds parsed leading metadata comments from a .typ template.
+type CommentMetadata struct {
+	Title       string
+	Description string
+	Category    string
+	Keywords    []string
+	Body        string
+}
+
 // ParseCommentMetadata extracts leading `// @title:`, `// @desc:`, and
 // `// @category:` lines from src and returns the remaining template body.
 func ParseCommentMetadata(src string) (title, desc, category, body string) {
+	meta := ParseCommentMetadataFull(src)
+	return meta.Title, meta.Description, meta.Category, meta.Body
+}
+
+// ParseCommentMetadataFull extracts leading `// @title:`, `// @desc:`,
+// `// @category:`, and `// @tags:` / `// @keywords:` lines from src.
+func ParseCommentMetadataFull(src string) CommentMetadata {
 	norm := strings.ReplaceAll(src, "\r\n", "\n")
 	lines := strings.Split(norm, "\n")
 
+	var meta CommentMetadata
 	idx := 0
 	foundAny := false
 	for idx < len(lines) {
@@ -24,15 +41,23 @@ func ParseCommentMetadata(src string) (title, desc, category, body string) {
 		rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "//"))
 		switch {
 		case strings.HasPrefix(rest, "@title:"):
-			title = strings.TrimSpace(strings.TrimPrefix(rest, "@title:"))
+			meta.Title = strings.TrimSpace(strings.TrimPrefix(rest, "@title:"))
 			foundAny = true
 			idx++
 		case strings.HasPrefix(rest, "@desc:"):
-			desc = strings.TrimSpace(strings.TrimPrefix(rest, "@desc:"))
+			meta.Description = strings.TrimSpace(strings.TrimPrefix(rest, "@desc:"))
 			foundAny = true
 			idx++
 		case strings.HasPrefix(rest, "@category:"):
-			category = strings.TrimSpace(strings.TrimPrefix(rest, "@category:"))
+			meta.Category = strings.TrimSpace(strings.TrimPrefix(rest, "@category:"))
+			foundAny = true
+			idx++
+		case strings.HasPrefix(rest, "@tags:"):
+			meta.Keywords = append(meta.Keywords, splitMetadataList(strings.TrimPrefix(rest, "@tags:"))...)
+			foundAny = true
+			idx++
+		case strings.HasPrefix(rest, "@keywords:"):
+			meta.Keywords = append(meta.Keywords, splitMetadataList(strings.TrimPrefix(rest, "@keywords:"))...)
 			foundAny = true
 			idx++
 		default:
@@ -42,13 +67,25 @@ func ParseCommentMetadata(src string) (title, desc, category, body string) {
 
 doneMeta:
 	if !foundAny {
-		return "", "", "", norm
+		meta.Body = norm
+		return meta
 	}
 	if idx < len(lines) && strings.TrimSpace(lines[idx]) == "" {
 		idx++
 	}
-	body = strings.Join(lines[idx:], "\n")
-	return title, desc, category, body
+	meta.Body = strings.Join(lines[idx:], "\n")
+	return meta
+}
+
+func splitMetadataList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	var out []string
+	for _, p := range parts {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // DefaultAuthor resolves a sensible default author string from environment variables.

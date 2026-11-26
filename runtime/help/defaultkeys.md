@@ -79,8 +79,8 @@ with `:preview focus`:
 | p                    | Insert preamble/entrypoint into `.typ`/unnamed buffer (or open in a new `.typ` tab) |
 | n                    | Scaffold template into a new project directory                   |
 | u                    | Load or refresh Typst Universe (`@preview`) online catalog       |
-| /                    | Filter templates (`Esc` clears, `Enter` accepts)                 |
-| Esc / Tab            | Return focus to the editor                                       |
+| / or Ctrl-f          | Search templates by name, description, category, tags, or author (`Tab` browses results, `Ctrl-u` clears input, `Esc` clears search, `Enter` applies) |
+| Esc / Tab            | Clear active search or return focus to the editor                |
 | q / Alt-N            | Close the Template Gallery sidebar                               |
 
 ### Power user

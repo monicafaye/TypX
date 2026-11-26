@@ -123,6 +123,10 @@ func syntheticKeyEvent(spec string) *tcell.EventKey {
 		return tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone, "")
 	case "Enter":
 		return tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, "")
+	case "Tab":
+		return tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone, "")
+	case "Ctrl-u":
+		return tcell.NewEventKey(tcell.KeyCtrlU, 0, tcell.ModCtrl, "")
 	case "Up":
 		return tcell.NewEventKey(tcell.KeyUp, 0, tcell.ModNone, "")
 	case "Down":

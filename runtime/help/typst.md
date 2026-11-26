@@ -109,8 +109,8 @@ typx --new @preview/charged-ieee my-paper
 1. **Project**: `.typx/templates/` in the active project root (`.typ` files or
    folders with `main.typ` / `typst.toml`).
 2. **Personal**: `<config-dir>/templates/` (supports optional leading
-   `// @title:`, `// @desc:`, `// @category:` comments and `{{title}}`,
-   `{{author}}`, `{{date}}` variables).
+   `// @title:`, `// @desc:`, `// @category:`, and `// @tags:` comments and
+   `{{title}}`, `{{author}}`, `{{date}}` variables).
 3. **Local & Cached**: Typst `@local` and already-cached `@preview` template
    packages discovered from Typst's package directories.
 4. **Typst Universe (`@preview`)**: Loaded on demand with `u` in the Gallery or
@@ -125,13 +125,18 @@ typx --new @preview/charged-ieee my-paper
   its preamble above the first `=` heading) to `<config-dir>/templates/<name>.typ`.
 - Inside the Gallery: `Up`/`Down` (`k`/`j`) select, `v` toggles live visual
   preview (on by default in Kitty or Sixel terminals, or a read-only `.typ`
-  source split otherwise), `/` filters, `Enter` applies a template (inserting
-  into a blank `.typ` or unnamed buffer and setting `filetype` to `typst`,
-  prompting on non-empty `.typ` buffers, or opening a new `.typ` tab on
-  non-Typst or read-only files) or creates a project folder, `p` inserts the
-  preamble or entrypoint (or opens it in a new `.typ` tab on non-Typst or
-  read-only buffers), `n` creates a new project folder, `u` loads or refreshes
-  Typst Universe, `Esc` returns to editor, `q` closes.
+  source split otherwise), `/` or `Ctrl-f` (or clicking the search bar)
+  searches across names, titles, descriptions, categories, keywords, authors,
+  and sources (supports multi-word queries, fuzzy name matching, and
+  `cat:`/`tag:`/`author:`/`src:` qualifiers; `Tab` exits typing to browse
+  results, `Ctrl-u` clears the input, `Esc` clears search), `Enter` applies a
+  template (inserting into a blank `.typ` or unnamed buffer and setting
+  `filetype` to `typst`, prompting on non-empty `.typ` buffers, or opening a
+  new `.typ` tab on non-Typst or read-only files) or creates a project folder,
+  `p` inserts the preamble or entrypoint (or opens it in a new `.typ` tab on
+  non-Typst or read-only buffers), `n` creates a new project folder, `u` loads
+  or refreshes Typst Universe, `Esc` returns to editor, `q` closes. You can
+  also run `> templates search [query]` to jump straight to search results.
 
 ---
 

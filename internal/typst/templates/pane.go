@@ -98,9 +98,10 @@ const (
 
 // GalleryRow represents a rendered row inside TemplatePane.
 type GalleryRow struct {
-	Kind     rowKind
-	Label    string
-	Template Template
+	Kind        rowKind
+	Label       string
+	Template    Template
+	NameMatches []int
 }
 
 // TemplatePane implements action.Pane, action.AuxiliaryPane, and display.Window
@@ -265,27 +266,49 @@ func (tp *TemplatePane) SelectedTemplate() (Template, bool) {
 	return r.Template, true
 }
 
-// FilterQuery returns the active '/' filter text.
+// FilterQuery returns the active search/filter text.
 func (tp *TemplatePane) FilterQuery() string { return tp.filterQuery }
 
-// IsFiltering reports whether live '/' filter typing is active.
+// IsFiltering reports whether live search input is active.
 func (tp *TemplatePane) IsFiltering() bool { return tp.filtering }
+
+// SetSearchQuery updates the gallery search query and optionally focuses the
+// inline search input for typing.
+func (tp *TemplatePane) SetSearchQuery(query string, typing bool) {
+	tp.filterQuery = query
+	tp.filtering = typing
+	tp.selectedIdx = -1
+	tp.rebuildRows()
+}
 
 // Target returns the linked BufPane if still open on this tab.
 func (tp *TemplatePane) Target() *action.BufPane { return tp.resolveTarget() }
 
+func (tp *TemplatePane) hasSearchBar() bool {
+	return tp.view.Height >= 4
+}
+
 func (tp *TemplatePane) hasPreviewFooter() bool {
-	return tp.view.Height >= 7
+	return tp.view.Height >= 8
+}
+
+func (tp *TemplatePane) listStartRow() int {
+	if tp.hasSearchBar() {
+		return 2
+	}
+	return 1
 }
 
 func (tp *TemplatePane) listHeight() int {
-	if tp.view.Height <= 1 {
+	reserved := tp.listStartRow()
+	if tp.hasPreviewFooter() {
+		reserved += 3 // divider + title + description
+	}
+	lh := tp.view.Height - reserved
+	if lh < 0 {
 		return 0
 	}
-	if tp.hasPreviewFooter() {
-		return tp.view.Height - 4 // row 0 header + bottom 3 footer rows
-	}
-	return tp.view.Height - 1
+	return lh
 }
 
 func (tp *TemplatePane) resolveTarget() *action.BufPane {
@@ -341,7 +364,7 @@ func (tp *TemplatePane) Refresh() {
 }
 
 func (tp *TemplatePane) rebuildRows() {
-	q := strings.ToLower(strings.TrimSpace(tp.filterQuery))
+	q := strings.TrimSpace(tp.filterQuery)
 	var selectedID string
 	var selectedWasAction bool
 	if tp.selectedIdx >= 0 && tp.selectedIdx < len(tp.rows) {
@@ -354,13 +377,11 @@ func (tp *TemplatePane) rebuildRows() {
 		"Local & Cached",
 		"Typst Universe",
 	}
-	buckets := make(map[string][]Template, len(sectionOrder))
-	for _, t := range tp.allTemplates {
-		if q != "" && !matchesFilter(t, q) {
-			continue
-		}
-		sec := t.Source.SectionTitle()
-		buckets[sec] = append(buckets[sec], t)
+	matched := SearchTemplates(tp.allTemplates, q)
+	buckets := make(map[string][]SearchResult, len(sectionOrder))
+	for _, res := range matched {
+		sec := res.Template.Source.SectionTitle()
+		buckets[sec] = append(buckets[sec], res)
 	}
 
 	tp.rows = tp.rows[:0]
@@ -369,11 +390,13 @@ func (tp *TemplatePane) rebuildRows() {
 		if sec == "Typst Universe" {
 			loaded := tp.mgr != nil && tp.mgr.isUniverseLoaded()
 			loading := tp.mgr != nil && tp.mgr.isUniverseLoading()
-			if len(items) == 0 && !loaded && q == "" {
+			if len(items) == 0 && !loaded {
 				tp.rows = append(tp.rows, GalleryRow{Kind: rowHeader, Label: sec})
 				lbl := "[u] Load Typst Universe catalog"
 				if loading {
 					lbl = "Loading Typst Universe..."
+				} else if q != "" {
+					lbl = "[Enter] Load Universe to search"
 				}
 				tp.rows = append(tp.rows, GalleryRow{Kind: rowUniverseAction, Label: lbl})
 				continue
@@ -383,8 +406,12 @@ func (tp *TemplatePane) rebuildRows() {
 			continue
 		}
 		tp.rows = append(tp.rows, GalleryRow{Kind: rowHeader, Label: sec})
-		for _, it := range items {
-			tp.rows = append(tp.rows, GalleryRow{Kind: rowTemplate, Template: it})
+		for _, res := range items {
+			tp.rows = append(tp.rows, GalleryRow{
+				Kind:        rowTemplate,
+				Template:    res.Template,
+				NameMatches: res.NameMatches,
+			})
 		}
 	}
 
@@ -412,16 +439,6 @@ func (tp *TemplatePane) rebuildRows() {
 	if tp.livePreview && tp.active {
 		tp.schedulePreview(false)
 	}
-}
-
-func matchesFilter(t Template, qLower string) bool {
-	fields := []string{t.Name, t.Title, t.Description, t.Category, t.ID, t.PackageSpec, t.Source.String()}
-	for _, f := range fields {
-		if strings.Contains(strings.ToLower(f), qLower) {
-			return true
-		}
-	}
-	return false
 }
 
 func isRowSelectable(r GalleryRow) bool {
@@ -601,6 +618,10 @@ func (tp *TemplatePane) handleKeyEvent(e *tcell.EventKey) {
 		}
 		return
 	}
+	if key == tcell.KeyCtrlF {
+		tp.filtering = true
+		return
+	}
 
 	if tp.filtering {
 		tp.handleFilterKey(e)
@@ -668,8 +689,6 @@ func (tp *TemplatePane) handleKeyEvent(e *tcell.EventKey) {
 			}
 		case '/':
 			tp.filtering = true
-			tp.filterQuery = ""
-			tp.rebuildRows()
 		case 'u':
 			if tp.mgr != nil {
 				tp.mgr.LoadUniverseAsync(tp.mgr.isUniverseLoaded())
@@ -698,22 +717,65 @@ func (tp *TemplatePane) handleFilterKey(e *tcell.EventKey) {
 		tp.filtering = false
 		tp.filterQuery = ""
 		tp.rebuildRows()
+	case tcell.KeyTab:
+		// Exit search typing while keeping the filtered results active for browsing/actions.
+		tp.filtering = false
 	case tcell.KeyEnter:
 		tp.filtering = false
-		tp.activateSelected()
+		if tp.selectedIdx >= 0 && tp.selectedIdx < len(tp.rows) {
+			if tp.rows[tp.selectedIdx].Kind == rowUniverseAction {
+				// Keep the active search query so Universe results filter as soon as they load.
+				tp.activateSelected()
+				return
+			}
+			tp.activateSelected()
+			tp.filterQuery = ""
+			tp.rebuildRows()
+		}
+	case tcell.KeyCtrlU:
 		tp.filterQuery = ""
+		tp.selectedIdx = -1
 		tp.rebuildRows()
 	case tcell.KeyUp:
 		tp.moveSelection(-1)
 	case tcell.KeyDown:
 		tp.moveSelection(1)
+	case tcell.KeyHome:
+		tp.selectFirst()
+		tp.ensureSelectionVisible()
+		if tp.livePreview && tp.active {
+			tp.schedulePreview(false)
+		}
+	case tcell.KeyEnd:
+		tp.selectLast()
+		tp.ensureSelectionVisible()
+		if tp.livePreview && tp.active {
+			tp.schedulePreview(false)
+		}
+	case tcell.KeyPgUp:
+		step := tp.listHeight()
+		if step < 1 {
+			step = 1
+		}
+		tp.moveSelection(-step)
+	case tcell.KeyPgDn:
+		step := tp.listHeight()
+		if step < 1 {
+			step = 1
+		}
+		tp.moveSelection(step)
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if tp.filterQuery == "" {
 			tp.filtering = false
 			return
 		}
-		runes := []rune(tp.filterQuery)
-		tp.filterQuery = string(runes[:len(runes)-1])
+		if e.Modifiers()&tcell.ModAlt != 0 {
+			tp.filterQuery = deletePrevWord(tp.filterQuery)
+		} else {
+			runes := []rune(tp.filterQuery)
+			tp.filterQuery = string(runes[:len(runes)-1])
+		}
+		tp.selectedIdx = -1
 		tp.rebuildRows()
 	case tcell.KeyRune:
 		if e.Modifiers()&(tcell.ModAlt|tcell.ModCtrl) != 0 {
@@ -723,6 +785,18 @@ func (tp *TemplatePane) handleFilterKey(e *tcell.EventKey) {
 		tp.selectedIdx = -1
 		tp.rebuildRows()
 	}
+}
+
+func deletePrevWord(s string) string {
+	runes := []rune(s)
+	i := len(runes)
+	for i > 0 && unicode.IsSpace(runes[i-1]) {
+		i--
+	}
+	for i > 0 && !unicode.IsSpace(runes[i-1]) {
+		i--
+	}
+	return string(runes[:i])
 }
 
 func (tp *TemplatePane) handleMouseEvent(e *tcell.EventMouse) {
@@ -740,10 +814,16 @@ func (tp *TemplatePane) handleMouseEvent(e *tcell.EventMouse) {
 			return
 		}
 		localY := my - tp.view.Y
+		if tp.hasSearchBar() && localY == 1 {
+			tp.filtering = true
+			return
+		}
+		startRow := tp.listStartRow()
 		lh := tp.listHeight()
-		if localY >= 1 && localY <= lh {
-			idx := tp.scrollTop + (localY - 1)
+		if localY >= startRow && localY < startRow+lh {
+			idx := tp.scrollTop + (localY - startRow)
 			if idx >= 0 && idx < len(tp.rows) && isRowSelectable(tp.rows[idx]) {
+				tp.filtering = false
 				already := tp.selectedIdx == idx
 				tp.selectedIdx = idx
 				if already || tp.rows[idx].Kind == rowUniverseAction {
@@ -787,35 +867,44 @@ func (tp *TemplatePane) Display() {
 
 	headerStyle := tp.headerStyle()
 	count := tp.templateCount()
+	total := len(tp.allTemplates)
+	hasQuery := strings.TrimSpace(tp.filterQuery) != ""
 	headerText := " Templates"
 	switch {
-	case tp.filtering:
+	case !tp.hasSearchBar() && tp.filtering:
 		headerText = " /" + tp.filterQuery + "_"
-	case tp.filterQuery != "":
+	case !tp.hasSearchBar() && hasQuery:
 		headerText = fmt.Sprintf(" /%s (%d)", tp.filterQuery, count)
 	case tp.mgr != nil && tp.mgr.isUniverseLoading():
 		headerText = " Templates (loading…)"
+	case hasQuery:
+		headerText = fmt.Sprintf(" Templates (%d/%d)", count, total)
 	case count > 0:
 		headerText = fmt.Sprintf(" Templates (%d)", count)
 	}
 	drawClippedRow(tp.view.X, tp.view.Y, tp.view.Width, headerText, headerStyle)
 
+	if tp.hasSearchBar() {
+		tp.drawSearchBar(tp.view.X, tp.view.Y+1, tp.view.Width)
+	}
+
+	startRow := tp.listStartRow()
 	lh := tp.listHeight()
 	if lh > 0 {
 		if len(tp.rows) == 0 {
 			emptyMsg := " (no templates)"
-			if tp.filterQuery != "" {
+			if hasQuery {
 				emptyMsg = " (no matches)"
 			}
 			dimStyle := lookupStyle("comment", config.DefStyle)
-			drawClippedRow(tp.view.X, tp.view.Y+1, tp.view.Width, emptyMsg, dimStyle)
+			drawClippedRow(tp.view.X, tp.view.Y+startRow, tp.view.Width, emptyMsg, dimStyle)
 			for row := 1; row < lh; row++ {
-				drawClippedRow(tp.view.X, tp.view.Y+1+row, tp.view.Width, "", config.DefStyle)
+				drawClippedRow(tp.view.X, tp.view.Y+startRow+row, tp.view.Width, "", config.DefStyle)
 			}
 		} else {
 			for row := 0; row < lh; row++ {
 				idx := tp.scrollTop + row
-				screenY := tp.view.Y + 1 + row
+				screenY := tp.view.Y + startRow + row
 				if idx >= len(tp.rows) {
 					drawClippedRow(tp.view.X, screenY, tp.view.Width, "", config.DefStyle)
 					continue
@@ -824,7 +913,13 @@ func (tp *TemplatePane) Display() {
 				isSelected := idx == tp.selectedIdx
 				label := formatGalleryRow(gr, isSelected)
 				st := tp.rowStyle(gr, isSelected)
-				drawClippedRow(tp.view.X, screenY, tp.view.Width, label, st)
+				if gr.Kind == rowTemplate && len(gr.NameMatches) > 0 {
+					mask := buildNameMatchMask(label, 2, gr.NameMatches)
+					matchSt := tp.matchHighlightStyle(st, isSelected)
+					drawHighlightedRow(tp.view.X, screenY, tp.view.Width, label, st, matchSt, mask)
+				} else {
+					drawClippedRow(tp.view.X, screenY, tp.view.Width, label, st)
+				}
 			}
 		}
 	}
@@ -843,6 +938,84 @@ func (tp *TemplatePane) Display() {
 	}
 }
 
+func (tp *TemplatePane) drawSearchBar(x, y, width int) {
+	if width <= 0 || screen.Screen == nil {
+		return
+	}
+	if tp.filtering {
+		prefix := " / "
+		cursor := "_"
+		avail := width - runewidth.StringWidth(prefix) - runewidth.StringWidth(cursor)
+		qDisplay := clipLeftToWidth(tp.filterQuery, avail)
+		st := applyCursorLineHighlight(config.DefStyle)
+		drawClippedRow(x, y, width, prefix+qDisplay+cursor, st)
+		return
+	}
+	if tp.filterQuery != "" {
+		st := lookupStyle("identifier.class", config.DefStyle)
+		drawClippedRow(x, y, width, " / "+tp.filterQuery, st)
+		return
+	}
+	placeholder := " / Search templates..."
+	if width < 24 {
+		placeholder = " / Search..."
+	}
+	st := lookupStyle("comment", config.DefStyle)
+	drawClippedRow(x, y, width, placeholder, st)
+}
+
+func clipLeftToWidth(text string, maxW int) string {
+	if maxW <= 0 || text == "" {
+		return ""
+	}
+	if runewidth.StringWidth(text) <= maxW {
+		return text
+	}
+	if maxW == 1 {
+		return "…"
+	}
+	runes := []rune(text)
+	w := 1 // reserve 1 col for leading ellipsis
+	start := len(runes)
+	for start > 0 {
+		rw := runewidth.RuneWidth(runes[start-1])
+		if rw < 1 {
+			rw = 1
+		}
+		if w+rw > maxW {
+			break
+		}
+		w += rw
+		start--
+	}
+	return "…" + string(runes[start:])
+}
+
+func buildNameMatchMask(label string, offset int, nameMatches []int) []bool {
+	n := len([]rune(label))
+	if n == 0 || len(nameMatches) == 0 {
+		return nil
+	}
+	mask := make([]bool, n)
+	for _, idx := range nameMatches {
+		pos := offset + idx
+		if pos >= 0 && pos < n {
+			mask[pos] = true
+		}
+	}
+	return mask
+}
+
+func (tp *TemplatePane) matchHighlightStyle(rowStyle tcell.Style, isSelected bool) tcell.Style {
+	_, bg, _ := rowStyle.Decompose()
+	accentFg, _, _ := lookupStyle("constant.specialChar", lookupStyle("constant", rowStyle)).Decompose()
+	st := rowStyle.Foreground(accentFg).Bold(true)
+	if isSelected {
+		st = st.Background(bg).Underline(true)
+	}
+	return st
+}
+
 func (tp *TemplatePane) templateCount() int {
 	n := 0
 	for _, r := range tp.rows {
@@ -855,12 +1028,18 @@ func (tp *TemplatePane) templateCount() int {
 
 func (tp *TemplatePane) previewFooterLines() (string, string) {
 	if tp.selectedIdx < 0 || tp.selectedIdx >= len(tp.rows) {
-		return "No template selected", "Press '/' to filter or 'u' for Universe"
+		if strings.TrimSpace(tp.filterQuery) != "" {
+			return "No matching templates", "Press 'Esc' to clear search or 'u' for Universe"
+		}
+		return "No template selected", "Press '/' or Ctrl-F to search, 'u' for Universe"
 	}
 	row := tp.rows[tp.selectedIdx]
 	if row.Kind == rowUniverseAction {
 		if tp.mgr != nil && tp.mgr.isUniverseLoading() {
 			return "Typst Universe (@preview)", "Fetching online template catalog..."
+		}
+		if strings.TrimSpace(tp.filterQuery) != "" {
+			return "Typst Universe (@preview)", "Press Enter or 'u' to load and search online templates"
 		}
 		return "Typst Universe (@preview)", "Press 'u' or Enter to load community templates"
 	}
@@ -962,6 +1141,10 @@ func lookupStyle(name string, fallback tcell.Style) tcell.Style {
 }
 
 func drawClippedRow(x, y, width int, text string, style tcell.Style) {
+	drawHighlightedRow(x, y, width, text, style, style, nil)
+}
+
+func drawHighlightedRow(x, y, width int, text string, baseStyle, matchStyle tcell.Style, matchMask []bool) {
 	if width <= 0 || screen.Screen == nil {
 		return
 	}
@@ -982,7 +1165,7 @@ func drawClippedRow(x, y, width int, text string, style tcell.Style) {
 		limit = width - 1
 	}
 
-	for _, r := range runes {
+	for i, r := range runes {
 		rw := runewidth.RuneWidth(r)
 		if rw < 1 {
 			rw = 1
@@ -990,15 +1173,19 @@ func drawClippedRow(x, y, width int, text string, style tcell.Style) {
 		if col+rw > limit {
 			break
 		}
-		screen.SetContent(x+col, y, r, nil, style)
+		st := baseStyle
+		if i < len(matchMask) && matchMask[i] {
+			st = matchStyle
+		}
+		screen.SetContent(x+col, y, r, nil, st)
 		col += rw
 	}
 	if truncated && col < width {
-		screen.SetContent(x+col, y, '…', nil, style)
+		screen.SetContent(x+col, y, '…', nil, baseStyle)
 		col++
 	}
 	for col < width {
-		screen.SetContent(x+col, y, ' ', nil, style)
+		screen.SetContent(x+col, y, ' ', nil, baseStyle)
 		col++
 	}
 }

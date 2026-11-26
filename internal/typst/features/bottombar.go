@@ -304,18 +304,24 @@ func templatesBottomBarContext(tp *templates.TemplatePane) display.BottomBarCont
 		hints = []display.BottomBarItem{
 			{Key: "Enter", Label: "Apply", Action: "pane:Enter", Priority: 0},
 			{Key: "↑/↓", Label: "Select", Priority: 1},
-			{Key: "Esc", Label: "Clear Filter", Action: "pane:Esc", Priority: 0},
-			{Key: "Alt+⇧N", Label: "Close", Action: "ToggleTemplates", Priority: 1, AlignRight: true},
+			{Key: "Tab", Label: "Browse", Action: "pane:Tab", Priority: 1},
+			{Key: "^U", Label: "Clear", Action: "pane:Ctrl-u", Priority: 2},
+			{Key: "Esc", Label: "Clear Search", Action: "pane:Esc", Priority: 0},
+			{Key: "Alt+⇧N", Label: "Close", Action: "ToggleTemplates", Priority: 2, AlignRight: true},
 		}
 	} else {
+		escLabel := "Editor"
+		if tp.FilterQuery() != "" {
+			escLabel = "Clear Search"
+		}
 		hints = []display.BottomBarItem{
 			{Key: "Enter", Label: "Apply", Action: "pane:Enter", Priority: 0},
+			{Key: "/", Label: "Search", Action: "pane:/", Priority: 0},
 			{Key: "v", Label: "Preview", Action: "pane:v", Priority: 1, Active: tp.IsLivePreview()},
 			{Key: "p", Label: "Preamble", Action: "pane:p", Priority: 1},
 			{Key: "n", Label: "Scaffold", Action: "pane:n", Priority: 2},
-			{Key: "/", Label: "Filter", Action: "pane:/", Priority: 0},
 			{Key: "u", Label: "Universe", Action: "pane:u", Priority: 1},
-			{Key: "Esc", Label: "Editor", Action: "pane:Esc", Priority: 0},
+			{Key: "Esc", Label: escLabel, Action: "pane:Esc", Priority: 0},
 			{Key: "q", Label: "Close", Action: "pane:q", Priority: 1, AlignRight: true},
 			{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 2, AlignRight: true},
 		}
@@ -324,7 +330,7 @@ func templatesBottomBarContext(tp *templates.TemplatePane) display.BottomBarCont
 		Badge:    "TEMPLATES",
 		Hints:    hints,
 		MenuRows: typstKeyMenuRows(false, false, true, false, true),
-		MenuTip:  "Templates focused · Enter apply · v preview · p preamble · n scaffold · u load Universe · / filter · Esc returns to editor",
+		MenuTip:  "Templates focused · / or ^F search · Enter apply · Tab browse results · v preview · p preamble · n scaffold · u Universe · Esc clear/editor",
 	}
 }
 

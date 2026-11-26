@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	defaultUniverseBaseURL = "https://packages.typst.org/preview"
-	defaultUniverseTTL     = 24 * time.Hour
+	defaultUniverseBaseURL     = "https://packages.typst.org/preview"
+	defaultUniverseTTL         = 24 * time.Hour
+	universeCacheSchemaVersion = 2
 
 	maxUniverseIndexBytes = 32 << 20 // 32 MiB
 	maxThumbnailBytes     = 10 << 20 // 10 MiB
@@ -88,16 +89,20 @@ func (c *UniverseClient) ttl() time.Duration {
 }
 
 type universeCachePayload struct {
-	ETag      string     `json:"etag,omitempty"`
-	FetchedAt time.Time  `json:"fetchedAt"`
-	Templates []Template `json:"templates"`
+	SchemaVersion int        `json:"schemaVersion,omitempty"`
+	ETag          string     `json:"etag,omitempty"`
+	FetchedAt     time.Time  `json:"fetchedAt"`
+	Templates     []Template `json:"templates"`
 }
 
 type universeIndexEntry struct {
 	Name        string   `json:"name"`
 	Version     string   `json:"version"`
 	Description string   `json:"description"`
+	Authors     []string `json:"authors"`
 	Categories  []string `json:"categories"`
+	Disciplines []string `json:"disciplines"`
+	Keywords    []string `json:"keywords"`
 	Template    *struct {
 		Path       string `json:"path"`
 		Entrypoint string `json:"entrypoint"`
@@ -118,7 +123,8 @@ func (c *UniverseClient) LoadCachedUniverse() ([]Template, time.Time, bool) {
 // cache unless forceRefresh bypasses the TTL window. Never auto-invoked on startup.
 func (c *UniverseClient) FetchUniverse(ctx context.Context, forceRefresh bool) ([]Template, error) {
 	cached, hasCache := c.readCache()
-	if !forceRefresh && hasCache && len(cached.Templates) > 0 && time.Since(cached.FetchedAt) < c.ttl() {
+	cacheSchemaFresh := cached.SchemaVersion >= universeCacheSchemaVersion
+	if !forceRefresh && hasCache && cacheSchemaFresh && len(cached.Templates) > 0 && time.Since(cached.FetchedAt) < c.ttl() {
 		return cached.Templates, nil
 	}
 
@@ -131,7 +137,7 @@ func (c *UniverseClient) FetchUniverse(ctx context.Context, forceRefresh bool) (
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "TypX")
-	if hasCache && cached.ETag != "" {
+	if hasCache && cacheSchemaFresh && cached.ETag != "" {
 		req.Header.Set("If-None-Match", cached.ETag)
 	}
 
@@ -172,9 +178,10 @@ func (c *UniverseClient) FetchUniverse(ctx context.Context, forceRefresh bool) (
 
 	templates := extractLatestUniverseTemplates(entries)
 	payload := universeCachePayload{
-		ETag:      strings.TrimSpace(resp.Header.Get("ETag")),
-		FetchedAt: time.Now().UTC(),
-		Templates: templates,
+		SchemaVersion: universeCacheSchemaVersion,
+		ETag:          strings.TrimSpace(resp.Header.Get("ETag")),
+		FetchedAt:     time.Now().UTC(),
+		Templates:     templates,
 	}
 	_ = c.writeCache(payload)
 	return templates, nil
@@ -193,9 +200,10 @@ func extractLatestUniverseTemplates(entries []universeIndexEntry) []Template {
 		if cur, exists := bestByName[key]; exists && compareSemver(e.Version, cur.Version) <= 0 {
 			continue
 		}
+		cats := cleanStringSlice(e.Categories)
 		cat := "Universe"
-		if len(e.Categories) > 0 && strings.TrimSpace(e.Categories[0]) != "" {
-			cat = e.Categories[0]
+		if len(cats) > 0 {
+			cat = cats[0]
 		}
 		spec := "@preview/" + e.Name + ":" + e.Version
 		bestByName[key] = Template{
@@ -204,6 +212,10 @@ func extractLatestUniverseTemplates(entries []universeIndexEntry) []Template {
 			Title:         e.Name + " (" + e.Version + ")",
 			Description:   e.Description,
 			Category:      cat,
+			Categories:    cats,
+			Keywords:      cleanStringSlice(e.Keywords),
+			Disciplines:   cleanStringSlice(e.Disciplines),
+			Authors:       cleanStringSlice(e.Authors),
 			Version:       e.Version,
 			Source:        SourceUniverse,
 			IsMultiFile:   true,
@@ -220,6 +232,22 @@ func extractLatestUniverseTemplates(entries []universeIndexEntry) []Template {
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Name < out[j].Name
 	})
+	return out
+}
+
+func cleanStringSlice(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s := strings.TrimSpace(item); s != "" {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
 	return out
 }
 

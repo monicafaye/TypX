@@ -17,10 +17,13 @@ name = "charged-ieee"
 version = "0.1.4"
 entrypoint = "lib.typ"
 description = "An IEEE template for Typst."
+authors = ["Typst GmbH <hi@typst.app>"]
 categories = [
   "paper",
   "report", # inline comment
 ]
+disciplines = ["engineering", "computer-science"]
+keywords = ["ieee", "two-column"]
 
 [template]
 path = "template"
@@ -37,7 +40,10 @@ name = "should-not-overwrite-package-name"
 	assert.Equal(t, "0.1.4", man.Package.Version)
 	assert.Equal(t, "lib.typ", man.Package.Entrypoint)
 	assert.Equal(t, "An IEEE template for Typst.", man.Package.Description)
+	assert.Equal(t, []string{"Typst GmbH <hi@typst.app>"}, man.Package.Authors)
 	assert.Equal(t, []string{"paper", "report"}, man.Package.Categories)
+	assert.Equal(t, []string{"engineering", "computer-science"}, man.Package.Disciplines)
+	assert.Equal(t, []string{"ieee", "two-column"}, man.Package.Keywords)
 	assert.Equal(t, "template", man.Template.Path)
 	assert.Equal(t, "main.typ", man.Template.Entrypoint)
 	assert.Equal(t, "thumbnail.png", man.Template.Thumbnail)
