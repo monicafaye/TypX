@@ -172,6 +172,8 @@ func TestDefinitionPackageCacheMarkedReadonly(t *testing.T) {
 
 func TestDiagnosticsNextPrevWrapAndListPaneJump(t *testing.T) {
 	dir, _ := setupLSPEnv(t, 0)
+	// Inject diagnostics directly without a background mock LSP server overwriting them on didOpen.
+	config.GlobalSettings["typst.lspEnabled"] = false
 
 	mainPath := filepath.Join(dir, "main.typ")
 	subPath := filepath.Join(dir, "sub.typ")
