@@ -18,6 +18,8 @@ TypX (`typx`) is a terminal editor for [Typst](https://typst.app/), forked from 
   <sub><em>Document Outline (<code>Alt+O</code>), cursor-aware Unicode math concealment (<code>Alt+C</code>), and native in-terminal Sixel live preview (<code>Alt+P</code>) editing <code>@preview/clean-math-paper</code>.</em></sub>
 </p>
 
+In-terminal preview is available when your terminal supports either Kitty graphics or Sixel graphics. If your terminal does not support either protocol, TypX falls back to browser preview. See [Terminal compatibility notes](#terminal-compatibility-notes) for supported terminals.
+
 TypX includes:
 
 - **Micro ergonomics.** Standard keybindings (`Ctrl+S`, `Ctrl+C`, `Ctrl+V`, `Ctrl+Z`, `Ctrl+F`), mouse support, splits, tabs, and Lua plugins work out of the box.
