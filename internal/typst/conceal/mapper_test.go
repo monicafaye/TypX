@@ -88,12 +88,36 @@ func TestSuperAndSubscripts(t *testing.T) {
 		{"$x^23 + a_10 + a_index + x^^2 + x__i$", "$x^23 + a_10 + a_index + x^^2 + x__i$"},
 		{`$\^2 + \_i$`, `$\^2 + \_i$`},
 		{"$x^2.$", "$x².$"},
+		{"$x^(n+1) + a_(k-1) + sum_(i = 1)^m x_k$", "$xⁿ⁺¹ + aₖ₋₁ + ∑ᵢ₌₁ᵐ xₖ$"},
+		{"$x^(n + ?) + a_(i, j) + x^() + a_()$", "$x^(n + ?) + a_(i, j) + x^() + a_()$"},
 	}
 	for _, tc := range cases {
 		lv := scanOne(tc.in, nil)
 		if got := string(lv.DisplayText); got != tc.want {
 			t.Errorf("input %q: got %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestMathAlphabetsAndExpandedOperators(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"bb_and_cal", "$bb(R) + bb(N) + bb(1) + cal(L) + cal(F) + mybb(R) + foo.cal(L) + bb() + cal(a)$", "$ℝ + ℕ + 𝟙 + ℒ + ℱ + mybb(R) + foo.cal(L) + bb() + cal(a)$"},
+		{"delimiters", "$angle.l x, y angle.r + floor.l t floor.r + ceil.l u ceil.r$", "$⟨ x, y ⟩ + ⌊ t ⌋ + ⌈ u ⌉$"},
+		{"logic_and_proof", "$p and q or not r tack.r s models t therefore qed$", "$p ∧ q ∨ ¬ r ⊢ s ⊨ t ∴ ∎$"},
+		{"relations_and_arrows", "$a div b + f compose g + x prec.eq y + u divides.not v + arrow.r.hook$", "$a ÷ b + f ∘ g + x ≼ y + u ∤ v + ↪$"},
+		{"code_keywords_untouched", `#if a and b or not c { $a and b$ }`, `#if a and b or not c { $a ∧ b$ }`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lv := scanOne(tc.in, nil)
+			if got := string(lv.DisplayText); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -106,7 +130,7 @@ func TestMathSubscriptOperatorAndCodeIdentifiers(t *testing.T) {
 		{
 			name: "subscript_operator_regression",
 			in:   "$integral_0^x + sum_i^n + sum_(i=1)^n + alpha_0 + beta_i + x^2_0 + a_alpha + #in_set$",
-			want: "$∫₀^x + ∑ᵢⁿ + ∑_(i=1)ⁿ + α₀ + βᵢ + x²₀ + a_α + #in_set$",
+			want: "$∫₀^x + ∑ᵢⁿ + ∑ᵢ₌₁ⁿ + α₀ + βᵢ + x²₀ + a_α + #in_set$",
 		},
 		{
 			name: "untouched_words",
@@ -190,6 +214,7 @@ func TestCoordinateRoundTripUTF8CombiningWideAndTabs(t *testing.T) {
 		"a\u0301\u0327 -- b\u0300",
 		"$alpha + \U0001D538$ ok",
 		"$integral_0^x + sum_i^n + #in_set + x^2_0$",
+		"$sum_(i=1)^n x^(n+1) + bb(R) + cal(L) + angle.l u, v angle.r$",
 	}
 
 	for _, line := range lines {

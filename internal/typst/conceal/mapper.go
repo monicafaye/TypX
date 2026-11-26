@@ -17,7 +17,15 @@ type Span struct {
 	BufStart int
 	BufEnd   int
 	Glyph    rune
+	Glyphs   []rune
 	Width    int
+}
+
+func (s Span) runes() []rune {
+	if len(s.Glyphs) > 0 {
+		return s.Glyphs
+	}
+	return []rune{s.Glyph}
 }
 
 // LineView holds the concealed display text and bidirectional coordinate maps
@@ -609,6 +617,11 @@ func matchMathToken(cells []charCell, i int, inMathContent []bool) (Span, bool) 
 	}
 	n := len(cells)
 
+	// 0. Math alphabet calls: bb(...) and cal(...).
+	if sp, ok := matchMathAlphabetCall(cells, i, inMathContent); ok {
+		return sp, true
+	}
+
 	// 1. Greedy longest-prefix lookup in curated mathBuckets.
 	if entries, ok := mathBuckets[cells[i].base]; ok {
 		for _, entry := range entries {
@@ -658,7 +671,14 @@ func matchMathToken(cells []charCell, i int, inMathContent []bool) (Span, bool) 
 		}
 	}
 
-	// 2. Single-character superscript (^c) or subscript (_c).
+	// 2. Parenthesized multi-character superscript ^(...) or subscript _(...).
+	if (cells[i].base == '^' || cells[i].base == '_') && i+3 < n && inMathContent[i+1] && isPlainRune(cells[i+1], '(') {
+		if sp, ok := matchParenScript(cells, i, inMathContent); ok {
+			return sp, true
+		}
+	}
+
+	// 3. Single-character superscript (^c) or subscript (_c).
 	if (cells[i].base == '^' || cells[i].base == '_') && i+1 < n && inMathContent[i+1] && len(cells[i+1].comb) == 0 {
 		var glyph rune
 		var ok bool
@@ -706,6 +726,108 @@ func matchMathToken(cells []charCell, i int, inMathContent []bool) (Span, bool) 
 		}
 	}
 
+	return Span{}, false
+}
+
+func makeMultiGlyphSpan(bufStart, bufEnd int, glyphs []rune) Span {
+	totalW := 0
+	for _, g := range glyphs {
+		w := runewidth.RuneWidth(g)
+		if w <= 0 {
+			w = 1
+		}
+		totalW += w
+	}
+	return Span{
+		BufStart: bufStart,
+		BufEnd:   bufEnd,
+		Glyph:    glyphs[0],
+		Glyphs:   glyphs,
+		Width:    totalW,
+	}
+}
+
+func matchMathAlphabetCall(cells []charCell, i int, inMathContent []bool) (Span, bool) {
+	n := len(cells)
+	if i > 0 {
+		if isMathWordRune(cells[i-1].base) {
+			return Span{}, false
+		}
+		if isPlainRune(cells[i-1], '.') && i > 1 && isMathWordRune(cells[i-2].base) {
+			return Span{}, false
+		}
+	}
+
+	var openIdx int
+	var alphabet map[rune]rune
+	switch {
+	case i+4 <= n && inMathContent[i+1] && inMathContent[i+2] &&
+		cellsMatchASCII(cells[i:i+3], "bb("):
+		openIdx = i + 2
+		alphabet = bbMap
+	case i+5 <= n && inMathContent[i+1] && inMathContent[i+2] && inMathContent[i+3] &&
+		cellsMatchASCII(cells[i:i+4], "cal("):
+		openIdx = i + 3
+		alphabet = calMap
+	default:
+		return Span{}, false
+	}
+
+	var glyphs []rune
+	for j := openIdx + 1; j < n && inMathContent[j]; j++ {
+		if len(cells[j].comb) != 0 {
+			return Span{}, false
+		}
+		r := cells[j].base
+		if r == ')' {
+			if len(glyphs) == 0 {
+				return Span{}, false
+			}
+			return makeMultiGlyphSpan(i, j+1, glyphs), true
+		}
+		if r == ' ' {
+			continue
+		}
+		mapped, ok := alphabet[r]
+		if !ok {
+			return Span{}, false
+		}
+		glyphs = append(glyphs, mapped)
+	}
+	return Span{}, false
+}
+
+func matchParenScript(cells []charCell, i int, inMathContent []bool) (Span, bool) {
+	leftOK := i == 0 || (!isPlainRune(cells[i-1], '^') && !isPlainRune(cells[i-1], '_') && !isPlainRune(cells[i-1], '\\'))
+	if !leftOK {
+		return Span{}, false
+	}
+	table := subParenMap
+	if cells[i].base == '^' {
+		table = superParenMap
+	}
+	n := len(cells)
+	var glyphs []rune
+	for j := i + 2; j < n && inMathContent[j]; j++ {
+		if len(cells[j].comb) != 0 {
+			return Span{}, false
+		}
+		r := cells[j].base
+		if r == ')' {
+			if len(glyphs) == 0 {
+				return Span{}, false
+			}
+			return makeMultiGlyphSpan(i, j+1, glyphs), true
+		}
+		if r == ' ' {
+			continue
+		}
+		mapped, ok := table[r]
+		if !ok {
+			return Span{}, false
+		}
+		glyphs = append(glyphs, mapped)
+	}
 	return Span{}, false
 }
 
@@ -821,8 +943,10 @@ func ScanLine(line []byte, lineState typst.LineState, mathSpans []typst.MathSpan
 		if spanIdx < len(spans) && spans[spanIdx].BufStart == i {
 			sp := spans[spanIdx]
 			visStart := len(displayText)
-			displayText = append(displayText, sp.Glyph)
-			visToBuf = append(visToBuf, sp.BufStart)
+			for _, g := range sp.runes() {
+				displayText = append(displayText, g)
+				visToBuf = append(visToBuf, sp.BufStart)
+			}
 			for k := sp.BufStart; k < sp.BufEnd; k++ {
 				bufToVis[k] = visStart
 			}

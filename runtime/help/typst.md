@@ -19,8 +19,15 @@ markup typography into Unicode glyphs on non-cursor lines:
   `<=>` -> `⇔`, `|->` -> `↦`, `<=` -> `≤`, `>=` -> `≥`, `!=` -> `≠`, `approx` -> `≈`,
   `equiv` -> `≡`, `in` -> `∈`, `subset.eq` -> `⊆`, `union` -> `∪`, `inter` / `sect` -> `∩`,
   `forall` -> `∀`, `exists` -> `∃`, `nabla` -> `∇`, `partial` -> `∂`, `infinity` -> `∞`.
+- **Logic, proof & delimiters**: `and` -> `∧`, `or` -> `∨`, `not` -> `¬`,
+  `tack.r` -> `⊢`, `models` -> `⊨`, `therefore` -> `∴`, `qed` -> `∎`,
+  `angle.l` / `angle.r` -> `⟨`/`⟩`, `floor.l` / `floor.r` -> `⌊`/`⌋`,
+  `ceil.l` / `ceil.r` -> `⌈`/`⌉`.
 - **Big operators**: `sum` -> `∑`, `product` -> `∏`, `integral` -> `∫`.
-- **Simple super/subscripts**: `^0`..`^9`, `^i`, `^n`, `_0`..`_9`, `_i`, `_j`, `_n`.
+- **Math alphabets**: `bb(R)` -> `ℝ`, `bb(1)` -> `𝟙`, `cal(L)` -> `ℒ`.
+- **Super/subscripts**: single-character (`^0`..`^9`, `^i`, `^m`, `^n`, `_0`..`_9`,
+  `_i`, `_j`, `_k`, `_m`, `_n`) and parenthesized expressions (`^(n+1)` -> `ⁿ⁺¹`,
+  `_(i=1)` -> `ᵢ₌₁`).
 - **Markup typography**: `---` -> `—`, `--` -> `–`, `...` -> `…`.
 
 Key UX guarantees:

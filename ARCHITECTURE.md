@@ -173,7 +173,7 @@ To keep upstream `micro` diffs minimal and localized, TypX interacts with `micro
 ### 5.1 Lexical Mode & Concealment (`internal/typst`, `internal/typst/conceal`)
 
 - **Interface**: `typst.ScanLineState` / `DetectModeAtLine` / `DetectModeAt` (cached per-line lexical state: `Markup`, `Math`, `Code`, `Raw`); `conceal.BuildLineView` returning `LineView` with `VisualToBuf` / `BufToVisual`; `conceal.ToggleSetting`.
-- **Implementation**: Line-entry state caching tracks multi-line `$ ... $` blocks and raw fences in `O(1)` per visible line. Longest-match symbol scanning covers Unicode math symbols, operators (`->`, `<=`, `!=`), and compound dotted Typst identifiers (`in.not`, `subset.eq.not`, `inter.big`) while enforcing non-identifier boundaries so words like `sin`, `index`, or `summary` stay intact.
+- **Implementation**: Line-entry state caching tracks multi-line `$ ... $` blocks and raw fences in `O(1)` per visible line. Longest-match symbol scanning covers Unicode math symbols, operators (`->`, `<=`, `!=`, `and`, `or`, `tack.r`, `angle.l`, `floor.l`, `ceil.l`), compound dotted Typst identifiers (`in.not`, `subset.eq.not`, `inter.big`), math alphabet calls (`bb(...)`, `cal(...)`), and single or parenthesized multi-character scripts (`^(n+1)`, `_(i=1)`) via multi-rune `Span.Glyphs` while enforcing non-identifier boundaries so words like `sin`, `index`, or `summary` stay intact.
 - **Invariants**:
   - Concealment is strictly display-only and never mutates buffer bytes.
   - Active cursor line (default `typst.concealMode == "line"`) or active token (`"token"`) bypasses concealment.
