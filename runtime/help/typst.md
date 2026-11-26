@@ -178,15 +178,17 @@ and `tinymist` discovery, or run `typx --no-lsp file.typ` for offline editing.
 
 ### LSP & Preview Commands
 
-- `:preview [inline|kitty|sixel|browser|focus|invert|trim|stop]` (`Alt-p`):
+- `:preview [inline|kitty|sixel|browser|focus|page <n>|sync|invert|trim|stop]` (`Alt-p`):
   Toggle live preview. With no arguments, `typst.previewMode` (`"auto"` by
   default) uses the right-docked inline pane when Kitty graphics or Sixel is
   supported and otherwise launches `tinymist` browser preview (auto-opening the
   OS browser when `typst.previewOpenBrowser` is `true`). Use `inline` or
   `browser` to toggle a specific mode, `kitty` or `sixel` to open or switch the
-  inline graphics protocol, `focus` to focus the inline pane, `invert` / `trim`
-  to toggle dark-mode inversion or margin trimming, and `stop` to close any
-  active preview.
+  inline graphics protocol, `focus` to focus the inline pane, `page <n>` (or
+  `:preview <n>`) to jump directly to a page, `sync` to toggle cursor-to-preview
+  scroll sync, `invert` / `trim` to toggle dark-mode inversion or margin
+  trimming, and `stop` to close any active preview. Inside `tmux`, enable
+  `set -g allow-passthrough on` for Kitty graphics passthrough.
 - `:lsp-complete` (`Ctrl-Space`): Trigger `tinymist` autocompletion (also
   auto-suggests non-destructively on `#`, `@`, `.`, `<` when `typst.autoComplete`
   is enabled; press `Tab` to accept and navigate snippet tabstops).
@@ -236,6 +238,7 @@ When the right-docked inline preview pane is opened with `:preview inline`,
 - `<` / `>`: Widen or narrow the docked preview pane.
 - `t`: Toggle dark-mode color inversion (`typst.previewInvert`).
 - `m`: Toggle page margin trimming (`typst.previewTrimMargins`).
+- `f`: Toggle cursor-to-preview scroll sync (`typst.previewSyncCursor`).
 - `r`: Force recompile and redraw preview.
 - `Esc`, `Enter`, `Tab`, or `Ctrl-w`: Return focus to the editor pane.
 - `q` or `Alt-p`: Close the preview pane.
@@ -261,6 +264,7 @@ See `> help options` for the full list of editor options. TypX-specific keys:
 - `typst.previewPPI` (default `144`): Render resolution in PPI (`72` to `300`) for inline preview pages.
 - `typst.previewInvert` (default `false`): Invert colors in the in-terminal preview for dark terminals.
 - `typst.previewTrimMargins` (default `false`): Trim excess outer page margins in the in-terminal preview.
+- `typst.previewSyncCursor` (default `false`): Follow editor cursor line movements in the in-terminal preview (`f` or `:preview sync` toggles live).
 - `typst.previewOpenBrowser` (default `true`): Auto-open preview URL in browser when browser preview starts.
 - `typst.outlineWidth` (default `30`): Preferred Outline sidebar width (columns).
 - `typst.outlineShowLabels` (default `false`): Show standalone `<labels>` in Outline.

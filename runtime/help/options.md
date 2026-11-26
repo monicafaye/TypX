@@ -108,6 +108,12 @@ globally, via CLI flag, or in an `"ft:typst"` block in `settings.json`.
 
     default value: `false`
 
+* `typst.previewSyncCursor`: `global only`. Automatically scroll the docked
+   in-terminal preview to follow editor cursor line movements (toggle live with
+   `f` in the preview pane or `:preview sync`).
+
+    default value: `false`
+
 * `typst.previewOpenBrowser`: `global only`. Automatically open the local
    `tinymist` preview URL in the OS default browser when browser preview
    starts.

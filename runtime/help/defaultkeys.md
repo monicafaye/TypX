@@ -54,6 +54,7 @@ with `:preview focus`:
 | < / >                            | Widen / narrow the docked preview pane                |
 | t                                | Toggle dark-mode color inversion (`typst.previewInvert`) |
 | m                                | Toggle page margin trimming (`typst.previewTrimMargins`) |
+| f                                | Toggle cursor-to-preview scroll sync (`typst.previewSyncCursor`) |
 | r                                | Force recompile and redraw preview                    |
 | Esc / Enter / Tab / Ctrl-w       | Return focus to the editor pane                       |
 | q / Alt-p                        | Close the preview pane                                |

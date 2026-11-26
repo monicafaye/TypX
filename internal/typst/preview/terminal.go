@@ -33,12 +33,13 @@ func (p GraphicsProtocol) String() string {
 
 // TerminalCaps describes detected inline graphics capabilities and cell geometry.
 type TerminalCaps struct {
-	Sixel  bool
-	Kitty  bool
-	CellW  int
-	CellH  int
-	Source string
-	Probed bool
+	Sixel           bool
+	Kitty           bool
+	TmuxPassthrough bool
+	CellW           int
+	CellH           int
+	Source          string
+	Probed          bool
 }
 
 // Protocol returns the preferred inline graphics protocol supported by the terminal.
@@ -66,14 +67,31 @@ const (
 	// Query cell size (CSI 16t / 14t) and Primary Device Attributes (DA1, CSI c),
 	// optionally preceded by a 1x1 Kitty graphics test action (APC a=q).
 	baseProbeQuery     = "\x1b[16t\x1b[14t\x1b[c"
-	terminalProbeQuery = "\x1b[16t\x1b[14t\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"
+	kittyProbeAPC      = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"
+	terminalProbeQuery = "\x1b[16t\x1b[14t" + kittyProbeAPC + "\x1b[c"
+	tmuxProbeQuery     = "\x1b[16t\x1b[14t\x1bPtmux;\x1b\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\x1b\\\x1b\\\x1b[c"
 )
 
+func inTmux() bool {
+	return os.Getenv("TMUX") != "" && os.Getenv("STY") == ""
+}
+
+// UseTmuxPassthrough reports whether emitted Kitty graphics sequences should be
+// wrapped in a tmux DCS passthrough envelope (\x1bPtmux;...\x1b\\).
+func UseTmuxPassthrough() bool {
+	return Caps().TmuxPassthrough || inTmux()
+}
+
 func probeQueryForEnv() string {
-	// Skip the Kitty APC query inside tmux/GNU Screen (where raw APC is blocked
-	// or mishandled) and macOS Terminal.app (which does not support Kitty graphics).
-	if os.Getenv("TMUX") != "" || os.Getenv("STY") != "" || os.Getenv("TERM_PROGRAM") == "Apple_Terminal" {
+	// Skip the Kitty APC query inside GNU Screen and macOS Terminal.app.
+	if os.Getenv("STY") != "" || os.Getenv("TERM_PROGRAM") == "Apple_Terminal" {
 		return baseProbeQuery
+	}
+	// Inside tmux, wrap the Kitty APC probe in a tmux DCS passthrough envelope
+	// so outer terminals respond when `allow-passthrough` is enabled, while
+	// tmux silently drops the envelope when passthrough is off.
+	if inTmux() {
+		return tmuxProbeQuery
 	}
 	return terminalProbeQuery
 }
@@ -178,11 +196,15 @@ func Check(w io.Writer) {
 	if !c.Probed {
 		c = ProbeTerminal()
 	}
+	viaTmux := ""
+	if c.TmuxPassthrough {
+		viaTmux = " via tmux passthrough"
+	}
 	switch {
 	case c.Kitty && c.Sixel:
-		fmt.Fprintf(w, "Inline preview: [OK] Kitty graphics supported (Sixel also available; cell %dx%dpx via %s)\n", c.CellW, c.CellH, c.Source)
+		fmt.Fprintf(w, "Inline preview: [OK] Kitty graphics supported%s (Sixel also available; cell %dx%dpx via %s)\n", viaTmux, c.CellW, c.CellH, c.Source)
 	case c.Kitty:
-		fmt.Fprintf(w, "Inline preview: [OK] Kitty graphics supported (cell %dx%dpx via %s)\n", c.CellW, c.CellH, c.Source)
+		fmt.Fprintf(w, "Inline preview: [OK] Kitty graphics supported%s (cell %dx%dpx via %s)\n", viaTmux, c.CellW, c.CellH, c.Source)
 	case c.Sixel:
 		fmt.Fprintf(w, "Inline preview: [OK] Sixel supported (cell %dx%dpx via %s)\n", c.CellW, c.CellH, c.Source)
 	default:

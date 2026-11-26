@@ -174,6 +174,77 @@ func TestParseProbeResponseKittyAndDual(t *testing.T) {
 	if !strings.Contains(buf.String(), "No inline graphics protocol detected") {
 		t.Fatalf("unexpected Check output for no graphics: %q", buf.String())
 	}
+
+	buf.Reset()
+	SetCapsForTest(TerminalCaps{Kitty: true, TmuxPassthrough: true, CellW: 10, CellH: 20, Source: "CSI16t", Probed: true})
+	Check(&buf)
+	if !strings.Contains(buf.String(), "via tmux passthrough") {
+		t.Fatalf("expected tmux passthrough note in Check output, got %q", buf.String())
+	}
+}
+
+func TestTmuxPassthroughEncodingAndLifecycle(t *testing.T) {
+	// WrapTmuxPassthrough doubles every ESC inside a \x1bPtmux;...\x1b\\ DCS wrapper.
+	wrapped := string(WrapTmuxPassthrough([]byte(kittyDeleteSeq)))
+	wantDelete := "\x1bPtmux;\x1b\x1b_Ga=d,d=I,i=1,q=2\x1b\x1b\\\x1b\\"
+	if wrapped != wantDelete {
+		t.Fatalf("WrapTmuxPassthrough(delete) = %q, want %q", wrapped, wantDelete)
+	}
+
+	// EncodeKittyWithPassthrough wraps each chunk individually.
+	img := makeGradientTestImage(220, 220)
+	seq := EncodeKittyWithPassthrough(img, true)
+	if len(seq) == 0 {
+		t.Fatal("EncodeKittyWithPassthrough returned empty payload")
+	}
+	if !bytes.HasPrefix(seq, []byte("\x1bPtmux;\x1b\x1b_Ga=T,f=100,i=1,p=1,q=2,C=1,")) {
+		t.Fatalf("unexpected passthrough Kitty prefix: %q", string(seq[:min(len(seq), 80)]))
+	}
+	if !bytes.HasSuffix(seq, []byte("\x1b\x1b\\\x1b\\")) {
+		t.Fatalf("unexpected passthrough Kitty suffix")
+	}
+	// Every chunk begins with \x1bPtmux;\x1b\x1b_G.
+	rawChunks := bytes.Count(seq, []byte("_G"))
+	tmuxChunks := bytes.Count(seq, []byte("\x1bPtmux;\x1b\x1b_G"))
+	if rawChunks < 2 || rawChunks != tmuxChunks {
+		t.Fatalf("expected multi-chunk passthrough wrapping: raw=%d tmux=%d", rawChunks, tmuxChunks)
+	}
+
+	// Full PreviewPane lifecycle with TmuxPassthrough=true wraps Kitty frames and deletes
+	// while keeping cursor positioning and DEC Mode 2026 unwrapped.
+	t.Setenv("TMUX", "")
+	_, bp := initPreviewTestEnv(t)
+	SetCapsForTest(TerminalCaps{Kitty: true, TmuxPassthrough: true, CellW: 10, CellH: 20, Source: "CSI16t", Probed: true})
+	t.Cleanup(func() { SetCapsForTest(TerminalCaps{}) })
+
+	fc := &fakeCompiler{pages: 2}
+	SetCompiler(fc)
+	var outBuf bytes.Buffer
+	SetOutput(&outBuf)
+	Init()
+
+	pp, ok := Open(bp, false)
+	if !ok || pp == nil {
+		t.Fatal("preview.Open failed with TmuxPassthrough")
+	}
+	waitForCondition(t, 2*time.Second, func() bool {
+		return !pp.IsCompiling() && pp.viewport != nil
+	})
+	defaultManager.postShow()
+	frameOut := outBuf.String()
+	if !strings.Contains(frameOut, "\x1b[?2026h") {
+		t.Fatal("expected unwrapped DEC Mode 2026 begin in tmux passthrough frame")
+	}
+	if !strings.Contains(frameOut, "\x1bPtmux;\x1b\x1b_Ga=T,") {
+		t.Fatal("expected tmux-wrapped Kitty frame transmit")
+	}
+
+	outBuf.Reset()
+	CloseForTab(bp.Tab())
+	defaultManager.postShow()
+	if !strings.Contains(outBuf.String(), wantDelete) {
+		t.Fatalf("expected tmux-wrapped Kitty delete on close, got %q", outBuf.String())
+	}
 }
 
 func TestEnvIndicatesKittyRespectsMultiplexers(t *testing.T) {
@@ -204,15 +275,21 @@ func TestEnvIndicatesKittyRespectsMultiplexers(t *testing.T) {
 		t.Fatalf("expected full Kitty+DA1 probe query on Ghostty, got %q", q)
 	}
 
-	// tmux and macOS Terminal.app must omit the Kitty APC query.
+	// macOS Terminal.app and GNU Screen must omit the Kitty APC query, while
+	// tmux wraps the Kitty APC query in a DCS passthrough envelope.
 	t.Setenv("TERM_PROGRAM", "Apple_Terminal")
 	if q := probeQueryForEnv(); q != baseProbeQuery {
 		t.Fatalf("expected base probe query on Apple_Terminal, got %q", q)
 	}
 	t.Setenv("TERM_PROGRAM", "")
-	t.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+	t.Setenv("STY", "1234.pts-0.host")
 	if q := probeQueryForEnv(); q != baseProbeQuery {
-		t.Fatalf("expected base probe query inside tmux, got %q", q)
+		t.Fatalf("expected base probe query inside GNU Screen, got %q", q)
+	}
+	t.Setenv("STY", "")
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+	if q := probeQueryForEnv(); q != tmuxProbeQuery {
+		t.Fatalf("expected tmux passthrough probe query inside tmux, got %q", q)
 	}
 
 	// dumb and linux terminals must skip raw terminal probing entirely.

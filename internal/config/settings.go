@@ -168,6 +168,7 @@ var DefaultGlobalOnlySettings = map[string]any{
 	"typst.previewOpenBrowser": true,
 	"typst.previewPPI":         float64(144),
 	"typst.previewProtocol":    "auto",
+	"typst.previewSyncCursor":  false,
 	"typst.previewTrimMargins": false,
 	"typst.previewWidth":       float64(48),
 	"typst.signatureHelp":      true,

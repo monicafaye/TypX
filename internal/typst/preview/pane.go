@@ -46,6 +46,9 @@ const (
 
 	// minEditDebounceMs prevents rapid typing from spawning overlapping compiles.
 	minEditDebounceMs = 300
+
+	// cursorSyncDebounceMs debounces cursor-to-preview scroll sync on line moves.
+	cursorSyncDebounceMs = 120
 )
 
 var spinnerFrames = [...]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -94,6 +97,7 @@ type PreviewPane struct {
 	zoomPct        int
 	invert         bool
 	trimMargins    bool
+	syncCursor     bool
 	pendingSection *SectionTarget
 
 	// Temporary override deck state (used by Template Gallery live preview).
@@ -129,11 +133,12 @@ type PreviewPane struct {
 	vpTargetW        int
 	vpTargetH        int
 
-	mu            sync.Mutex
-	closed        bool
-	gen           uint64
-	debounceTimer *time.Timer
-	compileCancel context.CancelFunc
+	mu              sync.Mutex
+	closed          bool
+	gen             uint64
+	debounceTimer   *time.Timer
+	cursorSyncTimer *time.Timer
+	compileCancel   context.CancelFunc
 }
 
 var (
@@ -151,6 +156,7 @@ func newPreviewPane(tab *action.Tab, target *action.BufPane, mgr *Manager) *Prev
 		zoomPct:     100,
 		invert:      readGlobalBool("typst.previewInvert", false),
 		trimMargins: readGlobalBool("typst.previewTrimMargins", false),
+		syncCursor:  readGlobalBool("typst.previewSyncCursor", false),
 		lastEmitX:   -1,
 		lastEmitY:   -1,
 	}
@@ -173,6 +179,7 @@ func (pp *PreviewPane) Relocate() bool                           { return true }
 func (pp *PreviewPane) IsActive() bool                           { return pp.active }
 func (pp *PreviewPane) IsInverted() bool                         { return pp.invert }
 func (pp *PreviewPane) IsTrimMargins() bool                      { return pp.trimMargins }
+func (pp *PreviewPane) IsSyncCursor() bool                       { return pp.syncCursor }
 
 func (pp *PreviewPane) SetActive(b bool) {
 	pp.active = b
@@ -217,6 +224,10 @@ func (pp *PreviewPane) Close() {
 	if pp.debounceTimer != nil {
 		pp.debounceTimer.Stop()
 		pp.debounceTimer = nil
+	}
+	if pp.cursorSyncTimer != nil {
+		pp.cursorSyncTimer.Stop()
+		pp.cursorSyncTimer = nil
 	}
 	if pp.compileCancel != nil {
 		pp.compileCancel()
@@ -424,6 +435,28 @@ func (pp *PreviewPane) ToggleTrimMargins() {
 	screen.Redraw()
 }
 
+// ToggleSyncCursor toggles cursor-to-preview scroll synchronization on this pane.
+// When enabled on a deck compiled without PDF anchors, it schedules an anchor-enabled
+// recompile and immediately syncs to the active cursor line.
+func (pp *PreviewPane) ToggleSyncCursor() bool {
+	pp.syncCursor = !pp.syncCursor
+	if pp.syncCursor {
+		if pp.deck != nil && pp.deck.anchors == nil && !pp.compiling && !pp.overrideActive {
+			pp.ScheduleCompile(true)
+		}
+		pp.syncToTargetCursorNow()
+	} else {
+		pp.mu.Lock()
+		if pp.cursorSyncTimer != nil {
+			pp.cursorSyncTimer.Stop()
+			pp.cursorSyncTimer = nil
+		}
+		pp.mu.Unlock()
+	}
+	screen.Redraw()
+	return pp.syncCursor
+}
+
 func (pp *PreviewPane) hasFooter() bool {
 	return pp.view.Height >= 3 && readGlobalBool("statusline", true)
 }
@@ -584,6 +617,112 @@ func (pp *PreviewPane) JumpPageDelta(delta int) bool {
 	return pp.rebuildViewport(false)
 }
 
+// JumpToPage jumps directly to the top of the 1-based page number (clamped to
+// [1, PageCount]). Returns the resolved 1-based page, total page count, and
+// whether a rendered deck was available.
+func (pp *PreviewPane) JumpToPage(pageNum int) (int, int, bool) {
+	pp.pendingSection = nil
+	deck := pp.activeDeck()
+	if deck == nil || deck.PageCount() == 0 {
+		return 0, 0, false
+	}
+	total := deck.PageCount()
+	if pageNum < 1 {
+		pageNum = 1
+	}
+	if pageNum > total {
+		pageNum = total
+	}
+	dstW, viewH := pp.targetPixelSize()
+	if dstW > 0 {
+		deck.ComputeLayout(dstW, pp.trimMargins)
+	}
+	nextY := deck.PageTop(pageNum - 1)
+	maxY := deck.TotalHeight() - viewH
+	if maxY < 0 {
+		maxY = 0
+	}
+	if nextY > maxY {
+		nextY = maxY
+	}
+	if nextY < 0 {
+		nextY = 0
+	}
+	if nextY != pp.scrollY || pp.viewport == nil {
+		pp.scrollY = nextY
+		if pp.rebuildViewport(false) {
+			screen.Redraw()
+		}
+	}
+	return pageNum, total, true
+}
+
+// ScrollToCursorLine smoothly scrolls the inline preview to keep the given
+// 0-based editor line comfortably visible, avoiding redundant graphics redraws
+// when the target coordinate already lies inside the visible band.
+func (pp *PreviewPane) ScrollToCursorLine(line, totalLines int, sections []SectionEntry) bool {
+	if pp.overrideActive || pp.deck == nil || pp.deck.PageCount() == 0 {
+		return false
+	}
+	dstW, viewH := pp.targetPixelSize()
+	if dstW <= 0 || viewH <= 0 {
+		return false
+	}
+	target := SectionTarget{
+		Kind:        SectionLabel,
+		Line:        line,
+		TotalLines:  totalLines,
+		AllSections: sections,
+	}
+	for _, s := range sections {
+		if s.Line == line {
+			target.Kind = s.Kind
+			target.Level = s.Level
+			target.Title = s.Title
+			target.Label = s.Label
+			break
+		}
+	}
+	virtualY, maxScrollY, ok := pp.deck.ResolveCursorVirtualY(target, dstW, viewH, pp.invert, pp.trimMargins)
+	if !ok {
+		return false
+	}
+	if pp.viewport != nil {
+		topMargin := viewH / 8
+		botMargin := (viewH * 7) / 8
+		if virtualY >= pp.scrollY+topMargin && virtualY <= pp.scrollY+botMargin {
+			return false
+		}
+	}
+	nextY := clampScrollY(virtualY-(viewH/3), maxScrollY)
+	if pp.viewport != nil && nextY == pp.scrollY {
+		return false
+	}
+	pp.scrollY = nextY
+	if pp.rebuildViewport(false) {
+		screen.Redraw()
+		return true
+	}
+	return false
+}
+
+func (pp *PreviewPane) syncToTargetCursorNow() {
+	if pp.overrideActive || !pp.syncCursor {
+		return
+	}
+	target := pp.resolveTarget()
+	if target == nil || target.Buf == nil || target.Cursor == nil || !target.Buf.IsTypst() {
+		return
+	}
+	var sections []SectionEntry
+	if pp.mgr != nil {
+		if fn := pp.mgr.getSectionsProvider(); fn != nil {
+			sections = fn(target.Buf)
+		}
+	}
+	pp.ScrollToCursorLine(target.Cursor.Loc.Y, target.Buf.LinesNum(), sections)
+}
+
 // Target returns the linked editor BufPane, if still open in this tab.
 func (pp *PreviewPane) Target() *action.BufPane {
 	return pp.resolveTarget()
@@ -609,6 +748,11 @@ func (pp *PreviewPane) ScrollToSection(target SectionTarget) bool {
 	}
 	if pp.compiling {
 		pp.pendingSection = &cp
+	} else if pp.deck != nil && pp.deck.anchors == nil && !pp.overrideActive {
+		// Deck was compiled with SkipAnchors=true; jump proportionally now and
+		// trigger a background anchor-enabled compile to snap to the exact PDF anchor.
+		pp.pendingSection = &cp
+		pp.ScheduleCompile(true)
 	} else {
 		pp.pendingSection = nil
 	}
@@ -800,12 +944,20 @@ func (pp *PreviewPane) startCompileNow() {
 		ppi = 300
 	}
 
+	needAnchors := pp.pendingSection != nil || pp.syncCursor
+	if !needAnchors && pp.mgr != nil {
+		if fn := pp.mgr.getAnchorNeedChecker(); fn != nil && fn(pp.tab) {
+			needAnchors = true
+		}
+	}
+
 	req := CompileRequest{
-		FilePath: absPath,
-		RootDir:  rootDir,
-		Content:  content,
-		Modified: modified,
-		PPI:      ppi,
+		FilePath:    absPath,
+		RootDir:     rootDir,
+		Content:     content,
+		Modified:    modified,
+		PPI:         ppi,
+		SkipAnchors: !needAnchors,
 	}
 
 	compiler := pp.mgr.getCompiler()
@@ -1162,6 +1314,9 @@ func (pp *PreviewPane) drawFooter(y int) {
 		if pp.trimMargins {
 			flags += " trim"
 		}
+		if pp.syncCursor {
+			flags += " sync"
+		}
 		if pp.pinnedSubfileDirty {
 			flags += " (save to update)"
 		}
@@ -1262,7 +1417,7 @@ func (pp *PreviewPane) emitFrameIfDirty(out io.Writer, wrapSync bool) {
 	buf.WriteString("\x1b[?25l") // hide cursor during graphics draw
 	if pp.viewport.Protocol == ProtocolKitty {
 		if pp.mgr != nil && (pp.mgr.kittyActive || pp.mgr.kittyDeletePending) {
-			buf.WriteString(kittyDeleteSeq)
+			buf.WriteString(kittyDeleteSequence(UseTmuxPassthrough()))
 		}
 		fmt.Fprintf(&buf, "\x1b[%d;%dH", topRow, leftCol)
 		buf.Write(pp.viewport.Payload)
@@ -1272,7 +1427,7 @@ func (pp *PreviewPane) emitFrameIfDirty(out io.Writer, wrapSync bool) {
 		}
 	} else {
 		if pp.mgr != nil && (pp.mgr.kittyActive || pp.mgr.kittyDeletePending) {
-			buf.WriteString(kittyDeleteSeq)
+			buf.WriteString(kittyDeleteSequence(UseTmuxPassthrough()))
 			pp.mgr.kittyActive = false
 			pp.mgr.kittyDeletePending = false
 		}
@@ -1440,6 +1595,8 @@ func (pp *PreviewPane) HandleEvent(event tcell.Event) {
 				pp.ToggleInvert()
 			case 'm', 'M':
 				pp.ToggleTrimMargins()
+			case 'f', 'F':
+				pp.ToggleSyncCursor()
 			case 'r', 'R':
 				pp.frameDirty = true
 				pp.clearPending = true
@@ -1519,6 +1676,14 @@ func findNodeParent(n *views.Node, id uint64) (*views.Node, int) {
 // given buffer path. Returning "" uses the buffer's own path.
 type MainFileResolverFunc func(bufPath string) string
 
+// AnchorNeedCheckerFunc reports whether tab currently needs PDF anchors
+// (for example, when the Document Outline sidebar is open in that tab).
+type AnchorNeedCheckerFunc func(tab *action.Tab) bool
+
+// SectionsProviderFunc extracts ordered document sections for cursor-to-preview
+// scroll synchronization without coupling preview to the outline package.
+type SectionsProviderFunc func(b *buffer.Buffer) []SectionEntry
+
 // Manager coordinates per-tab docked PreviewPanes, compiler wiring, buffer
 // observers, resize handling, and post-show inline graphics emission.
 type Manager struct {
@@ -1530,11 +1695,13 @@ type Manager struct {
 	kittyActive        bool
 	kittyDeletePending bool
 
-	cfgMu            sync.RWMutex
-	compiler         Compiler
-	rootResolver     RootResolverFunc
-	mainFileResolver MainFileResolverFunc
-	output           io.Writer // nil = auto (os.Stdout when not SimulationScreen)
+	cfgMu             sync.RWMutex
+	compiler          Compiler
+	rootResolver      RootResolverFunc
+	mainFileResolver  MainFileResolverFunc
+	anchorNeedChecker AnchorNeedCheckerFunc
+	sectionsProvider  SectionsProviderFunc
+	output            io.Writer // nil = auto (os.Stdout when not SimulationScreen)
 }
 
 var (
@@ -1583,6 +1750,18 @@ func SetRootResolver(fn RootResolverFunc) {
 // SetMainFileResolver configures optional resolution of a pinned main .typ file.
 func SetMainFileResolver(fn MainFileResolverFunc) {
 	defaultManager.setMainFileResolver(fn)
+}
+
+// SetAnchorNeedChecker configures an optional predicate reporting whether a tab
+// requires PDF anchor extraction during background preview compiles.
+func SetAnchorNeedChecker(fn AnchorNeedCheckerFunc) {
+	defaultManager.setAnchorNeedChecker(fn)
+}
+
+// SetSectionsProvider configures an optional outline section extractor used for
+// inline cursor-to-preview scroll synchronization.
+func SetSectionsProvider(fn SectionsProviderFunc) {
+	defaultManager.setSectionsProvider(fn)
 }
 
 // NotifyMainFileChanged triggers a recompile on all open document preview panes.
@@ -1663,6 +1842,32 @@ func (m *Manager) setMainFileResolver(fn MainFileResolverFunc) {
 	m.cfgMu.Unlock()
 }
 
+func (m *Manager) setAnchorNeedChecker(fn AnchorNeedCheckerFunc) {
+	m.cfgMu.Lock()
+	m.anchorNeedChecker = fn
+	m.cfgMu.Unlock()
+}
+
+func (m *Manager) getAnchorNeedChecker() AnchorNeedCheckerFunc {
+	m.cfgMu.RLock()
+	fn := m.anchorNeedChecker
+	m.cfgMu.RUnlock()
+	return fn
+}
+
+func (m *Manager) setSectionsProvider(fn SectionsProviderFunc) {
+	m.cfgMu.Lock()
+	m.sectionsProvider = fn
+	m.cfgMu.Unlock()
+}
+
+func (m *Manager) getSectionsProvider() SectionsProviderFunc {
+	m.cfgMu.RLock()
+	fn := m.sectionsProvider
+	m.cfgMu.RUnlock()
+	return fn
+}
+
 func (m *Manager) resolveMainFile(bufPath string) string {
 	m.cfgMu.RLock()
 	fn := m.mainFileResolver
@@ -1722,7 +1927,7 @@ func (m *Manager) deleteKittyNow(out io.Writer) {
 		return
 	}
 	EnableVTOutput()
-	_, _ = io.WriteString(out, kittyDeleteSeq)
+	_, _ = io.WriteString(out, kittyDeleteSequence(UseTmuxPassthrough()))
 }
 
 func (m *Manager) onPreFini() {
@@ -2033,7 +2238,7 @@ func (m *Manager) postShow() {
 			EnableVTOutput()
 			_, _ = io.WriteString(out, "\x1b[?2026h\x1b[?25l\x1b[0m\x1b[2J")
 			if m.kittyActive || m.kittyDeletePending {
-				_, _ = io.WriteString(out, kittyDeleteSeq)
+				_, _ = io.WriteString(out, kittyDeleteSequence(UseTmuxPassthrough()))
 				m.kittyActive = false
 				m.kittyDeletePending = false
 			}
@@ -2066,7 +2271,7 @@ func (m *Manager) postShow() {
 			m.kittyActive = false
 			if out != nil {
 				EnableVTOutput()
-				_, _ = io.WriteString(out, "\x1b[?2026h"+kittyDeleteSeq+"\x1b[?2026l")
+				_, _ = io.WriteString(out, "\x1b[?2026h"+kittyDeleteSequence(UseTmuxPassthrough())+"\x1b[?2026l")
 			}
 		}
 	}
@@ -2197,6 +2402,45 @@ func (m *Manager) onPaneFocus(tab *action.Tab, pane action.Pane) {
 		pp.scrollY = 0
 		pp.pendingSection = nil
 		pp.ScheduleCompile(true)
+	}
+}
+
+// OnCursorMove schedules a debounced cursor-to-preview scroll sync when
+// inline cursor sync is enabled on an open preview pane.
+func (m *Manager) OnCursorMove(b *buffer.Buffer, ev buffer.CursorEvent) {
+	if b == nil || !b.IsTypst() || ev.New.Y == ev.Old.Y {
+		return
+	}
+	for tab, pp := range m.panes {
+		if m.paneForTab(tab) == nil || pp.overrideActive || !pp.syncCursor {
+			continue
+		}
+		target := pp.resolveTarget()
+		if target == nil || target.Buf == nil || target.Buf.SharedBuffer != b.SharedBuffer {
+			continue
+		}
+		pane := pp
+		pane.mu.Lock()
+		if pane.closed {
+			pane.mu.Unlock()
+			continue
+		}
+		if pane.cursorSyncTimer != nil {
+			pane.cursorSyncTimer.Stop()
+		}
+		gen := pane.gen
+		pane.cursorSyncTimer = time.AfterFunc(cursorSyncDebounceMs*time.Millisecond, func() {
+			action.EnqueueUI(func() {
+				pane.mu.Lock()
+				stale := pane.closed || pane.gen != gen
+				pane.cursorSyncTimer = nil
+				pane.mu.Unlock()
+				if !stale {
+					pane.syncToTargetCursorNow()
+				}
+			})
+		})
+		pane.mu.Unlock()
 	}
 }
 

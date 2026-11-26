@@ -126,6 +126,26 @@ func Init() {
 		})
 		preview.SetRootResolver(lsp.FindProjectRoot)
 		preview.SetMainFileResolver(func(string) string { return lsp.PinnedMain() })
+		preview.SetAnchorNeedChecker(func(tab *action.Tab) bool {
+			return outline.PaneForTab(tab) != nil
+		})
+		preview.SetSectionsProvider(func(b *buffer.Buffer) []preview.SectionEntry {
+			if b == nil {
+				return nil
+			}
+			items := outline.ParseString(string(b.Bytes()), outline.ParseOptions{IncludeLabels: true})
+			entries := make([]preview.SectionEntry, len(items))
+			for i, it := range items {
+				entries[i] = preview.SectionEntry{
+					Kind:  convertOutlineKind(it.Kind),
+					Level: it.Level,
+					Title: it.Title,
+					Label: it.Label,
+					Line:  it.Line,
+				}
+			}
+			return entries
+		})
 		preview.Init()
 		lsp.SetInlinePreviewHandler(inlinePreviewAdapter{})
 		lsp.SetPinChangeHandler(func(string) { preview.NotifyMainFileChanged() })
@@ -225,6 +245,20 @@ func (inlinePreviewAdapter) ToggleTrim(tab *action.Tab) bool {
 	}
 	pp.ToggleTrimMargins()
 	return true
+}
+func (inlinePreviewAdapter) ToggleSync(tab *action.Tab) (bool, bool) {
+	pp := preview.PaneForTab(tab)
+	if pp == nil {
+		return false, false
+	}
+	return pp.ToggleSyncCursor(), true
+}
+func (inlinePreviewAdapter) JumpToPage(tab *action.Tab, page int) (int, int, bool) {
+	pp := preview.PaneForTab(tab)
+	if pp == nil {
+		return 0, 0, false
+	}
+	return pp.JumpToPage(page)
 }
 
 func syncPreviewToOutlineItem(bp *action.BufPane, item outline.Item, allItems []outline.Item) {

@@ -392,6 +392,7 @@ func previewBottomBarContext(pp *preview.PreviewPane) display.BottomBarContext {
 		{Key: "+/-", Label: "Zoom", Priority: 3},
 		{Key: "t", Label: "Dark", Action: "pane:t", Priority: 0, Active: pp.IsInverted()},
 		{Key: "m", Label: "Trim", Action: "pane:m", Priority: 1, Active: pp.IsTrimMargins()},
+		{Key: "f", Label: "Sync", Action: "pane:f", Priority: 2, Active: pp.IsSyncCursor()},
 		{Key: "r", Label: "Reload", Action: "pane:r", Priority: 3},
 		{Key: "Esc", Label: "Editor", Action: "pane:Esc", Priority: 0},
 		{Key: "q", Label: "Close", Action: "pane:q", Priority: 0, AlignRight: true},

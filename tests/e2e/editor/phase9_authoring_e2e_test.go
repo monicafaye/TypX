@@ -13,6 +13,7 @@ import (
 
 	"github.com/monicafaye/TypX/internal/action"
 	"github.com/monicafaye/TypX/internal/buffer"
+	"github.com/monicafaye/TypX/internal/typst/preview"
 	"github.com/monicafaye/TypX/tests/e2e/harness"
 )
 
@@ -91,4 +92,47 @@ func TestE2E_SignatureHelpAndAutoComplete(t *testing.T) {
 		return action.InfoBar != nil && strings.Contains(action.InfoBar.Msg, "»body: content«")
 	})
 	require.True(t, gotSig2, "expected Alt+H signature help for second parameter; got %q", action.InfoBar.Msg)
+}
+
+func TestE2E_PreviewSyncToggleAndPageCommand(t *testing.T) {
+	harness.RequirePhase23(t)
+	docPath := filepath.Join(t.TempDir(), "sync.typ")
+	require.NoError(t, os.WriteFile(docPath, []byte("= Intro\n\nBody\n"), 0644))
+
+	prevCaps := preview.Caps()
+	preview.SetCapsForTest(preview.TerminalCaps{Sixel: true, CellW: 10, CellH: 20, Source: "test", Probed: true})
+	t.Cleanup(func() {
+		preview.CloseForTab(action.MainTab())
+		preview.SetCapsForTest(prevCaps)
+	})
+
+	ed := harness.NewSimEditor(t, harness.SimOptions{
+		Files:  []string{docPath},
+		Width:  100,
+		Height: 30,
+		Settings: map[string]any{
+			"typst.lspEnabled":        false,
+			"typst.previewSyncCursor": false,
+		},
+	})
+
+	pp, ok := preview.Open(ed.Pane(), true)
+	require.True(t, ok)
+	require.NotNil(t, pp)
+	assert.False(t, pp.IsSyncCursor())
+
+	// Pressing 'f' in focused PreviewPane toggles cursor-follow sync on and off.
+	ed.InjectKey(tcell.KeyRune, 'f', tcell.ModNone)
+	assert.True(t, pp.IsSyncCursor())
+	ed.InjectKey(tcell.KeyRune, 'f', tcell.ModNone)
+	assert.False(t, pp.IsSyncCursor())
+
+	// :preview sync toggles cursor-follow sync from the command bar.
+	ed.RunCommand("preview sync")
+	assert.True(t, pp.IsSyncCursor())
+	assert.Contains(t, action.InfoBar.Msg, "cursor sync enabled")
+
+	// Invalid page number reports an error cleanly.
+	ed.RunCommand("preview page abc")
+	assert.Contains(t, action.InfoBar.Msg, "Invalid preview page number")
 }

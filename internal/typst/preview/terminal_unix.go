@@ -103,6 +103,9 @@ func probeTerminalPlatform() TerminalCaps {
 	}
 	if kitty {
 		res.Kitty = true
+		if inTmux() {
+			res.TmuxPassthrough = true
+		}
 	} else if !gotDA1 {
 		if ok, name := envIndicatesKitty(); ok {
 			res.Kitty = true

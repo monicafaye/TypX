@@ -106,6 +106,53 @@ func (d *DocumentDeck) ResolveSectionScrollY(target SectionTarget, dstW, viewH i
 	return clampScrollY(scrollY, maxScrollY)
 }
 
+// ResolveCursorVirtualY computes the rendered virtual Y pixel position for
+// target (plus the deck's maxScrollY) using the same three-tier PDF anchor
+// resolution as ResolveSectionScrollY. Callers can compare virtualY against
+// the current viewport window before scrolling to avoid redundant redraws.
+func (d *DocumentDeck) ResolveCursorVirtualY(target SectionTarget, dstW, viewH int, invert, trim bool) (virtualY, maxScrollY int, ok bool) {
+	if d == nil || len(d.pages) == 0 {
+		return 0, 0, false
+	}
+	if dstW < 16 {
+		dstW = 16
+	}
+	if viewH < 16 {
+		viewH = 16
+	}
+	d.ComputeLayout(dstW, trim)
+
+	computeMax := func() int {
+		m := d.totalHeight - viewH
+		if m < 0 {
+			return 0
+		}
+		return m
+	}
+
+	if anchor, found := d.resolveExactAnchor(target); found {
+		if y, _, okY := d.anchorToVirtualY(anchor, dstW, invert, trim); okY {
+			return y, computeMax(), true
+		}
+	}
+	if y, found := d.resolveInterpolatedY(target, dstW, invert, trim); found {
+		if target.Line <= 0 {
+			return 0, computeMax(), true
+		}
+		return y, computeMax(), true
+	}
+	if target.Line <= 0 || target.TotalLines <= 1 {
+		return 0, computeMax(), true
+	}
+	ratio := float64(target.Line) / float64(target.TotalLines-1)
+	if ratio < 0 {
+		ratio = 0
+	} else if ratio > 1 {
+		ratio = 1
+	}
+	return int(ratio * float64(d.totalHeight)), computeMax(), true
+}
+
 func clampScrollY(y, maxY int) int {
 	if y < 0 {
 		return 0

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -27,6 +28,8 @@ type InlinePreviewHandler interface {
 	Close(tab *action.Tab) bool
 	ToggleInvert(tab *action.Tab) bool
 	ToggleTrim(tab *action.Tab) bool
+	ToggleSync(tab *action.Tab) (bool, bool)
+	JumpToPage(tab *action.Tab, page int) (int, int, bool)
 }
 
 // SnippetExpanderFunc replaces [start, end) in bp with an LSP snippet and
@@ -328,6 +331,43 @@ func PreviewCommand() func(*action.BufPane, []string) {
 				notifyInfoMessage("Inline preview is not open")
 			}
 			return
+		case "sync", "follow":
+			if h == nil || bp == nil || bp.Tab() == nil {
+				notifyInfoMessage("Inline preview is not open")
+				return
+			}
+			enabled, ok := h.ToggleSync(bp.Tab())
+			if !ok {
+				notifyInfoMessage("Inline preview is not open")
+				return
+			}
+			if enabled {
+				notifyInfoMessage("Inline preview cursor sync enabled")
+			} else {
+				notifyInfoMessage("Inline preview cursor sync disabled")
+			}
+			return
+		case "page":
+			if len(args) < 2 {
+				notifyInfoError("Usage: :preview page <number>")
+				return
+			}
+			pageNum, err := strconv.Atoi(strings.TrimSpace(args[1]))
+			if err != nil || pageNum < 1 {
+				notifyInfoError(fmt.Sprintf("Invalid preview page number %q", args[1]))
+				return
+			}
+			if h == nil || bp == nil || bp.Tab() == nil {
+				notifyInfoMessage("Inline preview is not open")
+				return
+			}
+			gotPage, totalPages, ok := h.JumpToPage(bp.Tab(), pageNum)
+			if !ok {
+				notifyInfoMessage("Inline preview has no rendered pages")
+				return
+			}
+			notifyInfoMessage(fmt.Sprintf("Preview page %d/%d", gotPage, totalPages))
+			return
 		}
 
 		if bp == nil || bp.Buf == nil || !bp.Buf.IsTypst() {
@@ -359,12 +399,25 @@ func PreviewCommand() func(*action.BufPane, []string) {
 		case "browser", "web":
 			defaultManager.togglePreview(bp)
 		default:
-			notifyInfoError(fmt.Sprintf("Invalid preview argument %q (use inline, kitty, sixel, browser, focus, invert, trim, or stop)", args[0]))
+			if pageNum, err := strconv.Atoi(sub); err == nil && pageNum >= 1 {
+				if h == nil || bp.Tab() == nil {
+					notifyInfoMessage("Inline preview is not open")
+					return
+				}
+				gotPage, totalPages, ok := h.JumpToPage(bp.Tab(), pageNum)
+				if !ok {
+					notifyInfoMessage("Inline preview has no rendered pages")
+					return
+				}
+				notifyInfoMessage(fmt.Sprintf("Preview page %d/%d", gotPage, totalPages))
+				return
+			}
+			notifyInfoError(fmt.Sprintf("Invalid preview argument %q (use inline, kitty, sixel, browser, focus, page, sync, invert, trim, or stop)", args[0]))
 		}
 	}
 }
 
-var previewArgChoices = []string{"inline", "kitty", "sixel", "browser", "focus", "invert", "trim", "stop"}
+var previewArgChoices = []string{"inline", "kitty", "sixel", "browser", "focus", "page", "sync", "invert", "trim", "stop"}
 
 func previewCompleter(b *buffer.Buffer) ([]string, []string) {
 	if b == nil {

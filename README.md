@@ -228,7 +228,7 @@ Press `Ctrl+E` to open the command bar (`>` prompt). Most TypX keybindings apply
 
 | Feature | Command | Default Keybinding | Description |
 |---|---|---|---|
-| Live Preview | `:preview [inline\|kitty\|sixel\|browser\|focus\|invert\|trim\|stop]` | `Alt+P` | Toggle live preview (`auto` chooses Kitty graphics or Sixel when supported, otherwise browser preview). |
+| Live Preview | `:preview [inline\|kitty\|sixel\|browser\|focus\|page <n>\|sync\|invert\|trim\|stop]` | `Alt+P` | Toggle live preview (`auto` chooses Kitty graphics or Sixel when supported, otherwise browser preview), jump to a page, or toggle cursor sync. |
 | Document Outline | `:outline` | `Alt+O` | Toggle the docked Document Outline sidebar. |
 | File Manager | `:tree` | `Alt+T` | Toggle the built-in file tree sidebar (`:touch`, `:mkdir`, `:rename`, `:rm`). |
 | Math Concealment | `:conceal [on\|off]` | `Alt+C` | Toggle live Unicode math and symbol concealment in the active buffer. |
@@ -275,6 +275,7 @@ When the right-docked inline preview pane (Kitty graphics or Sixel) is focused v
 | `<` / `>` | Widen or narrow the docked preview pane. |
 | `t` | Toggle dark-mode color inversion (`typst.previewInvert`). |
 | `m` | Toggle page margin trimming (`typst.previewTrimMargins`). |
+| `f` | Toggle cursor-to-preview scroll sync (`typst.previewSyncCursor`). |
 | `r` | Force recompile and redraw preview. |
 | `Esc`, `Enter`, `Tab`, `Ctrl+W` | Return focus to the editor pane. |
 | `q` or `Alt+P` | Close the preview pane. |
@@ -337,6 +338,7 @@ TypX resolves its configuration directory in this order:
 | `typst.previewPPI` | global | `144` | Render resolution (PPI) for in-terminal preview pages. |
 | `typst.previewInvert` | global | `false` | Invert colors in the in-terminal preview for dark terminals. |
 | `typst.previewTrimMargins` | global | `false` | Trim excess outer page margins in the in-terminal preview. |
+| `typst.previewSyncCursor` | global | `false` | Follow editor cursor line movements in the in-terminal preview (toggle live with `f` or `:preview sync`). |
 | `typst.previewOpenBrowser` | global | `true` | Open the local preview URL in the OS browser when browser preview starts. |
 | `typst.outlineWidth` | global | `30` | Preferred width in columns for the Document Outline sidebar (auto-hides if terminal width `< 50`). |
 | `typst.outlineShowLabels` | global | `false` | Include standalone `<label>` anchors in the Document Outline alongside headings and figures. |
@@ -390,7 +392,7 @@ The default theme is `default` (`monokai`). Dark themes with full Typst and UI s
 - **macOS.** Use a terminal with Kitty graphics or Sixel support such as Ghostty, Kitty, WezTerm, or iTerm2 for in-terminal preview. Other terminals fall back to browser preview. Configure the Option key to act as Meta/Alt so `Alt+*` shortcuts work:
   - In iTerm2, open Preferences, Profiles, Keys, and set Left Option Key to `Esc+`.
   - In Terminal.app, open Preferences, Profiles, Keyboard, and enable Use Option as Meta key.
-- **Linux.** In-terminal preview works in terminals with Kitty graphics or Sixel support such as Kitty, Ghostty, WezTerm, Konsole, foot, and xterm with Sixel enabled. Install `wl-clipboard` on Wayland, or `xclip` or `xsel` on X11, for system clipboard integration.
+- **Linux.** In-terminal preview works in terminals with Kitty graphics or Sixel support such as Kitty, Ghostty, WezTerm, Konsole, foot, and xterm with Sixel enabled. Inside `tmux`, enable `set -g allow-passthrough on` to allow Kitty graphics passthrough to the outer terminal. Install `wl-clipboard` on Wayland, or `xclip` or `xsel` on X11, for system clipboard integration.
 
 ---
 

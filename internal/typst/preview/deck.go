@@ -24,11 +24,12 @@ var pageNumRe = regexp.MustCompile(`page-(\d+)\.png$`)
 
 // CompileRequest describes a document snapshot to compile into per-page PNGs.
 type CompileRequest struct {
-	FilePath string // Absolute path on disk (may be empty for unnamed buffers)
-	RootDir  string // Typst project root directory
-	Content  []byte // In-memory buffer bytes (used when Modified is true or FilePath is empty)
-	Modified bool   // True if buffer has unsaved edits in memory
-	PPI      int    // Target render resolution in pixels per inch
+	FilePath    string // Absolute path on disk (may be empty for unnamed buffers)
+	RootDir     string // Typst project root directory
+	Content     []byte // In-memory buffer bytes (used when Modified is true or FilePath is empty)
+	Modified    bool   // True if buffer has unsaved edits in memory
+	PPI         int    // Target render resolution in pixels per inch
+	SkipAnchors bool   // Skip the parallel PDF anchor compile when outline and cursor sync are inactive
 }
 
 // Compiler compiles a Typst document into a DocumentDeck of PNG pages.
@@ -137,35 +138,37 @@ func (c *TinymistCompiler) CompilePages(ctx context.Context, req CompileRequest)
 	}
 
 	// In parallel, compile a lightweight PDF to extract exact heading/label
-	// page + Y coordinates for outline-to-preview jump synchronization. PDF
-	// compilation is non-fatal and typically finishes faster than PNG rasterization.
+	// page + Y coordinates when outline or cursor sync needs anchors. PDF
+	// compilation is non-fatal and skipped when SkipAnchors is set.
 	pdfPath := filepath.Join(tmpDir, "outline.pdf")
 	pdfCtx, cancelPDF := context.WithCancel(ctx)
 	defer cancelPDF()
 	var anchors *DocumentAnchors
 	var pdfWG sync.WaitGroup
-	pdfWG.Add(1)
-	go func() {
-		defer pdfWG.Done()
-		defer os.Remove(pdfPath)
-		pdfArgs := []string{
-			"compile",
-			"--root", rootDir,
-			"--format", "pdf",
-			inputPath,
-			pdfPath,
-		}
-		pdfCmd := exec.CommandContext(pdfCtx, bin, pdfArgs...)
-		if rootDir != "" {
-			pdfCmd.Dir = rootDir
-		}
-		if err := pdfCmd.Run(); err != nil {
-			return
-		}
-		if pdfBytes, err := os.ReadFile(pdfPath); err == nil {
-			anchors = ParsePDFAnchors(pdfBytes)
-		}
-	}()
+	if !req.SkipAnchors {
+		pdfWG.Add(1)
+		go func() {
+			defer pdfWG.Done()
+			defer os.Remove(pdfPath)
+			pdfArgs := []string{
+				"compile",
+				"--root", rootDir,
+				"--format", "pdf",
+				inputPath,
+				pdfPath,
+			}
+			pdfCmd := exec.CommandContext(pdfCtx, bin, pdfArgs...)
+			if rootDir != "" {
+				pdfCmd.Dir = rootDir
+			}
+			if err := pdfCmd.Run(); err != nil {
+				return
+			}
+			if pdfBytes, err := os.ReadFile(pdfPath); err == nil {
+				anchors = ParsePDFAnchors(pdfBytes)
+			}
+		}()
+	}
 
 	t0 := time.Now()
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -648,7 +651,7 @@ func (d *DocumentDeck) RenderViewportWithProtocol(dstW, viewH, scrollY int, inve
 	var payload []byte
 	var sixel []byte
 	if proto == ProtocolKitty {
-		payload = EncodeKitty(canvas)
+		payload = EncodeKittyWithPassthrough(canvas, UseTmuxPassthrough())
 	} else {
 		proto = ProtocolSixel
 		sixel = EncodeSixel(canvas)
