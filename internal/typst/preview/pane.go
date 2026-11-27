@@ -41,6 +41,19 @@ const (
 	// scrollStepPx is the default continuous scroll step in pixels per key/wheel notch.
 	scrollStepPx = 140
 
+	// panStepPx is the horizontal pan step in pixels when zoomed past 100%.
+	panStepPx = 120
+
+	// Zoom percentage bounds and step size.
+	minZoomPct     = 40
+	defaultZoomPct = 100
+	maxZoomPct     = 250
+	zoomStepPct    = 15
+
+	// doubleClickMaxWait and doubleClickMaxCellDist bound click-to-source double-clicks.
+	doubleClickMaxWait     = 400 * time.Millisecond
+	doubleClickMaxCellDist = 2
+
 	// resizeStepCols is the column delta per keyboard preview resize ('<' / '>').
 	resizeStepCols = 6
 
@@ -80,6 +93,13 @@ func EffectiveWidth(termWidth, configuredPct int) int {
 	return w
 }
 
+type pendingClickTarget struct {
+	virtualY   int
+	shared     *buffer.SharedBuffer
+	version    uint64
+	jumpedLine int
+}
+
 // PreviewPane implements action.Pane, action.AuxiliaryPane, and display.Window
 // as a docked right-hand continuous inline (Kitty or Sixel) live preview pane.
 type PreviewPane struct {
@@ -94,11 +114,13 @@ type PreviewPane struct {
 	deck           *DocumentDeck
 	viewport       *ViewportRender
 	scrollY        int
+	scrollX        int
 	zoomPct        int
 	invert         bool
 	trimMargins    bool
 	syncCursor     bool
 	pendingSection *SectionTarget
+	pendingClick   *pendingClickTarget
 
 	// Temporary override deck state (used by Template Gallery live preview).
 	overrideActive   bool
@@ -108,18 +130,26 @@ type PreviewPane struct {
 	overrideDeck     *DocumentDeck
 	openedByOverride bool
 	savedScrollY     int
+	savedScrollX     int
 
-	compiling          bool
-	compileStart       time.Time
-	lastErr            string
-	lastVersion        uint64
-	lastShared         *buffer.SharedBuffer
-	lastPath           string
-	lastCompiledMain   string
-	pinnedSubfileDirty bool
-	spinTick           atomic.Int32
-	spinStop           chan struct{}
-	hadOverlayTxt      bool
+	compiling            bool
+	compilingWithAnchors bool
+	compileStart         time.Time
+	lastErr              string
+	lastVersion          uint64
+	lastShared           *buffer.SharedBuffer
+	lastPath             string
+	lastCompiledMain     string
+	pinnedSubfileDirty   bool
+	spinTick             atomic.Int32
+	spinStop             chan struct{}
+	hadOverlayTxt        bool
+
+	// Mouse click / drag tracking for click-to-source reverse sync.
+	mouseReleased bool
+	lastClickTime time.Time
+	lastClickX    int
+	lastClickY    int
 
 	// Inline graphics emission tracking (main UI goroutine only).
 	frameDirty       bool
@@ -131,6 +161,7 @@ type PreviewPane struct {
 	lastEmitProto    GraphicsProtocol
 	protocolOverride GraphicsProtocol
 	vpTargetW        int
+	vpViewW          int
 	vpTargetH        int
 
 	mu              sync.Mutex
@@ -149,16 +180,17 @@ var (
 
 func newPreviewPane(tab *action.Tab, target *action.BufPane, mgr *Manager) *PreviewPane {
 	return &PreviewPane{
-		view:        &display.View{},
-		tab:         tab,
-		target:      target,
-		mgr:         mgr,
-		zoomPct:     100,
-		invert:      readGlobalBool("typst.previewInvert", false),
-		trimMargins: readGlobalBool("typst.previewTrimMargins", false),
-		syncCursor:  readGlobalBool("typst.previewSyncCursor", false),
-		lastEmitX:   -1,
-		lastEmitY:   -1,
+		view:          &display.View{},
+		tab:           tab,
+		target:        target,
+		mgr:           mgr,
+		zoomPct:       defaultZoomPct,
+		invert:        readGlobalBool("typst.previewInvert", false),
+		trimMargins:   readGlobalBool("typst.previewTrimMargins", false),
+		syncCursor:    readGlobalBool("typst.previewSyncCursor", false),
+		mouseReleased: true,
+		lastEmitX:     -1,
+		lastEmitY:     -1,
 	}
 }
 
@@ -183,6 +215,9 @@ func (pp *PreviewPane) IsSyncCursor() bool                       { return pp.syn
 
 func (pp *PreviewPane) SetActive(b bool) {
 	pp.active = b
+	if !b {
+		pp.mouseReleased = true
+	}
 }
 
 func (pp *PreviewPane) isTabResizing() bool {
@@ -246,7 +281,12 @@ func (pp *PreviewPane) Close() {
 	}
 	pp.overrideActive = false
 	pp.viewport = nil
+	pp.scrollX = 0
+	pp.savedScrollX = 0
 	pp.pendingSection = nil
+	pp.pendingClick = nil
+	pp.lastClickTime = time.Time{}
+	pp.mouseReleased = true
 	pp.frameDirty = false
 
 	if !already && pp.mgr != nil && pp.tab != nil {
@@ -266,6 +306,20 @@ func (pp *PreviewPane) MaxScrollY() int {
 	}
 	return pp.viewport.MaxScrollY
 }
+
+// ScrollX returns the current horizontal pan offset in pixels.
+func (pp *PreviewPane) ScrollX() int { return pp.scrollX }
+
+// MaxScrollX returns the current maximum horizontal pan offset in pixels.
+func (pp *PreviewPane) MaxScrollX() int {
+	if pp.viewport == nil {
+		return 0
+	}
+	return pp.viewport.MaxScrollX
+}
+
+// ZoomPct returns the current preview zoom percentage (40..250).
+func (pp *PreviewPane) ZoomPct() int { return pp.zoomPct }
 
 // PageRange returns the currently visible 1-based page range and total page count.
 func (pp *PreviewPane) PageRange() (first, last, total int) {
@@ -288,6 +342,7 @@ func (pp *PreviewPane) OverrideTitle() string { return pp.overrideTitle }
 func (pp *PreviewPane) ShowOverrideLoading(title string) {
 	if !pp.overrideActive {
 		pp.savedScrollY = pp.scrollY
+		pp.savedScrollX = pp.scrollX
 	}
 	if pp.overrideDeck != nil {
 		pp.overrideDeck.Close()
@@ -299,6 +354,9 @@ func (pp *PreviewPane) ShowOverrideLoading(title string) {
 	pp.overrideErr = ""
 	pp.viewport = nil
 	pp.scrollY = 0
+	pp.scrollX = 0
+	pp.lastClickTime = time.Time{}
+	pp.pendingClick = nil
 	pp.frameDirty = false
 	pp.clearPending = true
 	if pp.mgr != nil && pp.mgr.kittyActive {
@@ -314,6 +372,7 @@ func (pp *PreviewPane) ShowOverrideLoading(title string) {
 func (pp *PreviewPane) ShowOverrideImages(title string, imgs []*image.RGBA) {
 	if !pp.overrideActive {
 		pp.savedScrollY = pp.scrollY
+		pp.savedScrollX = pp.scrollX
 	}
 	if !pp.compiling {
 		pp.stopSpinner()
@@ -328,6 +387,9 @@ func (pp *PreviewPane) ShowOverrideImages(title string, imgs []*image.RGBA) {
 	pp.overrideErr = ""
 	pp.overrideDeck = NewDocumentDeckFromImages(imgs, 0)
 	pp.scrollY = 0
+	pp.scrollX = 0
+	pp.lastClickTime = time.Time{}
+	pp.pendingClick = nil
 	pp.clearPending = true
 	pp.rebuildViewport(true)
 	screen.Redraw()
@@ -337,6 +399,7 @@ func (pp *PreviewPane) ShowOverrideImages(title string, imgs []*image.RGBA) {
 func (pp *PreviewPane) ShowOverrideError(title, errMsg string) {
 	if !pp.overrideActive {
 		pp.savedScrollY = pp.scrollY
+		pp.savedScrollX = pp.scrollX
 	}
 	if !pp.compiling {
 		pp.stopSpinner()
@@ -350,6 +413,8 @@ func (pp *PreviewPane) ShowOverrideError(title, errMsg string) {
 	pp.overrideLoading = false
 	pp.overrideErr = firstUsefulErrorLine(errMsg)
 	pp.viewport = nil
+	pp.lastClickTime = time.Time{}
+	pp.pendingClick = nil
 	pp.frameDirty = false
 	pp.clearPending = true
 	if pp.mgr != nil && pp.mgr.kittyActive {
@@ -375,6 +440,8 @@ func (pp *PreviewPane) ClearOverride() {
 		pp.stopSpinner()
 	}
 	pp.scrollY = pp.savedScrollY
+	pp.scrollX = pp.savedScrollX
+	pp.lastClickTime = time.Time{}
 	pp.viewport = nil
 	pp.clearPending = true
 	if pp.deck != nil {
@@ -441,7 +508,7 @@ func (pp *PreviewPane) ToggleTrimMargins() {
 func (pp *PreviewPane) ToggleSyncCursor() bool {
 	pp.syncCursor = !pp.syncCursor
 	if pp.syncCursor {
-		if pp.deck != nil && pp.deck.anchors == nil && !pp.compiling && !pp.overrideActive {
+		if pp.deck != nil && pp.deck.anchors == nil && !pp.deck.anchorsChecked && !pp.compiling && !pp.overrideActive {
 			pp.ScheduleCompile(true)
 		}
 		pp.syncToTargetCursorNow()
@@ -472,7 +539,7 @@ func (pp *PreviewPane) imageRows() int {
 	return rows
 }
 
-func (pp *PreviewPane) targetPixelSize() (dstW, viewH int) {
+func (pp *PreviewPane) targetViewportSize() (scaledW, viewW, viewH int) {
 	c := Caps()
 	cellW, cellH := c.CellW, c.CellH
 	if cellW <= 0 {
@@ -483,24 +550,31 @@ func (pp *PreviewPane) targetPixelSize() (dstW, viewH int) {
 	}
 	rows := pp.imageRows()
 	if pp.view.Width <= 0 || rows <= 0 {
-		return 0, 0
+		return 0, 0, 0
 	}
 	availW := pp.view.Width * cellW
 	availH := rows*cellH - 2 // stay 2px shy of footer so terminal never scrolls
 	if availH < 32 {
 		availH = 32
 	}
-	dstW = (availW * pp.zoomPct) / 100
-	if dstW < 64 {
-		dstW = 64
+	zoom := pp.zoomPct
+	if zoom <= 0 {
+		zoom = defaultZoomPct
 	}
-	if dstW > availW {
-		dstW = availW
+	scaledW = (availW * zoom) / 100
+	if scaledW < 64 {
+		scaledW = 64
 	}
-	return dstW, availH
+	return scaledW, availW, availH
+}
+
+func (pp *PreviewPane) targetPixelSize() (dstW, viewH int) {
+	scaledW, _, availH := pp.targetViewportSize()
+	return scaledW, availH
 }
 
 func (pp *PreviewPane) preserveRatioRebuild() {
+	pp.pendingClick = nil
 	deck := pp.activeDeck()
 	if deck == nil {
 		return
@@ -542,11 +616,12 @@ func (pp *PreviewPane) rebuildViewport(clearRight bool) bool {
 	if deck == nil {
 		return false
 	}
-	dstW, viewH := pp.targetPixelSize()
-	if dstW <= 0 || viewH <= 0 {
+	scaledW, viewW, viewH := pp.targetViewportSize()
+	if scaledW <= 0 || viewW <= 0 || viewH <= 0 {
 		return false
 	}
-	vp, err := deck.RenderViewportWithProtocol(dstW, viewH, pp.scrollY, pp.invert, pp.trimMargins, pp.targetProtocol())
+	prev := pp.viewport
+	vp, err := deck.RenderViewportCached(scaledW, viewW, viewH, pp.scrollY, pp.scrollX, pp.invert, pp.trimMargins, pp.targetProtocol(), prev)
 	if err != nil {
 		if pp.overrideActive {
 			pp.overrideErr = err.Error()
@@ -556,11 +631,15 @@ func (pp *PreviewPane) rebuildViewport(clearRight bool) bool {
 		return false
 	}
 	pp.scrollY = vp.ScrollY // strictly clamped to [0, MaxScrollY]
-	prev := pp.viewport
+	pp.scrollX = vp.ScrollX // strictly clamped to [0, MaxScrollX]
 	pp.viewport = vp
-	pp.vpTargetW = dstW
+	pp.vpTargetW = scaledW
+	pp.vpViewW = viewW
 	pp.vpTargetH = viewH
-	pp.frameDirty = true
+	pixelChanged := !vp.Reused || prev == nil || prev.DstW != vp.DstW || prev.DstH != vp.DstH || prev.Protocol != vp.Protocol
+	if clearRight || pixelChanged || pp.hadOverlayTxt || pp.lastEmitX < 0 || pp.lastEmitProto != vp.Protocol {
+		pp.frameDirty = true
+	}
 	if clearRight || prev == nil || prev.DstW != vp.DstW || prev.DstH != vp.DstH || pp.hadOverlayTxt {
 		pp.clearPending = true
 	}
@@ -588,9 +667,31 @@ func (pp *PreviewPane) ScrollBy(delta int) bool {
 	return pp.rebuildViewport(false)
 }
 
+// ScrollXBy shifts the horizontal pan offset by delta pixels, strictly clamped
+// to [0, MaxScrollX]. Returns true if the viewport panned.
+func (pp *PreviewPane) ScrollXBy(delta int) bool {
+	if pp.viewport == nil || pp.activeDeck() == nil {
+		return false
+	}
+	nextX := pp.scrollX + delta
+	if nextX < 0 {
+		nextX = 0
+	}
+	if nextX > pp.viewport.MaxScrollX {
+		nextX = pp.viewport.MaxScrollX
+	}
+	if nextX == pp.scrollX {
+		return false
+	}
+	pp.scrollX = nextX
+	return pp.rebuildViewport(false)
+}
+
 // JumpPageDelta jumps directly to the top of the next/previous page.
 func (pp *PreviewPane) JumpPageDelta(delta int) bool {
 	pp.pendingSection = nil
+	pp.pendingClick = nil
+	pp.lastClickTime = time.Time{}
 	deck := pp.activeDeck()
 	if pp.viewport == nil || deck == nil || deck.PageCount() == 0 {
 		return false
@@ -622,6 +723,8 @@ func (pp *PreviewPane) JumpPageDelta(delta int) bool {
 // whether a rendered deck was available.
 func (pp *PreviewPane) JumpToPage(pageNum int) (int, int, bool) {
 	pp.pendingSection = nil
+	pp.pendingClick = nil
+	pp.lastClickTime = time.Time{}
 	deck := pp.activeDeck()
 	if deck == nil || deck.PageCount() == 0 {
 		return 0, 0, false
@@ -733,6 +836,7 @@ func (pp *PreviewPane) Target() *action.BufPane {
 // yet), the target is also remembered and applied as soon as the deck arrives.
 // Returns true if the viewport moved immediately.
 func (pp *PreviewPane) ScrollToSection(target SectionTarget) bool {
+	pp.lastClickTime = time.Time{}
 	cp := target
 	if len(target.AllSections) > 0 {
 		cp.AllSections = append([]SectionEntry(nil), target.AllSections...)
@@ -741,6 +845,12 @@ func (pp *PreviewPane) ScrollToSection(target SectionTarget) bool {
 	targetPane := pp.resolveTarget()
 	deckMatchesTarget := pp.deck != nil &&
 		(targetPane == nil || targetPane.Buf == nil || pp.lastShared == nil || pp.lastShared == targetPane.Buf.SharedBuffer)
+	if !deckMatchesTarget && pp.deck != nil && targetPane != nil && targetPane.Buf != nil && pp.lastCompiledMain != "" && pp.mgr != nil {
+		effMain := pp.mgr.resolveMainFile(targetPane.Buf.AbsPath)
+		if effMain != "" && canonicalPreviewPath(effMain) == canonicalPreviewPath(pp.lastCompiledMain) {
+			deckMatchesTarget = true
+		}
+	}
 
 	if !deckMatchesTarget {
 		pp.pendingSection = &cp
@@ -748,7 +858,7 @@ func (pp *PreviewPane) ScrollToSection(target SectionTarget) bool {
 	}
 	if pp.compiling {
 		pp.pendingSection = &cp
-	} else if pp.deck != nil && pp.deck.anchors == nil && !pp.overrideActive {
+	} else if pp.deck != nil && pp.deck.anchors == nil && !pp.deck.anchorsChecked && !pp.overrideActive {
 		// Deck was compiled with SkipAnchors=true; jump proportionally now and
 		// trigger a background anchor-enabled compile to snap to the exact PDF anchor.
 		pp.pendingSection = &cp
@@ -944,7 +1054,7 @@ func (pp *PreviewPane) startCompileNow() {
 		ppi = 300
 	}
 
-	needAnchors := pp.pendingSection != nil || pp.syncCursor
+	needAnchors := pp.pendingSection != nil || pp.pendingClick != nil || pp.syncCursor
 	if !needAnchors && pp.mgr != nil {
 		if fn := pp.mgr.getAnchorNeedChecker(); fn != nil && fn(pp.tab) {
 			needAnchors = true
@@ -986,6 +1096,7 @@ func (pp *PreviewPane) startCompileNow() {
 	pp.lastPath = bufAbsPath
 	pp.lastCompiledMain = absPath
 	pp.compiling = true
+	pp.compilingWithAnchors = needAnchors
 	pp.compileStart = time.Now()
 	pp.startSpinner()
 	screen.Redraw()
@@ -1007,6 +1118,7 @@ func (pp *PreviewPane) startCompileNow() {
 			}
 
 			pp.compiling = false
+			pp.compilingWithAnchors = false
 			pp.stopSpinner()
 
 			if err != nil {
@@ -1016,25 +1128,33 @@ func (pp *PreviewPane) startCompileNow() {
 				if canceled {
 					return
 				}
+				pp.pendingClick = nil
 				pp.lastErr = firstUsefulErrorLine(err.Error())
 				screen.Redraw()
 				return
 			}
 
-		if pp.overrideActive {
+			if pp.overrideActive {
+				if needAnchors {
+					deck.anchorsChecked = true
+				}
+				oldDeck := pp.deck
+				pp.deck = deck
+				pp.lastErr = ""
+				if oldDeck != nil {
+					deck.CarryForwardFrom(oldDeck)
+					oldDeck.Close()
+				}
+				return
+			}
+			if needAnchors {
+				deck.anchorsChecked = true
+			}
 			oldDeck := pp.deck
 			pp.deck = deck
 			pp.lastErr = ""
 			if oldDeck != nil {
-				oldDeck.Close()
-			}
-			pp.compiling = false
-			return
-		}
-		oldDeck := pp.deck
-		pp.deck = deck
-			pp.lastErr = ""
-			if oldDeck != nil {
+				deck.CarryForwardFrom(oldDeck)
 				oldDeck.Close()
 			}
 			if pp.pendingSection != nil {
@@ -1044,11 +1164,118 @@ func (pp *PreviewPane) startCompileNow() {
 					pp.scrollY = pp.deck.ResolveSectionScrollY(sec, dstW, viewH, pp.invert, pp.trimMargins)
 				}
 			}
-			// Re-render viewport at current scrollY (clamped safely to new doc height).
+			// Re-render viewport at current scrollY/scrollX (clamped safely to new doc size).
 			pp.rebuildViewport(false)
+			if pp.pendingClick != nil {
+				pc := *pp.pendingClick
+				pp.pendingClick = nil
+				pp.applyPendingClickJump(pc)
+			}
 			screen.Redraw()
 		})
 	}()
+}
+
+func (pp *PreviewPane) resolveClickWithLayoutSync(virtY int, sections []SectionEntry, totalLines int) int {
+	if pp.deck == nil {
+		return 0
+	}
+	dstW := pp.deck.layoutW
+	if dstW <= 0 && len(pp.deck.pages) > 0 && pp.deck.pages[0] != nil && pp.deck.pages[0].srcW > 0 {
+		dstW = pp.deck.pages[0].srcW
+	}
+	if dstW < 16 {
+		dstW = 16
+	}
+	preTops, preHeights, preTotalH := snapshotDeckLayout(pp.deck, dstW, pp.deck.layoutTrim)
+	line := pp.deck.ResolveClickToSourceLine(virtY, sections, totalLines)
+	if layoutShifted(preTops, preHeights, preTotalH, pp.deck.pageTops, pp.deck.pageHeights, pp.deck.totalHeight) {
+		pp.scrollY = remapVirtualYAcrossLayout(pp.scrollY, preTops, preHeights, preTotalH, pp.deck.pageTops, pp.deck.pageHeights, pp.deck.totalHeight)
+		pp.rebuildViewport(false)
+	}
+	return line
+}
+
+func (pp *PreviewPane) jumpToSourceAtVirtualY(virtY int) {
+	target := pp.resolveTarget()
+	if target == nil || target.Buf == nil || pp.deck == nil {
+		return
+	}
+	var sections []SectionEntry
+	if pp.mgr != nil {
+		if fn := pp.mgr.getSectionsProvider(); fn != nil {
+			sections = fn(target.Buf)
+		}
+	}
+	line := pp.resolveClickWithLayoutSync(virtY, sections, target.Buf.LinesNum())
+	moveTargetCursorToLine(target, line)
+	pp.returnFocus()
+	screen.Redraw()
+
+	if pp.deck.anchors == nil && !pp.deck.anchorsChecked && !pp.overrideActive {
+		pp.pendingClick = &pendingClickTarget{
+			virtualY:   virtY,
+			shared:     target.Buf.SharedBuffer,
+			version:    target.Buf.Version(),
+			jumpedLine: line,
+		}
+		if !pp.compiling || !pp.compilingWithAnchors {
+			pp.ScheduleCompile(true)
+		}
+	} else {
+		pp.pendingClick = nil
+	}
+}
+
+func (pp *PreviewPane) applyPendingClickJump(pc pendingClickTarget) {
+	if pp.overrideActive || pp.deck == nil || pp.deck.anchors == nil {
+		return
+	}
+	target := pp.resolveTarget()
+	if target == nil || target.Buf == nil || target.Buf.SharedBuffer != pc.shared {
+		return
+	}
+	if target.Buf.Version() != pc.version {
+		return
+	}
+	if target.Cursor == nil || target.Cursor.Loc.Y != pc.jumpedLine {
+		return
+	}
+	var sections []SectionEntry
+	if pp.mgr != nil {
+		if fn := pp.mgr.getSectionsProvider(); fn != nil {
+			sections = fn(target.Buf)
+		}
+	}
+	refinedLine := pp.resolveClickWithLayoutSync(pc.virtualY, sections, target.Buf.LinesNum())
+	if refinedLine != pc.jumpedLine {
+		moveTargetCursorToLine(target, refinedLine)
+	}
+}
+
+func moveTargetCursorToLine(target *action.BufPane, line int) {
+	if target == nil || target.Buf == nil {
+		return
+	}
+	n := target.Buf.LinesNum()
+	if n <= 0 {
+		return
+	}
+	if line < 0 {
+		line = 0
+	} else if line >= n {
+		line = n - 1
+	}
+	target.Buf.ClearCursors()
+	c := target.Buf.GetActiveCursor()
+	if c == nil {
+		return
+	}
+	c.ResetSelection()
+	c.GotoLoc(buffer.Loc{X: 0, Y: line})
+	target.Cursor = c
+	target.Relocate()
+	target.Center()
 }
 
 func firstUsefulErrorLine(raw string) string {
@@ -1113,8 +1340,8 @@ func (pp *PreviewPane) Display() {
 			}
 		}
 		if pp.activeDeck() != nil {
-			dstW, viewH := pp.targetPixelSize()
-			if pp.viewport == nil || pp.vpTargetW != dstW || pp.vpTargetH != viewH {
+			scaledW, viewW, viewH := pp.targetViewportSize()
+			if pp.viewport == nil || pp.vpTargetW != scaledW || pp.vpViewW != viewW || pp.vpTargetH != viewH {
 				pp.preserveRatioRebuild()
 			}
 		}
@@ -1308,6 +1535,9 @@ func (pp *PreviewPane) drawFooter(y int) {
 			pct = (pp.viewport.ScrollY * 100) / pp.viewport.MaxScrollY
 		}
 		flags := ""
+		if pp.zoomPct > 0 && pp.zoomPct != defaultZoomPct {
+			flags += fmt.Sprintf(" z:%d%%", pp.zoomPct)
+		}
 		if pp.invert {
 			flags += " dark"
 		}
@@ -1460,7 +1690,7 @@ func (pp *PreviewPane) HandleCommand(text string) {
 	}
 }
 
-// HandleEvent processes mouse wheel scrolling and keyboard navigation on PreviewPane.
+// HandleEvent processes mouse wheel scrolling, click-to-source, and keyboard navigation on PreviewPane.
 func (pp *PreviewPane) HandleEvent(event tcell.Event) {
 	switch e := event.(type) {
 	case *tcell.EventMouse:
@@ -1477,6 +1707,69 @@ func (pp *PreviewPane) HandleEvent(event tcell.Event) {
 			}
 			return
 		}
+		if btns&tcell.WheelRight != 0 {
+			if pp.ScrollXBy(panStepPx) {
+				screen.Redraw()
+			}
+			return
+		}
+		if btns&tcell.WheelLeft != 0 {
+			if pp.ScrollXBy(-panStepPx) {
+				screen.Redraw()
+			}
+			return
+		}
+		if btns == tcell.ButtonNone {
+			pp.mouseReleased = true
+			return
+		}
+		if btns&tcell.Button1 != 0 {
+			if !pp.mouseReleased {
+				return
+			}
+			pp.mouseReleased = false
+
+			mx, my := e.Position()
+			imgRows := pp.imageRows()
+			if pp.overrideActive || pp.viewport == nil || pp.deck == nil || imgRows <= 0 ||
+				mx < pp.view.X || mx >= pp.view.X+pp.view.Width ||
+				my < pp.view.Y || my >= pp.view.Y+imgRows {
+				pp.lastClickTime = time.Time{}
+				return
+			}
+
+			now := time.Now()
+			isCtrl := e.Modifiers()&tcell.ModCtrl != 0
+			dx := mx - pp.lastClickX
+			if dx < 0 {
+				dx = -dx
+			}
+			dy := my - pp.lastClickY
+			if dy < 0 {
+				dy = -dy
+			}
+			isDouble := !pp.lastClickTime.IsZero() &&
+				now.Sub(pp.lastClickTime) <= doubleClickMaxWait &&
+				dx <= doubleClickMaxCellDist && dy <= doubleClickMaxCellDist
+
+			if !isCtrl && !isDouble {
+				pp.lastClickTime = now
+				pp.lastClickX = mx
+				pp.lastClickY = my
+				return
+			}
+
+			pp.lastClickTime = time.Time{}
+			cellH := Caps().CellH
+			if cellH <= 0 {
+				cellH = defaultCellH
+			}
+			localClickYpx := (my-pp.view.Y)*cellH + cellH/2
+			virtY := pp.scrollY + localClickYpx
+			pp.jumpToSourceAtVirtualY(virtY)
+			return
+		}
+		pp.lastClickTime = time.Time{}
 
 	case *tcell.EventKey:
 		// Alt+P closes the preview even while focused.
@@ -1540,10 +1833,18 @@ func (pp *PreviewPane) HandleEvent(event tcell.Event) {
 			}
 			return
 		case tcell.KeyRight:
-			pp.JumpPageDelta(1)
+			if pp.zoomPct > defaultZoomPct && pp.MaxScrollX() > 0 {
+				pp.ScrollXBy(panStepPx)
+			} else {
+				pp.JumpPageDelta(1)
+			}
 			return
 		case tcell.KeyLeft:
-			pp.JumpPageDelta(-1)
+			if pp.zoomPct > defaultZoomPct && pp.MaxScrollX() > 0 {
+				pp.ScrollXBy(-panStepPx)
+			} else {
+				pp.JumpPageDelta(-1)
+			}
 			return
 		case tcell.KeyRune:
 			switch e.Rune() {
@@ -1555,6 +1856,14 @@ func (pp *PreviewPane) HandleEvent(event tcell.Event) {
 				pp.ScrollBy(scrollStepPx)
 			case 'k', 'w', 'W':
 				pp.ScrollBy(-scrollStepPx)
+			case 'h':
+				if pp.MaxScrollX() > 0 {
+					pp.ScrollXBy(-panStepPx)
+				}
+			case 'l':
+				if pp.MaxScrollX() > 0 {
+					pp.ScrollXBy(panStepPx)
+				}
 			case ' ':
 				_, viewH := pp.targetPixelSize()
 				step := (viewH * 3) / 4
@@ -1579,16 +1888,25 @@ func (pp *PreviewPane) HandleEvent(event tcell.Event) {
 			case '[':
 				pp.JumpPageDelta(-1)
 			case '+', '=':
-				if pp.zoomPct < 100 {
-					pp.zoomPct += 15
-					if pp.zoomPct > 100 {
-						pp.zoomPct = 100
+				if pp.zoomPct < maxZoomPct {
+					pp.zoomPct += zoomStepPct
+					if pp.zoomPct > maxZoomPct {
+						pp.zoomPct = maxZoomPct
 					}
 					pp.preserveRatioRebuild()
 				}
 			case '-', '_':
-				if pp.zoomPct > 40 {
-					pp.zoomPct -= 15
+				if pp.zoomPct > minZoomPct {
+					pp.zoomPct -= zoomStepPct
+					if pp.zoomPct < minZoomPct {
+						pp.zoomPct = minZoomPct
+					}
+					pp.preserveRatioRebuild()
+				}
+			case '0':
+				if pp.zoomPct != defaultZoomPct || pp.scrollX != 0 {
+					pp.zoomPct = defaultZoomPct
+					pp.scrollX = 0
 					pp.preserveRatioRebuild()
 				}
 			case 't', 'T':
@@ -2400,7 +2718,10 @@ func (m *Manager) onPaneFocus(tab *action.Tab, pane action.Pane) {
 			return
 		}
 		pp.scrollY = 0
+		pp.scrollX = 0
 		pp.pendingSection = nil
+		pp.pendingClick = nil
+		pp.lastClickTime = time.Time{}
 		pp.ScheduleCompile(true)
 	}
 }
@@ -2537,7 +2858,10 @@ func (m *Manager) OnBufferClose(b *buffer.Buffer) {
 		if replacement != nil {
 			pp.target = replacement
 			pp.scrollY = 0
+			pp.scrollX = 0
 			pp.pendingSection = nil
+			pp.pendingClick = nil
+			pp.lastClickTime = time.Time{}
 			pp.ScheduleCompile(true)
 		} else {
 			m.CloseForTab(tab)

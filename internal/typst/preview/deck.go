@@ -2,11 +2,14 @@ package preview
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	_ "image/png"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -201,6 +204,7 @@ func (c *TinymistCompiler) CompilePages(ctx context.Context, req CompileRequest)
 		return nil, err
 	}
 	deck.anchors = anchors
+	deck.anchorsChecked = !req.SkipAnchors
 	return deck, nil
 }
 
@@ -220,6 +224,9 @@ type pageSlot struct {
 	srcH    int
 	raw     *image.RGBA
 
+	contentHash [32]byte
+	hasHash     bool
+
 	scaled       *image.RGBA
 	scaledW      int
 	scaledInvert bool
@@ -231,15 +238,35 @@ type pageSlot struct {
 // DocumentDeck holds a compiled document's per-page PNGs with lazy decoding,
 // scaled image caching, and continuous vertical viewport compositing.
 type DocumentDeck struct {
-	tmpDir      string
-	compileDur  time.Duration
-	pages       []*pageSlot
-	pageTops    []int
-	pageHeights []int
-	totalHeight int
-	layoutW     int
-	layoutTrim  bool
-	anchors     *DocumentAnchors
+	tmpDir         string
+	compileDur     time.Duration
+	pages          []*pageSlot
+	pageTops       []int
+	pageHeights    []int
+	totalHeight    int
+	layoutW        int
+	layoutTrim     bool
+	layoutInvert   bool
+	anchors        *DocumentAnchors
+	anchorsChecked bool
+}
+
+func hashRGBAImage(img *image.RGBA) [32]byte {
+	h := sha256.New()
+	b := img.Bounds()
+	w, height := b.Dx(), b.Dy()
+	var hdr [9]byte
+	hdr[0] = 'R'
+	binary.LittleEndian.PutUint32(hdr[1:5], uint32(w))
+	binary.LittleEndian.PutUint32(hdr[5:9], uint32(height))
+	h.Write(hdr[:])
+	for y := 0; y < height; y++ {
+		off := img.PixOffset(b.Min.X, b.Min.Y+y)
+		h.Write(img.Pix[off : off+w*4])
+	}
+	var sum [32]byte
+	copy(sum[:], h.Sum(nil))
+	return sum
 }
 
 // NewDocumentDeckFromImages builds an in-memory DocumentDeck directly from RGBA
@@ -252,10 +279,12 @@ func NewDocumentDeckFromImages(imgs []*image.RGBA, compileDur time.Duration) *Do
 		}
 		b := img.Bounds()
 		pages = append(pages, &pageSlot{
-			pageNum: i + 1,
-			srcW:    b.Dx(),
-			srcH:    b.Dy(),
-			raw:     img,
+			pageNum:     i + 1,
+			srcW:        b.Dx(),
+			srcH:        b.Dy(),
+			raw:         img,
+			contentHash: hashRGBAImage(img),
+			hasHash:     true,
 		})
 	}
 	return &DocumentDeck{
@@ -352,15 +381,28 @@ func LoadDocumentDeckFromDir(tmpDir string, compileDur time.Duration) (*Document
 			continue
 		}
 		cfg, _, err := image.DecodeConfig(f)
+		var contentHash [32]byte
+		var hasHash bool
+		if err == nil && cfg.Width > 0 && cfg.Height > 0 {
+			if _, seekErr := f.Seek(0, io.SeekStart); seekErr == nil {
+				h := sha256.New()
+				if _, copyErr := io.Copy(h, f); copyErr == nil {
+					copy(contentHash[:], h.Sum(nil))
+					hasHash = true
+				}
+			}
+		}
 		f.Close()
 		if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
 			continue
 		}
 		pages = append(pages, &pageSlot{
-			pageNum: e.num,
-			pngPath: e.path,
-			srcW:    cfg.Width,
-			srcH:    cfg.Height,
+			pageNum:     e.num,
+			pngPath:     e.path,
+			srcW:        cfg.Width,
+			srcH:        cfg.Height,
+			contentHash: contentHash,
+			hasHash:     hasHash,
 		})
 	}
 	if len(pages) == 0 {
@@ -388,6 +430,56 @@ func (d *DocumentDeck) PageCount() int {
 		return 0
 	}
 	return len(d.pages)
+}
+
+// PageHash returns the SHA-256 content hash for 0-based page index idx.
+func (d *DocumentDeck) PageHash(idx int) ([32]byte, bool) {
+	if d == nil || idx < 0 || idx >= len(d.pages) || d.pages[idx] == nil {
+		return [32]byte{}, false
+	}
+	return d.pages[idx].contentHash, d.pages[idx].hasHash
+}
+
+// CarryForwardFrom reuses decoded raw and scaled RGBA images from old for any
+// page whose content hash and source dimensions match. Must be called before
+// old.Close() (and on the main UI loop). Returns the number of carried pages.
+func (d *DocumentDeck) CarryForwardFrom(old *DocumentDeck) int {
+	if d == nil || old == nil || d == old || len(d.pages) == 0 || len(old.pages) == 0 {
+		return 0
+	}
+	byHash := make(map[[32]byte]*pageSlot, len(old.pages))
+	for _, op := range old.pages {
+		if op == nil || !op.hasHash || (op.raw == nil && op.scaled == nil) {
+			continue
+		}
+		if existing, exists := byHash[op.contentHash]; !exists || (existing.scaled == nil && op.scaled != nil) {
+			byHash[op.contentHash] = op
+		}
+	}
+	if len(byHash) == 0 {
+		return 0
+	}
+	carried := 0
+	for _, np := range d.pages {
+		if np == nil || !np.hasHash {
+			continue
+		}
+		op, ok := byHash[np.contentHash]
+		if !ok || op.srcW != np.srcW || op.srcH != np.srcH {
+			continue
+		}
+		np.raw = op.raw
+		if op.scaled != nil {
+			np.scaled = op.scaled
+			np.scaledW = op.scaledW
+			np.scaledInvert = op.scaledInvert
+			np.scaledTrim = op.scaledTrim
+			np.cropTop = op.cropTop
+			np.cropH = op.cropH
+		}
+		carried++
+	}
+	return carried
 }
 
 // CompileDuration returns how long tinymist took to compile this deck.
@@ -525,20 +617,272 @@ func (d *DocumentDeck) visiblePageRange(scrollY, viewH int) (firstPage, lastPage
 	return first, last
 }
 
+// ViewportComposite holds an uncompressed composited viewport RGBA image and layout metrics.
+type ViewportComposite struct {
+	Image        *image.RGBA
+	ScaledW      int
+	DstW         int
+	DstH         int
+	ComposeDur   time.Duration
+	FirstPage    int
+	LastPage     int
+	PageCount    int
+	ScrollY      int
+	MaxScrollY   int
+	ScrollX      int
+	MaxScrollX   int
+	ViewportHash [32]byte
+	HasHash      bool
+}
+
 // ViewportRender holds a single encoded continuous viewport frame (Sixel or Kitty).
 type ViewportRender struct {
-	Protocol   GraphicsProtocol
-	Payload    []byte
-	Sixel      []byte
-	DstW       int
-	DstH       int
-	ComposeDur time.Duration
-	EncodeDur  time.Duration
-	FirstPage  int
-	LastPage   int
-	PageCount  int
-	ScrollY    int
-	MaxScrollY int
+	Protocol     GraphicsProtocol
+	Payload      []byte
+	Sixel        []byte
+	ScaledW      int
+	DstW         int
+	DstH         int
+	ComposeDur   time.Duration
+	EncodeDur    time.Duration
+	FirstPage    int
+	LastPage     int
+	PageCount    int
+	ScrollY      int
+	MaxScrollY   int
+	ScrollX      int
+	MaxScrollX   int
+	ViewportHash [32]byte
+	HasHash      bool
+	Reused       bool
+}
+
+type preparedViewport struct {
+	t0            time.Time
+	scaledW       int
+	viewW         int
+	outW          int
+	outH          int
+	scrollY       int
+	maxScrollY    int
+	scrollX       int
+	maxScrollX    int
+	invert        bool
+	trim          bool
+	firstPage     int
+	lastPage      int
+	compositeHash [32]byte
+	hasHash       bool
+}
+
+func (d *DocumentDeck) prepareViewport(scaledW, viewW, viewH, scrollY, scrollX int, invert, trim bool) (*preparedViewport, error) {
+	if d == nil || len(d.pages) == 0 {
+		return nil, fmt.Errorf("empty document deck")
+	}
+	if scaledW < 16 {
+		scaledW = 16
+	}
+	if viewW < 16 {
+		viewW = 16
+	}
+	if viewH < 16 {
+		viewH = 16
+	}
+
+	t0 := time.Now()
+	d.ComputeLayout(scaledW, trim)
+	d.layoutInvert = invert
+
+	clampY := func(y int) (int, int) {
+		maxY := d.totalHeight - viewH
+		if maxY < 0 {
+			maxY = 0
+		}
+		if y < 0 {
+			y = 0
+		}
+		if y > maxY {
+			y = maxY
+		}
+		return y, maxY
+	}
+
+	var maxScrollY int
+	scrollY, maxScrollY = clampY(scrollY)
+
+	for pass := 0; pass < 3; pass++ {
+		layoutChanged := false
+		for i, p := range d.pages {
+			top := d.pageTops[i]
+			bot := top + d.pageHeights[i]
+			if bot <= scrollY || top >= scrollY+viewH {
+				continue
+			}
+			sc, err := p.ensureScaled(scaledW, invert, trim)
+			if err != nil {
+				return nil, err
+			}
+			if sc.Bounds().Dy() != d.pageHeights[i] {
+				layoutChanged = true
+			}
+		}
+		if !layoutChanged {
+			break
+		}
+		d.ComputeLayout(scaledW, trim)
+		scrollY, maxScrollY = clampY(scrollY)
+	}
+
+	outH := viewH
+	if d.totalHeight < outH {
+		outH = d.totalHeight
+	}
+	if outH < 1 {
+		outH = 1
+	}
+
+	outW := scaledW
+	if viewW < outW {
+		outW = viewW
+	}
+	if outW < 1 {
+		outW = 1
+	}
+
+	maxScrollX := scaledW - outW
+	if maxScrollX < 0 {
+		maxScrollX = 0
+	}
+	if scrollX < 0 {
+		scrollX = 0
+	}
+	if scrollX > maxScrollX {
+		scrollX = maxScrollX
+	}
+
+	fp, lp := d.visiblePageRange(scrollY, outH)
+
+	h := sha256.New()
+	var buf [64]byte
+	binary.LittleEndian.PutUint64(buf[0:8], uint64(scaledW))
+	binary.LittleEndian.PutUint64(buf[8:16], uint64(viewW))
+	binary.LittleEndian.PutUint64(buf[16:24], uint64(outW))
+	binary.LittleEndian.PutUint64(buf[24:32], uint64(outH))
+	binary.LittleEndian.PutUint64(buf[32:40], uint64(scrollY))
+	binary.LittleEndian.PutUint64(buf[40:48], uint64(scrollX))
+	if invert {
+		buf[48] = 1
+	}
+	if trim {
+		buf[49] = 1
+	}
+	h.Write(buf[:50])
+
+	hasHash := true
+	visCount := 0
+	for i, p := range d.pages {
+		top := d.pageTops[i]
+		bot := top + d.pageHeights[i]
+		if bot <= scrollY || top >= scrollY+outH {
+			continue
+		}
+		if !p.hasHash {
+			hasHash = false
+			break
+		}
+		visCount++
+		binary.LittleEndian.PutUint64(buf[0:8], uint64(i))
+		binary.LittleEndian.PutUint64(buf[8:16], uint64(top))
+		binary.LittleEndian.PutUint64(buf[16:24], uint64(d.pageHeights[i]))
+		binary.LittleEndian.PutUint64(buf[24:32], uint64(p.srcW))
+		binary.LittleEndian.PutUint64(buf[32:40], uint64(p.srcH))
+		h.Write(buf[:40])
+		h.Write(p.contentHash[:])
+	}
+	binary.LittleEndian.PutUint64(buf[0:8], uint64(visCount))
+	h.Write(buf[:8])
+
+	var compositeHash [32]byte
+	if hasHash {
+		copy(compositeHash[:], h.Sum(nil))
+	}
+
+	return &preparedViewport{
+		t0:            t0,
+		scaledW:       scaledW,
+		viewW:         viewW,
+		outW:          outW,
+		outH:          outH,
+		scrollY:       scrollY,
+		maxScrollY:    maxScrollY,
+		scrollX:       scrollX,
+		maxScrollX:    maxScrollX,
+		invert:        invert,
+		trim:          trim,
+		firstPage:     fp,
+		lastPage:      lp,
+		compositeHash: compositeHash,
+		hasHash:       hasHash,
+	}, nil
+}
+
+func (d *DocumentDeck) compositePrepared(prep *preparedViewport) (*image.RGBA, error) {
+	canvas := image.NewRGBA(image.Rect(0, 0, prep.outW, prep.outH))
+	gapCol := color.RGBA{R: 22, G: 25, B: 34, A: 255}
+	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: gapCol}, image.Point{}, draw.Src)
+
+	for i, p := range d.pages {
+		top := d.pageTops[i]
+		bot := top + d.pageHeights[i]
+		if bot <= prep.scrollY || top >= prep.scrollY+prep.outH {
+			continue
+		}
+		sc, err := p.ensureScaled(prep.scaledW, prep.invert, prep.trim)
+		if err != nil {
+			return nil, err
+		}
+		visTop := top
+		if visTop < prep.scrollY {
+			visTop = prep.scrollY
+		}
+		visBot := bot
+		if visBot > prep.scrollY+prep.outH {
+			visBot = prep.scrollY + prep.outH
+		}
+		dstRect := image.Rect(0, visTop-prep.scrollY, prep.outW, visBot-prep.scrollY)
+		srcPt := image.Pt(prep.scrollX, visTop-top)
+		draw.Draw(canvas, dstRect, sc, srcPt, draw.Src)
+	}
+	return canvas, nil
+}
+
+// CompositeViewport composites the visible slice [scrollY, scrollY+viewH) and
+// horizontal slice [scrollX, scrollX+outW) from the scaledW page canvas.
+func (d *DocumentDeck) CompositeViewport(scaledW, viewW, viewH, scrollY, scrollX int, invert, trim bool) (*ViewportComposite, error) {
+	prep, err := d.prepareViewport(scaledW, viewW, viewH, scrollY, scrollX, invert, trim)
+	if err != nil {
+		return nil, err
+	}
+	canvas, err := d.compositePrepared(prep)
+	if err != nil {
+		return nil, err
+	}
+	return &ViewportComposite{
+		Image:        canvas,
+		ScaledW:      prep.scaledW,
+		DstW:         prep.outW,
+		DstH:         prep.outH,
+		ComposeDur:   time.Since(prep.t0),
+		FirstPage:    prep.firstPage,
+		LastPage:     prep.lastPage,
+		PageCount:    len(d.pages),
+		ScrollY:      prep.scrollY,
+		MaxScrollY:   prep.maxScrollY,
+		ScrollX:      prep.scrollX,
+		MaxScrollX:   prep.maxScrollX,
+		ViewportHash: prep.compositeHash,
+		HasHash:      prep.hasHash,
+	}, nil
 }
 
 // RenderViewport composites the visible slice [scrollY, scrollY+viewH) across
@@ -551,127 +895,98 @@ func (d *DocumentDeck) RenderViewport(dstW, viewH, scrollY int, invert, trim boo
 // RenderViewportWithProtocol renders the visible viewport slice encoded with proto.
 // ProtocolNone falls back to Sixel so forced `:preview inline` calls remain usable.
 func (d *DocumentDeck) RenderViewportWithProtocol(dstW, viewH, scrollY int, invert, trim bool, proto GraphicsProtocol) (*ViewportRender, error) {
-	if d == nil || len(d.pages) == 0 {
-		return nil, fmt.Errorf("empty document deck")
-	}
-	if dstW < 16 {
-		dstW = 16
-	}
-	if viewH < 16 {
-		viewH = 16
+	return d.RenderViewportCached(dstW, dstW, viewH, scrollY, 0, invert, trim, proto, nil)
+}
+
+// RenderViewportCached composites and encodes the visible viewport slice, reusing
+// prev's encoded Payload/Sixel and skipping compositing + encoding when the visible
+// viewport parameters and visible page content hashes match prev.
+func (d *DocumentDeck) RenderViewportCached(scaledW, viewW, viewH, scrollY, scrollX int, invert, trim bool, proto GraphicsProtocol, prev *ViewportRender) (*ViewportRender, error) {
+	prep, err := d.prepareViewport(scaledW, viewW, viewH, scrollY, scrollX, invert, trim)
+	if err != nil {
+		return nil, err
 	}
 
-	t0 := time.Now()
-	d.ComputeLayout(dstW, trim)
+	emitProto := proto
+	if emitProto != ProtocolKitty {
+		emitProto = ProtocolSixel
+	}
+	tmux := emitProto == ProtocolKitty && UseTmuxPassthrough()
 
-	maxScrollY := d.totalHeight - viewH
-	if maxScrollY < 0 {
-		maxScrollY = 0
-	}
-	if scrollY < 0 {
-		scrollY = 0
-	}
-	if scrollY > maxScrollY {
-		scrollY = maxScrollY
-	}
-
-	layoutChanged := false
-	for i, p := range d.pages {
-		top := d.pageTops[i]
-		bot := top + d.pageHeights[i]
-		if bot <= scrollY || top >= scrollY+viewH {
-			continue
+	var fullHash [32]byte
+	if prep.hasHash {
+		h := sha256.New()
+		h.Write(prep.compositeHash[:])
+		var tag [2]byte
+		tag[0] = byte(emitProto)
+		if tmux {
+			tag[1] = 1
 		}
-		sc, err := p.ensureScaled(dstW, invert, trim)
-		if err != nil {
-			return nil, err
-		}
-		if sc.Bounds().Dy() != d.pageHeights[i] {
-			layoutChanged = true
-		}
-	}
-	if layoutChanged {
-		d.ComputeLayout(dstW, trim)
-		maxScrollY = d.totalHeight - viewH
-		if maxScrollY < 0 {
-			maxScrollY = 0
-		}
-		if scrollY > maxScrollY {
-			scrollY = maxScrollY
-		}
-		for i, p := range d.pages {
-			top := d.pageTops[i]
-			bot := top + d.pageHeights[i]
-			if bot <= scrollY || top >= scrollY+viewH {
-				continue
-			}
-			if _, err := p.ensureScaled(dstW, invert, trim); err != nil {
-				return nil, err
-			}
-		}
+		h.Write(tag[:])
+		copy(fullHash[:], h.Sum(nil))
 	}
 
-	outH := viewH
-	if d.totalHeight < outH {
-		outH = d.totalHeight
-	}
-	if outH < 1 {
-		outH = 1
+	if prev != nil && prep.hasHash && prev.HasHash &&
+		prev.ViewportHash == fullHash && prev.Protocol == emitProto &&
+		prev.DstW == prep.outW && prev.DstH == prep.outH &&
+		len(prev.Payload) > 0 {
+		return &ViewportRender{
+			Protocol:     emitProto,
+			Payload:      prev.Payload,
+			Sixel:        prev.Sixel,
+			ScaledW:      prep.scaledW,
+			DstW:         prep.outW,
+			DstH:         prep.outH,
+			ComposeDur:   time.Since(prep.t0),
+			EncodeDur:    0,
+			FirstPage:    prep.firstPage,
+			LastPage:     prep.lastPage,
+			PageCount:    len(d.pages),
+			ScrollY:      prep.scrollY,
+			MaxScrollY:   prep.maxScrollY,
+			ScrollX:      prep.scrollX,
+			MaxScrollX:   prep.maxScrollX,
+			ViewportHash: fullHash,
+			HasHash:      true,
+			Reused:       true,
+		}, nil
 	}
 
-	canvas := image.NewRGBA(image.Rect(0, 0, dstW, outH))
-	gapCol := color.RGBA{R: 22, G: 25, B: 34, A: 255}
-	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: gapCol}, image.Point{}, draw.Src)
-
-	for i, p := range d.pages {
-		top := d.pageTops[i]
-		bot := top + d.pageHeights[i]
-		if bot <= scrollY || top >= scrollY+outH {
-			continue
-		}
-		sc, err := p.ensureScaled(dstW, invert, trim)
-		if err != nil {
-			return nil, err
-		}
-		visTop := top
-		if visTop < scrollY {
-			visTop = scrollY
-		}
-		visBot := bot
-		if visBot > scrollY+outH {
-			visBot = scrollY + outH
-		}
-		dstRect := image.Rect(0, visTop-scrollY, dstW, visBot-scrollY)
-		srcPt := image.Pt(0, visTop-top)
-		draw.Draw(canvas, dstRect, sc, srcPt, draw.Src)
+	canvas, err := d.compositePrepared(prep)
+	if err != nil {
+		return nil, err
 	}
-	composeDur := time.Since(t0)
+	composeDur := time.Since(prep.t0)
 
 	tEnc := time.Now()
 	var payload []byte
 	var sixel []byte
-	if proto == ProtocolKitty {
-		payload = EncodeKittyWithPassthrough(canvas, UseTmuxPassthrough())
+	if emitProto == ProtocolKitty {
+		payload = EncodeKittyWithPassthrough(canvas, tmux)
 	} else {
-		proto = ProtocolSixel
 		sixel = EncodeSixel(canvas)
 		payload = sixel
 	}
 	encodeDur := time.Since(tEnc)
 
-	fp, lp := d.visiblePageRange(scrollY, outH)
 	return &ViewportRender{
-		Protocol:   proto,
-		Payload:    payload,
-		Sixel:      sixel,
-		DstW:       dstW,
-		DstH:       outH,
-		ComposeDur: composeDur,
-		EncodeDur:  encodeDur,
-		FirstPage:  fp,
-		LastPage:   lp,
-		PageCount:  len(d.pages),
-		ScrollY:    scrollY,
-		MaxScrollY: maxScrollY,
+		Protocol:     emitProto,
+		Payload:      payload,
+		Sixel:        sixel,
+		ScaledW:      prep.scaledW,
+		DstW:         prep.outW,
+		DstH:         prep.outH,
+		ComposeDur:   composeDur,
+		EncodeDur:    encodeDur,
+		FirstPage:    prep.firstPage,
+		LastPage:     prep.lastPage,
+		PageCount:    len(d.pages),
+		ScrollY:      prep.scrollY,
+		MaxScrollY:   prep.maxScrollY,
+		ScrollX:      prep.scrollX,
+		MaxScrollX:   prep.maxScrollX,
+		ViewportHash: fullHash,
+		HasHash:      prep.hasHash,
+		Reused:       false,
 	}, nil
 }

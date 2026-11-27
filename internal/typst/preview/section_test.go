@@ -5,6 +5,7 @@ import (
 	"context"
 	"image"
 	"image/color"
+	"image/draw"
 	"math"
 	"os"
 	"os/exec"
@@ -424,5 +425,197 @@ End text.
 	}
 	if _, ok := anchors.NamedDests["sec:second"]; !ok {
 		t.Fatalf("expected sec:second in PDF named destinations, got %#v", anchors.NamedDests)
+	}
+}
+
+func TestResolveClickToSourceLineInterpolationAndEdgeCases(t *testing.T) {
+	// 3 pages of 200x400 each at dstW=200 (pageTops = 0, 414, 828; totalHeight = 1228).
+	imgs := []*image.RGBA{
+		makeTestPage(200, 400, color.RGBA{255, 255, 255, 255}, color.RGBA{0, 0, 0, 255}),
+		makeTestPage(200, 400, color.RGBA{255, 255, 255, 255}, color.RGBA{0, 0, 0, 255}),
+		makeTestPage(200, 400, color.RGBA{255, 255, 255, 255}, color.RGBA{0, 0, 0, 255}),
+	}
+	deck := NewDocumentDeckFromImages(imgs, time.Millisecond)
+	defer deck.Close()
+
+	deck.SetAnchors(&DocumentAnchors{
+		Outlines: []OutlineAnchor{
+			{Title: "Intro", Depth: 1, PageIdx: 0, YFrac: 0.10},    // y = 40
+			{Title: "Examples", Depth: 1, PageIdx: 0, YFrac: 0.60}, // y = 240
+			{Title: "Examples", Depth: 1, PageIdx: 2, YFrac: 0.40}, // y = 828 + 160 = 988
+		},
+		NamedDests: map[string]PageAnchor{
+			"fig:named": {PageIdx: 1, YFrac: 0.50}, // y = 414 + 200 = 614
+		},
+	})
+	sections := []SectionEntry{
+		{Kind: SectionHeading, Level: 1, Title: "Intro", Line: 10},
+		{Kind: SectionHeading, Level: 1, Title: "Examples", Line: 20},
+		{Kind: SectionFigure, Level: 0, Title: "Named", Label: "fig:named", Line: 40},
+		{Kind: SectionHeading, Level: 1, Title: "Examples", Line: 60},
+	}
+
+	if _, err := deck.RenderViewportWithProtocol(200, 200, 0, false, false, ProtocolSixel); err != nil {
+		t.Fatalf("RenderViewportWithProtocol: %v", err)
+	}
+
+	// 1. Exact anchor hits.
+	if got := deck.ResolveClickToSourceLine(40, sections, 100); got != 10 {
+		t.Fatalf("at Intro anchor y=40 got line %d, want 10", got)
+	}
+	if got := deck.ResolveClickToSourceLine(240, sections, 100); got != 20 {
+		t.Fatalf("at first Examples anchor y=240 got line %d, want 20", got)
+	}
+	if got := deck.ResolveClickToSourceLine(988, sections, 100); got != 60 {
+		t.Fatalf("at second duplicate Examples anchor y=988 got line %d, want 60", got)
+	}
+
+	// 2. Bracketed interpolation halfway between first Examples (line 20, y=240) and fig:named (line 40, y=614):
+	// midY = (240+614)/2 = 427 -> line 30.
+	if got := deck.ResolveClickToSourceLine(427, sections, 100); got != 30 {
+		t.Fatalf("midpoint interpolation got line %d, want 30", got)
+	}
+
+	// 3. Top and bottom margin clamping.
+	if got := deck.ResolveClickToSourceLine(-50, sections, 100); got != 0 {
+		t.Fatalf("negative clickYpx should clamp to 0, got %d", got)
+	}
+	if got := deck.ResolveClickToSourceLine(5000, sections, 100); got != 99 {
+		t.Fatalf("overshoot clickYpx should clamp to totalLines-1 (99), got %d", got)
+	}
+
+	// 4. Trim margins uses crop offsets properly.
+	if _, err := deck.RenderViewportWithProtocol(200, 200, 0, false, true, ProtocolSixel); err != nil {
+		t.Fatalf("RenderViewportWithProtocol(trim=true): %v", err)
+	}
+	trimY, _, okTrim := deck.anchorToVirtualY(PageAnchor{PageIdx: 1, YFrac: 0.50}, 200, false, true)
+	if !okTrim {
+		t.Fatal("anchorToVirtualY(trim=true) failed")
+	}
+	if got := deck.ResolveClickToSourceLine(trimY, sections, 100); got != 40 {
+		t.Fatalf("with trim=true at fig:named y=%d got line %d, want 40", trimY, got)
+	}
+
+	// 5. Fallback when anchors == nil -> proportional across totalHeight.
+	deckNoAnchors := NewDocumentDeckFromImages(imgs, time.Millisecond)
+	defer deckNoAnchors.Close()
+	// totalHeight = 1228; clickY = 614 (50%) across totalLines=101 -> line 50.
+	if got := deckNoAnchors.ResolveClickToSourceLine(614, sections, 101); got != 50 {
+		t.Fatalf("proportional fallback got line %d, want 50", got)
+	}
+
+	// 6. Edge bounds: nil deck / totalLines <= 1.
+	var nilDeck *DocumentDeck
+	if got := nilDeck.ResolveClickToSourceLine(100, sections, 50); got != 0 {
+		t.Fatalf("nil deck should return 0, got %d", got)
+	}
+	if got := deck.ResolveClickToSourceLine(500, sections, 1); got != 0 {
+		t.Fatalf("single-line document should return 0, got %d", got)
+	}
+}
+
+func makePageWithMargins(w, h, mx, my int, bg, ink color.RGBA) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(img, img.Bounds(), &image.Uniform{C: bg}, image.Point{}, draw.Src)
+	rect := image.Rect(mx, my, w-mx, h-my)
+	draw.Draw(img, rect, &image.Uniform{C: ink}, image.Point{}, draw.Src)
+	return img
+}
+
+func TestResolveClickToSourceLineTrimMarginsWithLazyUnscaledPages(t *testing.T) {
+	white := color.RGBA{255, 255, 255, 255}
+	black := color.RGBA{0, 0, 0, 255}
+	// Page 0 has large top/bottom whitespace (150px) so trimMargins shrinks it substantially.
+	// Page 1 has 40px margins and heading "Page2" centered at YFrac=0.50 (line 50).
+	imgs := []*image.RGBA{
+		makePageWithMargins(200, 400, 20, 150, white, black),
+		makePageWithMargins(200, 400, 20, 40, white, black),
+	}
+	deck := NewDocumentDeckFromImages(imgs, time.Millisecond)
+	defer deck.Close()
+
+	deck.SetAnchors(&DocumentAnchors{
+		Outlines: []OutlineAnchor{
+			{Title: "Page1", Depth: 1, PageIdx: 0, YFrac: 0.45},
+			{Title: "Page2", Depth: 1, PageIdx: 1, YFrac: 0.50},
+		},
+	})
+	sections := []SectionEntry{
+		{Kind: SectionHeading, Level: 1, Title: "Page1", Line: 0},
+		{Kind: SectionHeading, Level: 1, Title: "Page2", Line: 50},
+	}
+
+	// Render directly at Page 2 (scrollY=414) with trim=true so Page 0 stays unscaled.
+	vp, err := deck.RenderViewportCached(200, 200, 300, 414, 0, false, true, ProtocolSixel, nil)
+	if err != nil {
+		t.Fatalf("RenderViewportCached failed: %v", err)
+	}
+	if deck.pages[0].scaled != nil {
+		t.Fatal("expected Page 0 to remain lazily unscaled when viewport starts on Page 2")
+	}
+	if vp.ScrollY != 414 {
+		t.Fatalf("expected vp.ScrollY=414, got %d", vp.ScrollY)
+	}
+
+	// Click in the center of Page 2 (pre-mutation Page 1 height / 2 -> YFrac=0.50).
+	clickVirtY := vp.ScrollY + deck.pageHeights[1]/2
+	got := deck.ResolveClickToSourceLine(clickVirtY, sections, 100)
+	if got != 50 {
+		t.Fatalf("trimMargins + lazy unscaled Page 0 click resolved to line %d, want 50 (clickVirtY=%d)", got, clickVirtY)
+	}
+
+	// Subsequent click at the same relative position in the post-trim layout also resolves to 50.
+	postClickVirtY := deck.PageTop(1) + deck.pageHeights[1]/2
+	if got2 := deck.ResolveClickToSourceLine(postClickVirtY, sections, 100); got2 != 50 {
+		t.Fatalf("subsequent post-trim click resolved to line %d, want 50", got2)
+	}
+
+	// Overshoot below pre-trim totalHeight still clamps to totalLines-1.
+	if gotEnd := deck.ResolveClickToSourceLine(5000, sections, 100); gotEnd != 99 {
+		t.Fatalf("overshoot click resolved to %d, want 99", gotEnd)
+	}
+}
+
+func TestResolveSectionScrollY_MultiFileDuplicateHeadingsAndTier3(t *testing.T) {
+	imgs := make([]*image.RGBA, 4)
+	for i := range imgs {
+		imgs[i] = image.NewRGBA(image.Rect(0, 0, 200, 300))
+	}
+	deck := NewDocumentDeckFromImages(imgs, time.Millisecond)
+	defer deck.Close()
+	deck.SetAnchors(&DocumentAnchors{
+		Outlines: []OutlineAnchor{
+			{Title: "Summary", Depth: 1, PageIdx: 0, YFrac: 0.10},
+			{Title: "Summary", Depth: 1, PageIdx: 2, YFrac: 0.20},
+			{Title: "Appendix", Depth: 1, PageIdx: 3, YFrac: 0.50},
+		},
+	})
+	all := []SectionEntry{
+		{Kind: SectionHeading, Level: 1, Title: "Summary", FilePath: "/proj/ch1.typ", Line: 0},
+		{Kind: SectionHeading, Level: 1, Title: "Summary", FilePath: "/proj/ch2.typ", Line: 0},
+		{Kind: SectionFigure, Level: 0, Title: "Fig 2", FilePath: "/proj/ch2.typ", Line: 10},
+		{Kind: SectionHeading, Level: 1, Title: "Appendix", FilePath: "/proj/ch2.typ", Line: 20},
+	}
+
+	// Tier 2: clicking Summary in ch2.typ at line 0 must land on page 2 (not ch1.typ page 0).
+	yCh1 := deck.ResolveSectionScrollY(SectionTarget{
+		Kind: SectionHeading, Level: 1, Title: "Summary", FilePath: "/proj/ch1.typ", Line: 0, TotalLines: 30, AllSections: all,
+	}, 200, 200, false, false)
+	yCh2 := deck.ResolveSectionScrollY(SectionTarget{
+		Kind: SectionHeading, Level: 1, Title: "Summary", FilePath: "/proj/ch2.typ", Line: 0, TotalLines: 30, AllSections: all,
+	}, 200, 200, false, false)
+	if yCh2 <= yCh1+400 {
+		t.Fatalf("expected ch2 Summary (page 2) to scroll far below ch1 Summary (page 0), got yCh1=%d yCh2=%d", yCh1, yCh2)
+	}
+
+	// Tier 3: unlabeled figure at ch2.typ:10 must interpolate between ch2 Summary (page 2) and Appendix (page 3).
+	yFig := deck.ResolveSectionScrollY(SectionTarget{
+		Kind: SectionFigure, Level: 0, Title: "Fig 2", FilePath: "/proj/ch2.typ", Line: 10, TotalLines: 30, AllSections: all,
+	}, 200, 200, false, false)
+	yApp := deck.ResolveSectionScrollY(SectionTarget{
+		Kind: SectionHeading, Level: 1, Title: "Appendix", FilePath: "/proj/ch2.typ", Line: 20, TotalLines: 30, AllSections: all,
+	}, 200, 200, false, false)
+	if yFig <= yCh2 || yFig >= yApp {
+		t.Fatalf("expected ch2 Fig 2 scrollY strictly between ch2 Summary (%d) and Appendix (%d), got %d", yCh2, yApp, yFig)
 	}
 }

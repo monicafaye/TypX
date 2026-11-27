@@ -1,6 +1,7 @@
 package preview
 
 import (
+	"math"
 	"strings"
 	"unicode"
 )
@@ -19,11 +20,12 @@ const (
 // SectionEntry describes a single document outline entry in document order,
 // used to align source outline items with rendered PDF anchors.
 type SectionEntry struct {
-	Kind  SectionKind
-	Level int
-	Title string
-	Label string
-	Line  int
+	Kind     SectionKind
+	Level    int
+	Title    string
+	Label    string
+	FilePath string
+	Line     int
 }
 
 // SectionTarget describes a user-selected outline entry to reposition the preview to.
@@ -32,6 +34,7 @@ type SectionTarget struct {
 	Level       int
 	Title       string
 	Label       string
+	FilePath    string
 	Line        int
 	TotalLines  int
 	AllSections []SectionEntry
@@ -153,6 +156,178 @@ func (d *DocumentDeck) ResolveCursorVirtualY(target SectionTarget, dstW, viewH i
 	return int(ratio * float64(d.totalHeight)), computeMax(), true
 }
 
+type lineYPoint struct {
+	line int
+	y    int
+}
+
+// ResolveClickToSourceLine maps a virtual Y pixel coordinate (scrollY + localClickYpx)
+// back to a 0-based source buffer line in [0, totalLines-1] using monotonic
+// interpolation between aligned PDF outline/label anchors (falling back to
+// proportional document position when no anchors match).
+func (d *DocumentDeck) ResolveClickToSourceLine(clickYpx int, sections []SectionEntry, totalLines int) int {
+	if totalLines <= 1 || d == nil || len(d.pages) == 0 {
+		return 0
+	}
+
+	dstW := d.layoutW
+	if dstW <= 0 && d.pages[0] != nil && d.pages[0].srcW > 0 {
+		dstW = d.pages[0].srcW
+	}
+	if dstW < 16 {
+		dstW = 16
+	}
+	trim := d.layoutTrim
+	invert := d.layoutInvert
+	preTops, preHeights, preTotalH := snapshotDeckLayout(d, dstW, trim)
+
+	var curve []lineYPoint
+	if d.anchors != nil && len(sections) > 0 {
+		aligned := alignSectionsToAnchors(sections, d.anchors)
+		if len(aligned) > 0 {
+			for i, s := range sections {
+				a, ok := aligned[i]
+				if !ok {
+					continue
+				}
+				y, _, okY := d.anchorToVirtualY(a, dstW, invert, trim)
+				if !okY {
+					continue
+				}
+				line := s.Line
+				if line < 0 {
+					line = 0
+				} else if line >= totalLines {
+					line = totalLines - 1
+				}
+				if len(curve) > 0 {
+					prev := curve[len(curve)-1]
+					if line < prev.line || y < prev.y {
+						continue
+					}
+					if line == prev.line && y == prev.y {
+						continue
+					}
+				}
+				curve = append(curve, lineYPoint{line: line, y: y})
+			}
+		}
+	}
+
+	totalH := d.totalHeight
+	if totalH <= 0 {
+		return 0
+	}
+
+	effectiveClickYpx := remapVirtualYAcrossLayout(clickYpx, preTops, preHeights, preTotalH, d.pageTops, d.pageHeights, totalH)
+
+	if len(curve) == 0 || (curve[0].line > 0 && curve[0].y > 0) {
+		curve = append([]lineYPoint{{line: 0, y: 0}}, curve...)
+	}
+	last := curve[len(curve)-1]
+	if last.line < totalLines-1 && last.y < totalH {
+		curve = append(curve, lineYPoint{line: totalLines - 1, y: totalH})
+	}
+
+	if len(curve) == 1 {
+		return curve[0].line
+	}
+	if effectiveClickYpx <= curve[0].y {
+		return curve[0].line
+	}
+	if effectiveClickYpx >= curve[len(curve)-1].y {
+		return curve[len(curve)-1].line
+	}
+
+	for k := 0; k < len(curve)-1; k++ {
+		p0, p1 := curve[k], curve[k+1]
+		if effectiveClickYpx > p1.y {
+			continue
+		}
+		if p1.y <= p0.y {
+			return p0.line
+		}
+		t := float64(effectiveClickYpx-p0.y) / float64(p1.y-p0.y)
+		line := p0.line + int(math.Round(t*float64(p1.line-p0.line)))
+		if line < 0 {
+			return 0
+		}
+		if line >= totalLines {
+			return totalLines - 1
+		}
+		return line
+	}
+	return totalLines - 1
+}
+
+func snapshotDeckLayout(d *DocumentDeck, dstW int, trim bool) (tops, heights []int, totalH int) {
+	if d == nil || len(d.pages) == 0 {
+		return nil, nil, 0
+	}
+	if len(d.pageTops) != len(d.pages) || d.layoutW != dstW || d.layoutTrim != trim {
+		d.ComputeLayout(dstW, trim)
+	}
+	tops = append([]int(nil), d.pageTops...)
+	heights = append([]int(nil), d.pageHeights...)
+	totalH = d.totalHeight
+	return tops, heights, totalH
+}
+
+func layoutShifted(preTops, preHeights []int, preTotalH int, postTops, postHeights []int, postTotalH int) bool {
+	if preTotalH != postTotalH || len(preTops) != len(postTops) || len(preHeights) != len(postHeights) {
+		return true
+	}
+	for i := range preTops {
+		if preTops[i] != postTops[i] || preHeights[i] != postHeights[i] {
+			return true
+		}
+	}
+	return false
+}
+
+func remapVirtualYAcrossLayout(y int, preTops, preHeights []int, preTotalH int, postTops, postHeights []int, postTotalH int) int {
+	if len(preTops) == 0 || len(preTops) != len(postTops) || len(preHeights) != len(postHeights) || preTotalH <= 0 || postTotalH <= 0 {
+		return y
+	}
+	if !layoutShifted(preTops, preHeights, preTotalH, postTops, postHeights, postTotalH) {
+		return y
+	}
+	if y <= 0 {
+		return y
+	}
+	if y >= preTotalH {
+		return postTotalH + (y - preTotalH)
+	}
+	for k := 0; k < len(preTops); k++ {
+		pTop := preTops[k]
+		pH := preHeights[k]
+		pBot := pTop + pH
+		if y >= pTop && y <= pBot {
+			if postHeights[k] == pH {
+				return postTops[k] + (y - pTop)
+			}
+			if pH <= 0 {
+				return postTops[k]
+			}
+			rel := float64(y-pTop) / float64(pH)
+			return postTops[k] + int(math.Round(rel*float64(postHeights[k])))
+		}
+		if k+1 < len(preTops) && y > pBot && y < preTops[k+1] {
+			preGap := preTops[k+1] - pBot
+			postGap := postTops[k+1] - (postTops[k] + postHeights[k])
+			if preGap == postGap {
+				return postTops[k] + postHeights[k] + (y - pBot)
+			}
+			if preGap <= 0 {
+				return postTops[k] + postHeights[k]
+			}
+			rel := float64(y-pBot) / float64(preGap)
+			return postTops[k] + postHeights[k] + int(math.Round(rel*float64(postGap)))
+		}
+	}
+	return y
+}
+
 func clampScrollY(y, maxY int) int {
 	if y < 0 {
 		return 0
@@ -218,10 +393,13 @@ func (d *DocumentDeck) resolveExactAnchor(target SectionTarget) (PageAnchor, boo
 	// Tier 2: align all document headings against PDF /Outlines in order.
 	if len(target.AllSections) > 0 {
 		aligned := alignSectionsToAnchors(target.AllSections, d.anchors)
-		// Find the matching entry in AllSections (preferring exact line + kind + title).
+		// Find the matching entry in AllSections (preferring exact file + line + kind + title).
 		bestIdx := -1
 		for i, s := range target.AllSections {
 			if s.Kind != target.Kind {
+				continue
+			}
+			if target.FilePath != "" && s.FilePath != "" && s.FilePath != target.FilePath {
 				continue
 			}
 			if s.Line == target.Line && s.Title == target.Title {
@@ -263,6 +441,12 @@ func (d *DocumentDeck) resolveInterpolatedY(target SectionTarget, dstW int, inve
 	aligned := alignSectionsToAnchors(target.AllSections, d.anchors)
 	if len(aligned) == 0 {
 		return 0, false
+	}
+
+	if target.FilePath != "" {
+		if y, ok := d.resolveMultiFileInterpolatedY(target, aligned, dstW, invert, trim); ok {
+			return y, true
+		}
 	}
 
 	// Find closest anchored section at or before target.Line, and closest after target.Line.
@@ -344,6 +528,152 @@ func (d *DocumentDeck) resolveInterpolatedY(target SectionTarget, dstW int, inve
 		t = 1
 	}
 	return prevY + int(t*float64(nextY-prevY)), true
+}
+
+func (d *DocumentDeck) resolveMultiFileInterpolatedY(target SectionTarget, aligned map[int]PageAnchor, dstW int, invert, trim bool) (int, bool) {
+	// Locate target entry in document order if present in AllSections.
+	targetIdx := -1
+	for i, s := range target.AllSections {
+		if s.FilePath != "" && s.FilePath != target.FilePath {
+			continue
+		}
+		if s.Kind == target.Kind && s.Line == target.Line && s.Title == target.Title {
+			targetIdx = i
+			break
+		}
+		if s.Line == target.Line && targetIdx < 0 {
+			targetIdx = i
+		}
+	}
+
+	prevIdx, nextIdx := -1, -1
+	if targetIdx >= 0 {
+		for i := targetIdx; i >= 0; i-- {
+			if _, ok := aligned[i]; ok {
+				prevIdx = i
+				break
+			}
+		}
+		for i := targetIdx + 1; i < len(target.AllSections); i++ {
+			if _, ok := aligned[i]; ok {
+				nextIdx = i
+				break
+			}
+		}
+	} else {
+		// Target line not in AllSections: bracket within target.FilePath first.
+		firstFileIdx, lastFileIdx := -1, -1
+		for i, s := range target.AllSections {
+			if s.FilePath != target.FilePath {
+				continue
+			}
+			if firstFileIdx < 0 {
+				firstFileIdx = i
+			}
+			lastFileIdx = i
+			if _, ok := aligned[i]; !ok {
+				continue
+			}
+			if s.Line <= target.Line {
+				if prevIdx < 0 || s.Line >= target.AllSections[prevIdx].Line {
+					prevIdx = i
+				}
+			} else {
+				if nextIdx < 0 || s.Line < target.AllSections[nextIdx].Line {
+					nextIdx = i
+				}
+			}
+		}
+		if prevIdx < 0 && firstFileIdx > 0 {
+			for i := firstFileIdx - 1; i >= 0; i-- {
+				if _, ok := aligned[i]; ok {
+					prevIdx = i
+					break
+				}
+			}
+		}
+		if nextIdx < 0 && lastFileIdx >= 0 {
+			for i := lastFileIdx + 1; i < len(target.AllSections); i++ {
+				if _, ok := aligned[i]; ok {
+					nextIdx = i
+					break
+				}
+			}
+		}
+	}
+
+	if prevIdx < 0 && nextIdx < 0 {
+		return 0, false
+	}
+
+	prevY := 0
+	hasPrev := false
+	if prevIdx >= 0 {
+		if y, _, ok := d.anchorToVirtualY(aligned[prevIdx], dstW, invert, trim); ok {
+			prevY = y
+			hasPrev = true
+		}
+	}
+	nextY := d.totalHeight
+	hasNext := false
+	if nextIdx >= 0 {
+		if y, _, ok := d.anchorToVirtualY(aligned[nextIdx], dstW, invert, trim); ok {
+			nextY = y
+			hasNext = true
+		}
+	}
+	if !hasPrev && !hasNext {
+		return 0, false
+	}
+	if nextY < prevY {
+		nextY = prevY
+	}
+
+	// If both brackets are in target.FilePath, interpolate by line numbers.
+	prevSameFile := hasPrev && target.AllSections[prevIdx].FilePath == target.FilePath
+	nextSameFile := hasNext && target.AllSections[nextIdx].FilePath == target.FilePath
+	if prevSameFile && nextSameFile {
+		prevLine := target.AllSections[prevIdx].Line
+		nextLine := target.AllSections[nextIdx].Line
+		span := nextLine - prevLine
+		if span <= 0 {
+			return prevY, true
+		}
+		t := float64(target.Line-prevLine) / float64(span)
+		if t < 0 {
+			t = 0
+		} else if t > 1 {
+			t = 1
+		}
+		return prevY + int(t*float64(nextY-prevY)), true
+	}
+
+	// Otherwise interpolate by document-order index across files.
+	if targetIdx >= 0 {
+		lo := prevIdx
+		if !hasPrev {
+			lo = -1
+		}
+		hi := nextIdx
+		if !hasNext {
+			hi = len(target.AllSections)
+		}
+		span := hi - lo
+		if span <= 0 {
+			return prevY, true
+		}
+		t := float64(targetIdx-lo) / float64(span)
+		if t < 0 {
+			t = 0
+		} else if t > 1 {
+			t = 1
+		}
+		return prevY + int(t*float64(nextY-prevY)), true
+	}
+	if hasPrev {
+		return prevY, true
+	}
+	return nextY, true
 }
 
 // alignSectionsToAnchors maps indices in sections to their exact PDF PageAnchors.
