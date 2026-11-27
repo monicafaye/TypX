@@ -32,7 +32,7 @@ func TestParsePreviewScrollSource(t *testing.T) {
 			name:   "uri with percent encoding and omitted taskId",
 			raw:    `{"uri":"file:///tmp/my%20doc.typ","line":1,"character":4}`,
 			wantOK: true,
-			want:   previewScrollTarget{FilePath: "/tmp/my doc.typ", Pos: Position{Line: 1, Character: 4}},
+			want:   previewScrollTarget{FilePath: filepath.FromSlash("/tmp/my doc.typ"), Pos: Position{Line: 1, Character: 4}},
 		},
 		{
 			name:   "relative path with col and column aliases",
@@ -74,7 +74,7 @@ func TestParsePreviewScrollSource(t *testing.T) {
 			name:   "nested location",
 			raw:    `{"location":{"uri":"file:///tmp/nested.typ","range":{"start":[6,4],"end":[6,8]}}}`,
 			wantOK: true,
-			want:   previewScrollTarget{FilePath: "/tmp/nested.typ", Pos: Position{Line: 6, Character: 4}},
+			want:   previewScrollTarget{FilePath: filepath.FromSlash("/tmp/nested.typ"), Pos: Position{Line: 6, Character: 4}},
 		},
 		{
 			name:   "negative coordinates clamped to zero",

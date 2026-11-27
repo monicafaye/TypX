@@ -50,10 +50,14 @@ func (s *m4bFakeServer) sendFrame(v any) {
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if s.closed || s.srvW == nil {
+	s.mu.Lock()
+	closed := s.closed
+	w := s.srvW
+	s.mu.Unlock()
+	if closed || w == nil {
 		return
 	}
-	_, _ = s.srvW.Write(frame)
+	_, _ = w.Write(frame)
 }
 
 func (s *m4bFakeServer) SendNotification(method string, params any) {

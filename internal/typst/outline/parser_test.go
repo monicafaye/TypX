@@ -345,8 +345,8 @@ func TestParsePerformance5000Lines(t *testing.T) {
 	if len(items) != 300 {
 		t.Fatalf("expected 300 items, got %d", len(items))
 	}
-	if elapsed > 100*time.Millisecond {
-		t.Fatalf("5000-line parse too slow: %v", elapsed)
+	if elapsed > parsePerfBudget {
+		t.Fatalf("5000-line parse too slow: %v (budget %v)", elapsed, parsePerfBudget)
 	}
 }
 
