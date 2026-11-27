@@ -2,6 +2,8 @@ package outline
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -101,10 +103,15 @@ type OutlinePane struct {
 	filterQuery   string
 	desiredWidth  int
 	clampedByTerm bool
+	projectMode   bool
+	isMultiFile   bool
+	hasProject    bool
+	includedFiles map[string]bool
 
 	mu             sync.Mutex
 	closed         bool
 	gen            uint64
+	refreshGen     uint64
 	timer          *time.Timer
 	hasDirty       bool
 	dirtyStartLine int
@@ -126,6 +133,7 @@ func newOutlinePane(tab *action.Tab, target *action.BufPane, mgr *Manager, desir
 		parser:        NewIncrementalParser(),
 		activeIdx:     -1,
 		desiredWidth:  desiredWidth,
+		projectMode:   true,
 	}
 }
 
@@ -188,10 +196,10 @@ func (op *OutlinePane) SetActive(b bool) {
 	op.active = b
 	if b {
 		// When entering OutlinePane, start selection on the active section if valid.
-		if op.activeIdx >= 0 && op.activeIdx < len(op.visible) {
+		if op.activeIdx >= 0 && op.activeIdx < len(op.visible) && op.visible[op.activeIdx].Kind != KindFile {
 			op.selectedIdx = op.activeIdx
-		} else if len(op.visible) > 0 && (op.selectedIdx < 0 || op.selectedIdx >= len(op.visible)) {
-			op.selectedIdx = 0
+		} else {
+			op.snapSelectionToSelectable(true)
 		}
 		op.ensureSelectionVisible()
 	} else {
@@ -263,6 +271,18 @@ func (op *OutlinePane) FilterQuery() string { return op.filterQuery }
 // IsFiltering reports whether inline '/' filter input is active.
 func (op *OutlinePane) IsFiltering() bool { return op.filtering }
 
+// IsProjectMode reports whether multi-file project mode is enabled.
+func (op *OutlinePane) IsProjectMode() bool { return op.projectMode }
+
+// IsMultiFile reports whether the currently displayed outline spans multiple files.
+func (op *OutlinePane) IsMultiFile() bool { return op.isMultiFile }
+
+// ToggleProjectMode toggles between multi-file project view and current-file-only view.
+func (op *OutlinePane) ToggleProjectMode() {
+	op.projectMode = !op.projectMode
+	op.RefreshNow(0, !op.projectMode)
+}
+
 // listHeight returns the number of screen rows available for outline entries.
 func (op *OutlinePane) listHeight() int {
 	if op.view.Height <= 1 {
@@ -323,20 +343,24 @@ func (op *OutlinePane) returnFocus() {
 	}
 }
 
-// RefreshNow parses the target buffer immediately (synchronously for normal
-// files, async snapshot for >5,000-line files) and optionally requests LSP
-// documentSymbol enrichment.
+// RefreshNow parses the target buffer (and #include project tree when project
+// mode is enabled) and optionally requests LSP documentSymbol enrichment.
 func (op *OutlinePane) RefreshNow(startLine int, requestLSP bool) {
 	op.mu.Lock()
 	if op.closed {
 		op.mu.Unlock()
 		return
 	}
+	op.refreshGen++
 	gen := op.gen
+	rgen := op.refreshGen
 	op.mu.Unlock()
 
 	target := op.resolveTarget()
 	if target == nil || target.Buf == nil || !target.Buf.IsTypst() {
+		op.isMultiFile = false
+		op.hasProject = false
+		op.includedFiles = nil
 		op.setItems(nil)
 		return
 	}
@@ -352,33 +376,149 @@ func (op *OutlinePane) RefreshNow(startLine int, requestLSP bool) {
 	ver := b.Version()
 	op.lastVersion = ver
 
-	if b.LinesNum() > largeFileLineThreshold {
-		// Copy immutable snapshot on main goroutine, parse off-thread.
+	activePath := bufferAbsPath(b)
+	activeCanon := canonicalOutlinePath(activePath)
+	var pinnedMain string
+	if op.mgr != nil {
+		if mfn := op.mgr.getMainFileResolver(); mfn != nil {
+			pinnedMain = mfn(activePath)
+		}
+	}
+	pinnedCanon := canonicalOutlinePath(pinnedMain)
+	hasReadablePin := pinnedMain != "" && fileReadable(pinnedMain, b)
+
+	if !op.projectMode {
+		op.isMultiFile = false
+		op.includedFiles = nil
+		if b.LinesNum() > largeFileLineThreshold {
+			op.parser.Reset()
+			op.hasProject = hasReadablePin && pinnedCanon != activeCanon
+			snap := snapshotLines(b)
+			targetBuf := b
+			go func() {
+				var p IncrementalParser
+				parsed := p.Update(snap, 0, opts)
+				hasIncludes := len(p.Includes()) > 0
+				stampItemPaths(parsed, activePath, activeCanon)
+				action.EnqueueUI(func() {
+					op.mu.Lock()
+					stale := op.closed || op.gen != gen || op.refreshGen != rgen
+					op.mu.Unlock()
+					if stale || op.projectMode {
+						return
+					}
+					curTarget := op.resolveTarget()
+					if curTarget == nil || curTarget.Buf != targetBuf || targetBuf.Version() != ver {
+						return
+					}
+					op.isMultiFile = false
+					op.includedFiles = nil
+					op.hasProject = (hasReadablePin && pinnedCanon != activeCanon) || hasIncludes
+					op.setItems(parsed)
+					if requestLSP {
+						op.requestLSPEnrichment(targetBuf, gen, rgen)
+					}
+				})
+			}()
+		} else {
+			parsed := op.parser.Update(b, startLine, opts)
+			stampItemPaths(parsed, activePath, activeCanon)
+			op.hasProject = (hasReadablePin && pinnedCanon != activeCanon) || len(op.parser.Includes()) > 0
+			op.setItems(parsed)
+			if requestLSP {
+				op.requestLSPEnrichment(b, gen, rgen)
+			}
+		}
+		return
+	}
+
+	entryPath := activePath
+	if hasReadablePin {
+		entryPath = pinnedMain
+	}
+
+	if !hasReadablePin && b.LinesNum() > largeFileLineThreshold {
+		op.parser.Reset()
+		// Copy immutable snapshots on main goroutine, parse and walk off-thread.
 		snap := snapshotLines(b)
+		openSnaps := snapshotOpenBuffers(b, snap)
+		rootDir := ""
+		if op.mgr != nil {
+			if rfn := op.mgr.getRootResolver(); rfn != nil && entryPath != "" {
+				rootDir = rfn(entryPath)
+			}
+		}
+		if rootDir == "" && entryPath != "" {
+			rootDir = filepath.Dir(entryPath)
+		}
 		targetBuf := b
 		go func() {
-			parsed := Parse(snap, opts)
+			var p IncrementalParser
+			parsed := p.Update(snap, 0, opts)
+			items := parsed
+			multiFile := false
+			var walked map[string]bool
+			if entryPath != "" && len(p.Includes()) > 0 {
+				items, multiFile, walked = walkProjectOutlineFromSnapshots(entryPath, rootDir, activeCanon, snap, &p, openSnaps, opts)
+			} else {
+				stampItemPaths(items, activePath, activeCanon)
+			}
 			action.EnqueueUI(func() {
 				op.mu.Lock()
-				stale := op.closed || op.gen != gen
+				stale := op.closed || op.gen != gen || op.refreshGen != rgen
 				op.mu.Unlock()
-				if stale {
+				if stale || !op.projectMode {
 					return
 				}
 				curTarget := op.resolveTarget()
 				if curTarget == nil || curTarget.Buf != targetBuf || targetBuf.Version() != ver {
 					return
 				}
-				op.setItems(parsed)
+				op.isMultiFile = multiFile
+				op.includedFiles = walked
+				op.hasProject = multiFile
+				op.setItems(items)
+				if requestLSP && !op.isMultiFile {
+					op.requestLSPEnrichment(targetBuf, gen, rgen)
+				}
 			})
 		}()
-	} else {
-		parsed := op.parser.Update(b, startLine, opts)
-		op.setItems(parsed)
+		return
 	}
 
-	if requestLSP {
-		op.requestLSPEnrichment(b, gen)
+	var activeParser *IncrementalParser
+	var localParsed []Item
+	if b.LinesNum() <= largeFileLineThreshold {
+		localParsed = op.parser.Update(b, startLine, opts)
+		activeParser = op.parser
+	} else {
+		op.parser.Reset()
+	}
+
+	if entryPath == "" || (!hasReadablePin && activeParser != nil && len(activeParser.Includes()) == 0) {
+		stampItemPaths(localParsed, activePath, activeCanon)
+		op.isMultiFile = false
+		op.hasProject = false
+		op.includedFiles = nil
+		op.setItems(localParsed)
+		if requestLSP {
+			op.requestLSPEnrichment(b, gen, rgen)
+		}
+		return
+	}
+
+	var rootResolver func(string) string
+	if op.mgr != nil {
+		rootResolver = op.mgr.getRootResolver()
+	}
+	items, multiFile, walked := walkProjectOutline(entryPath, b, activeParser, opts, rootResolver)
+	op.isMultiFile = multiFile
+	op.includedFiles = walked
+	op.hasProject = multiFile || (hasReadablePin && pinnedCanon != activeCanon)
+	op.setItems(items)
+
+	if requestLSP && !op.isMultiFile {
+		op.requestLSPEnrichment(b, gen, rgen)
 	}
 }
 
@@ -394,7 +534,7 @@ func snapshotLines(b *buffer.Buffer) typst.SliceSource {
 	return typst.SliceSource(lines)
 }
 
-func (op *OutlinePane) requestLSPEnrichment(b *buffer.Buffer, gen uint64) {
+func (op *OutlinePane) requestLSPEnrichment(b *buffer.Buffer, gen, rgen uint64) {
 	if op.mgr == nil || b == nil {
 		return
 	}
@@ -406,7 +546,7 @@ func (op *OutlinePane) requestLSPEnrichment(b *buffer.Buffer, gen uint64) {
 	opts := currentParseOptions()
 	provider(targetBuf, func(version uint64, symbols []Symbol) {
 		op.mu.Lock()
-		stale := op.closed || op.gen != gen
+		stale := op.closed || op.gen != gen || op.refreshGen != rgen
 		op.mu.Unlock()
 		if stale || len(symbols) == 0 {
 			return
@@ -483,28 +623,109 @@ func (op *OutlinePane) rebuildVisible() {
 	} else {
 		q := strings.ToLower(op.filterQuery)
 		filtered := make([]Item, 0, len(op.items))
-		for _, it := range op.items {
-			if strings.Contains(strings.ToLower(it.Title), q) ||
+		var curHeader *Item
+		var headerMatches bool
+		var segMatches []Item
+
+		flushSeg := func() {
+			if curHeader != nil {
+				if headerMatches {
+					// Header matched: header + all items in segment already accumulated or emit all?
+					// If header matched, segMatches holds all items in this segment.
+					filtered = append(filtered, *curHeader)
+					filtered = append(filtered, segMatches...)
+				} else if len(segMatches) > 0 {
+					filtered = append(filtered, *curHeader)
+					filtered = append(filtered, segMatches...)
+				}
+			} else if len(segMatches) > 0 {
+				filtered = append(filtered, segMatches...)
+			}
+			curHeader = nil
+			headerMatches = false
+			segMatches = nil
+		}
+
+		for i := range op.items {
+			it := op.items[i]
+			if it.Kind == KindFile {
+				flushSeg()
+				hdr := it
+				curHeader = &hdr
+				headerMatches = strings.Contains(strings.ToLower(it.Title), q)
+				continue
+			}
+			if headerMatches ||
+				strings.Contains(strings.ToLower(it.Title), q) ||
 				(it.Label != "" && strings.Contains(strings.ToLower(it.Label), q)) {
-				filtered = append(filtered, it)
+				segMatches = append(segMatches, it)
 			}
 		}
+		flushSeg()
 		op.visible = filtered
 	}
 	if len(op.visible) == 0 {
 		op.selectedIdx = 0
 		op.scrollTop = 0
 	} else {
-		if op.selectedIdx < 0 {
-			op.selectedIdx = 0
-		} else if op.selectedIdx >= len(op.visible) {
-			op.selectedIdx = len(op.visible) - 1
-		}
+		op.snapSelectionToSelectable(true)
 	}
 	op.ensureSelectionVisible()
 }
 
-// syncActiveSection finds the last visible item whose Line <= target cursor Y.
+func (op *OutlinePane) snapSelectionToSelectable(preferForward bool) {
+	if len(op.visible) == 0 {
+		op.selectedIdx = 0
+		return
+	}
+	if op.selectedIdx < 0 {
+		op.selectedIdx = 0
+	} else if op.selectedIdx >= len(op.visible) {
+		op.selectedIdx = len(op.visible) - 1
+	}
+	if op.visible[op.selectedIdx].Kind != KindFile {
+		return
+	}
+	if preferForward {
+		for i := op.selectedIdx + 1; i < len(op.visible); i++ {
+			if op.visible[i].Kind != KindFile {
+				op.selectedIdx = i
+				return
+			}
+		}
+		for i := op.selectedIdx - 1; i >= 0; i-- {
+			if op.visible[i].Kind != KindFile {
+				op.selectedIdx = i
+				return
+			}
+		}
+		return
+	}
+	for i := op.selectedIdx - 1; i >= 0; i-- {
+		if op.visible[i].Kind != KindFile {
+			op.selectedIdx = i
+			return
+		}
+	}
+	for i := op.selectedIdx + 1; i < len(op.visible); i++ {
+		if op.visible[i].Kind != KindFile {
+			op.selectedIdx = i
+			return
+		}
+	}
+}
+
+func (op *OutlinePane) navigableCount() int {
+	n := 0
+	for _, it := range op.visible {
+		if it.Kind != KindFile {
+			n++
+		}
+	}
+	return n
+}
+
+// syncActiveSection finds the last visible item in the target file whose Line <= target cursor Y.
 func (op *OutlinePane) syncActiveSection() {
 	target := op.resolveTarget()
 	if target == nil || target.Buf == nil || len(op.visible) == 0 {
@@ -517,17 +738,20 @@ func (op *OutlinePane) syncActiveSection() {
 		return
 	}
 	curY := c.Y
+	targetKey := canonicalOutlinePath(bufferAbsPath(target.Buf))
 
-	// Binary search for the last item with Line <= curY.
-	lo, hi := 0, len(op.visible)-1
 	found := -1
-	for lo <= hi {
-		mid := lo + (hi-lo)/2
-		if op.visible[mid].Line <= curY {
-			found = mid
-			lo = mid + 1
-		} else {
-			hi = mid - 1
+	for i, it := range op.visible {
+		if it.Kind == KindFile {
+			continue
+		}
+		if op.isMultiFile || (it.canonPath != "" && targetKey != "") {
+			if it.canonPath != targetKey {
+				continue
+			}
+		}
+		if it.Line <= curY {
+			found = i
 		}
 	}
 	op.activeIdx = found
@@ -549,6 +773,9 @@ func (op *OutlinePane) ensureSelectionVisible() {
 		op.scrollTop = op.selectedIdx
 	} else if op.selectedIdx >= op.scrollTop+lh {
 		op.scrollTop = op.selectedIdx - lh + 1
+	}
+	if op.selectedIdx > 0 && op.scrollTop == op.selectedIdx && op.visible[op.scrollTop-1].Kind == KindFile && lh > 1 {
+		op.scrollTop--
 	}
 	maxScroll := len(op.visible) - lh
 	if maxScroll < 0 {
@@ -572,6 +799,32 @@ func (op *OutlinePane) moveSelection(delta int) {
 	} else if next >= len(op.visible) {
 		next = len(op.visible) - 1
 	}
+	if op.visible[next].Kind == KindFile {
+		if delta > 0 {
+			for next < len(op.visible) && op.visible[next].Kind == KindFile {
+				next++
+			}
+			if next >= len(op.visible) {
+				if op.selectedIdx >= 0 && op.selectedIdx < len(op.visible) && op.visible[op.selectedIdx].Kind != KindFile {
+					return
+				}
+				next = len(op.visible) - 1
+			}
+		} else if delta < 0 {
+			for next >= 0 && op.visible[next].Kind == KindFile {
+				next--
+			}
+			if next < 0 {
+				if op.selectedIdx >= 0 && op.selectedIdx < len(op.visible) && op.visible[op.selectedIdx].Kind != KindFile {
+					if op.scrollTop > 0 && op.visible[op.scrollTop-1].Kind == KindFile {
+						op.scrollTop--
+					}
+					return
+				}
+				next = 0
+			}
+		}
+	}
 	op.selectedIdx = next
 	op.ensureSelectionVisible()
 }
@@ -588,6 +841,55 @@ func (op *OutlinePane) jumpToSelected() {
 	}
 
 	item := op.visible[op.selectedIdx]
+	if item.Kind == KindFile {
+		return
+	}
+
+	targetKey := canonicalOutlinePath(bufferAbsPath(target.Buf))
+	itemKey := item.canonPath
+	if itemKey == "" && item.FilePath != "" {
+		itemKey = canonicalOutlinePath(item.FilePath)
+	}
+	isCrossFile := item.FilePath != "" && itemKey != "" && itemKey != targetKey
+
+	if isCrossFile {
+		var destBP *action.BufPane
+		if op.mgr != nil {
+			if opener := op.mgr.getFileOpener(); opener != nil {
+				destBP = opener(target, item.FilePath, item.Line, item.Column)
+			}
+		}
+		if destBP == nil && (op.mgr == nil || op.mgr.getFileOpener() == nil) {
+			destBP = openFileFallback(target, item.FilePath, item.Line, item.Column)
+		}
+		if destBP == nil || destBP.Buf == nil {
+			op.returnFocus()
+			return
+		}
+		if destBP.Tab() == op.tab {
+			op.target = destBP
+			for i, p := range op.tab.Panes {
+				if p == destBP {
+					op.tab.SetActive(i)
+					break
+				}
+			}
+			if op.lastShared != destBP.Buf.SharedBuffer {
+				op.RefreshNow(0, false)
+			} else {
+				op.syncActiveSection()
+			}
+		} else {
+			op.returnFocus()
+		}
+		if op.mgr != nil {
+			if handler := op.mgr.getJumpHandler(); handler != nil {
+				handler(destBP, item, op.Items())
+			}
+		}
+		return
+	}
+
 	line := item.Line
 	maxLine := target.Buf.LinesNum() - 1
 	if maxLine < 0 {
@@ -710,11 +1012,13 @@ func (op *OutlinePane) handleKeyEvent(e *tcell.EventKey) {
 	case tcell.KeyHome:
 		if len(op.visible) > 0 {
 			op.selectedIdx = 0
+			op.snapSelectionToSelectable(true)
 			op.ensureSelectionVisible()
 		}
 	case tcell.KeyEnd:
 		if len(op.visible) > 0 {
 			op.selectedIdx = len(op.visible) - 1
+			op.snapSelectionToSelectable(false)
 			op.ensureSelectionVisible()
 		}
 	case tcell.KeyPgUp:
@@ -741,13 +1045,17 @@ func (op *OutlinePane) handleKeyEvent(e *tcell.EventKey) {
 		case 'g':
 			if len(op.visible) > 0 {
 				op.selectedIdx = 0
+				op.snapSelectionToSelectable(true)
 				op.ensureSelectionVisible()
 			}
 		case 'G':
 			if len(op.visible) > 0 {
 				op.selectedIdx = len(op.visible) - 1
+				op.snapSelectionToSelectable(false)
 				op.ensureSelectionVisible()
 			}
+		case 'p':
+			op.ToggleProjectMode()
 		case '/':
 			op.filtering = true
 			op.filterQuery = ""
@@ -815,7 +1123,7 @@ func (op *OutlinePane) handleMouseEvent(e *tcell.EventMouse) {
 		lh := op.listHeight()
 		if localY >= 1 && localY <= lh {
 			idx := op.scrollTop + (localY - 1)
-			if idx >= 0 && idx < len(op.visible) {
+			if idx >= 0 && idx < len(op.visible) && op.visible[idx].Kind != KindFile {
 				op.selectedIdx = idx
 				op.jumpToSelected()
 			}
@@ -860,6 +1168,23 @@ func (op *OutlinePane) Display() {
 		headerText = " /" + op.filterQuery + "_"
 	} else if op.filterQuery != "" {
 		headerText = " /" + op.filterQuery
+	} else if op.hasProject || !op.projectMode {
+		tag := "[Project]"
+		if !op.projectMode {
+			tag = "[File]"
+		}
+		if op.view.Width < 24 {
+			if op.projectMode {
+				tag = "[P]"
+			} else {
+				tag = "[F]"
+			}
+		}
+		if n := op.navigableCount(); n > 0 {
+			headerText = fmt.Sprintf(" Outline %s (%d)", tag, n)
+		} else {
+			headerText = " Outline " + tag
+		}
 	} else if len(op.visible) > 0 {
 		headerText = fmt.Sprintf(" Outline (%d)", len(op.visible))
 	}
@@ -880,7 +1205,9 @@ func (op *OutlinePane) Display() {
 		} else {
 			lastHeadingLevel := 0
 			for i := 0; i < op.scrollTop && i < len(op.visible); i++ {
-				if op.visible[i].Kind == KindHeading {
+				if op.visible[i].Kind == KindFile {
+					lastHeadingLevel = 0
+				} else if op.visible[i].Kind == KindHeading {
 					lastHeadingLevel = op.visible[i].Level
 				}
 			}
@@ -892,7 +1219,9 @@ func (op *OutlinePane) Display() {
 					continue
 				}
 				it := op.visible[idx]
-				if it.Kind == KindHeading {
+				if it.Kind == KindFile {
+					lastHeadingLevel = 0
+				} else if it.Kind == KindHeading {
 					lastHeadingLevel = it.Level
 				}
 				hasChild := idx+1 < len(op.visible) &&
@@ -900,8 +1229,8 @@ func (op *OutlinePane) Display() {
 					op.visible[idx+1].Kind == KindHeading &&
 					op.visible[idx+1].Level > it.Level
 
-				isSelected := op.active && idx == op.selectedIdx
-				isCurrent := idx == op.activeIdx
+				isSelected := op.active && it.Kind != KindFile && idx == op.selectedIdx
+				isCurrent := it.Kind != KindFile && idx == op.activeIdx
 
 				prefix := " "
 				if isCurrent {
@@ -921,6 +1250,12 @@ func (op *OutlinePane) Display() {
 		if op.active {
 			if op.filtering {
 				footerText = " Enter:jump Esc:clear"
+			} else if op.hasProject || !op.projectMode {
+				if op.projectMode {
+					footerText = " p:file /:find Enter:jump"
+				} else {
+					footerText = " p:proj /:find Enter:jump"
+				}
 			} else {
 				footerText = " Enter:jump /:find Esc:back"
 			}
@@ -931,6 +1266,8 @@ func (op *OutlinePane) Display() {
 
 func formatOutlineEntry(it Item, lastHeadingLevel int, hasChild bool) string {
 	switch it.Kind {
+	case KindFile:
+		return "▸ " + it.Title
 	case KindHeading:
 		depth := it.Level - 1
 		if depth < 0 {
@@ -993,6 +1330,8 @@ func (op *OutlinePane) itemStyle(it Item, isSelected, isCurrent bool) tcell.Styl
 		base = lookupStyle("type", config.DefStyle)
 	case KindLabel:
 		base = lookupStyle("symbol.tag", lookupStyle("comment", config.DefStyle))
+	case KindFile:
+		base = lookupStyle("comment", config.DefStyle).Bold(true)
 	default:
 		base = config.DefStyle
 	}
@@ -1070,9 +1409,12 @@ type Manager struct {
 	panes      map[*action.Tab]*OutlinePane
 	autoHidden map[*action.Tab]bool
 
-	providerMu     sync.RWMutex
-	symbolProvider SymbolProvider
-	jumpHandler    JumpHandler
+	providerMu       sync.RWMutex
+	symbolProvider   SymbolProvider
+	jumpHandler      JumpHandler
+	mainFileResolver func(string) string
+	rootResolver     func(string) string
+	fileOpener       func(bp *action.BufPane, filePath string, line, col int) *action.BufPane
 }
 
 func newManager() *Manager {
@@ -1142,6 +1484,63 @@ func (m *Manager) getJumpHandler() JumpHandler {
 	return h
 }
 
+// SetMainFileResolver sets the optional resolver returning the pinned main file
+// path for an active file path. Pass nil to clear.
+func SetMainFileResolver(fn func(string) string) {
+	defaultManager.setMainFileResolver(fn)
+}
+
+func (m *Manager) setMainFileResolver(fn func(string) string) {
+	m.providerMu.Lock()
+	m.mainFileResolver = fn
+	m.providerMu.Unlock()
+}
+
+func (m *Manager) getMainFileResolver() func(string) string {
+	m.providerMu.RLock()
+	fn := m.mainFileResolver
+	m.providerMu.RUnlock()
+	return fn
+}
+
+// SetRootResolver sets the optional resolver returning the Typst project root
+// directory for an entrypoint file path. Pass nil to clear.
+func SetRootResolver(fn func(string) string) {
+	defaultManager.setRootResolver(fn)
+}
+
+func (m *Manager) setRootResolver(fn func(string) string) {
+	m.providerMu.Lock()
+	m.rootResolver = fn
+	m.providerMu.Unlock()
+}
+
+func (m *Manager) getRootResolver() func(string) string {
+	m.providerMu.RLock()
+	fn := m.rootResolver
+	m.providerMu.RUnlock()
+	return fn
+}
+
+// SetFileOpener sets the optional cross-file jump opener (honoring typst.gotoOpenMode).
+// Pass nil to use the built-in fallback opener.
+func SetFileOpener(fn func(bp *action.BufPane, filePath string, line, col int) *action.BufPane) {
+	defaultManager.setFileOpener(fn)
+}
+
+func (m *Manager) setFileOpener(fn func(bp *action.BufPane, filePath string, line, col int) *action.BufPane) {
+	m.providerMu.Lock()
+	m.fileOpener = fn
+	m.providerMu.Unlock()
+}
+
+func (m *Manager) getFileOpener() func(bp *action.BufPane, filePath string, line, col int) *action.BufPane {
+	m.providerMu.RLock()
+	fn := m.fileOpener
+	m.providerMu.RUnlock()
+	return fn
+}
+
 // PaneForTab returns the currently open OutlinePane on tab, or nil.
 func PaneForTab(tab *action.Tab) *OutlinePane {
 	return defaultManager.paneForTab(tab)
@@ -1179,6 +1578,22 @@ func Open(bp *action.BufPane, focus bool) (*OutlinePane, bool) {
 // CloseForTab closes the Document Outline sidebar on tab if open.
 func CloseForTab(tab *action.Tab) bool {
 	return defaultManager.CloseForTab(tab)
+}
+
+// NotifyMainFileChanged refreshes all open Document Outline panes when the
+// pinned main project file changes via :pin or :unpin.
+func NotifyMainFileChanged() {
+	defaultManager.NotifyMainFileChanged()
+}
+
+// NotifyMainFileChanged refreshes all open outline panes on this manager.
+func (m *Manager) NotifyMainFileChanged() {
+	m.pruneStaleTabs()
+	for tab := range m.panes {
+		if op := m.paneForTab(tab); op != nil {
+			op.RefreshNow(0, true)
+		}
+	}
 }
 
 // NewToggleOutlineAction returns the BufKeyAction bound to Alt+O.
@@ -1542,8 +1957,45 @@ func (m *Manager) onPaneFocus(tab *action.Tab, pane action.Pane) {
 	}
 }
 
+func (op *OutlinePane) referencesFile(b *buffer.Buffer) bool {
+	if b == nil {
+		return false
+	}
+	target := op.resolveTarget()
+	if target != nil && target.Buf != nil && target.Buf.SharedBuffer == b.SharedBuffer {
+		return true
+	}
+	if !op.projectMode || b.Path == "" {
+		return false
+	}
+	canon := canonicalOutlinePath(bufferAbsPath(b))
+	if canon == "" {
+		return false
+	}
+	if op.includedFiles != nil && op.includedFiles[canon] {
+		return true
+	}
+	for _, it := range op.items {
+		if it.canonPath == canon {
+			return true
+		}
+	}
+	if op.mgr != nil {
+		if mfn := op.mgr.getMainFileResolver(); mfn != nil {
+			targetPath := ""
+			if target != nil && target.Buf != nil {
+				targetPath = bufferAbsPath(target.Buf)
+			}
+			if pinned := mfn(targetPath); pinned != "" && canonicalOutlinePath(pinned) == canon {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // OnBufferChange schedules a debounced outline refresh for any open OutlinePane
-// whose target buffer shares b.SharedBuffer.
+// whose target buffer or referenced project file matches b.
 func (m *Manager) OnBufferChange(b *buffer.Buffer, ev buffer.ChangeEvent) {
 	if b == nil || !b.IsTypst() {
 		return
@@ -1552,9 +2004,13 @@ func (m *Manager) OnBufferChange(b *buffer.Buffer, ev buffer.ChangeEvent) {
 		if m.paneForTab(tab) == nil {
 			continue
 		}
-		target := op.resolveTarget()
-		if target != nil && target.Buf != nil && target.Buf.SharedBuffer == b.SharedBuffer {
-			op.scheduleRefresh(ev.StartLine)
+		if op.referencesFile(b) {
+			startLine := ev.StartLine
+			target := op.resolveTarget()
+			if target == nil || target.Buf == nil || target.Buf.SharedBuffer != b.SharedBuffer {
+				startLine = 0
+			}
+			op.scheduleRefresh(startLine)
 		}
 	}
 }
@@ -1568,8 +2024,7 @@ func (m *Manager) OnBufferSave(b *buffer.Buffer, ev buffer.SaveEvent) {
 		if m.paneForTab(tab) == nil {
 			continue
 		}
-		target := op.resolveTarget()
-		if target != nil && target.Buf != nil && target.Buf.SharedBuffer == b.SharedBuffer {
+		if op.referencesFile(b) {
 			op.mu.Lock()
 			if op.timer != nil {
 				op.timer.Stop()
@@ -1689,6 +2144,128 @@ func readGlobalInt(key string, fallback int) int {
 	default:
 		return fallback
 	}
+}
+
+func readGlobalString(key, fallback string) string {
+	v := config.GetGlobalOption(key)
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fallback
+}
+
+func openFileFallback(bp *action.BufPane, filePath string, line, col int) *action.BufPane {
+	targetKey := canonicalOutlinePath(filePath)
+	if targetKey == "" {
+		return nil
+	}
+
+	moveAndCenter := func(pane *action.BufPane) {
+		if pane == nil || pane.Buf == nil {
+			return
+		}
+		maxLine := pane.Buf.LinesNum() - 1
+		if maxLine < 0 {
+			maxLine = 0
+		}
+		y := line
+		if y < 0 {
+			y = 0
+		} else if y > maxLine {
+			y = maxLine
+		}
+		x := col
+		maxX := util.CharacterCount(pane.Buf.LineBytes(y))
+		if x < 0 {
+			x = 0
+		} else if x > maxX {
+			x = maxX
+		}
+		pane.Buf.ClearCursors()
+		if c := pane.Buf.GetActiveCursor(); c != nil {
+			c.ResetSelection()
+			c.GotoLoc(buffer.Loc{X: x, Y: y})
+		}
+		pane.Center()
+		pane.Relocate()
+	}
+
+	if action.Tabs != nil {
+		for ti, t := range action.Tabs.List {
+			if t == nil {
+				continue
+			}
+			for pi, p := range t.Panes {
+				pane, ok := p.(*action.BufPane)
+				if !ok || pane == nil || pane.Buf == nil || pane.Buf.Type.Scratch {
+					continue
+				}
+				if canonicalOutlinePath(bufferAbsPath(pane.Buf)) == targetKey {
+					action.Tabs.SetActive(ti)
+					t.SetActive(pi)
+					moveAndCenter(pane)
+					return pane
+				}
+			}
+		}
+	}
+
+	info, err := os.Stat(filePath)
+	if err != nil || info.IsDir() {
+		notifyError(fmt.Sprintf("Target file not found: %s", filepath.Base(filePath)))
+		return nil
+	}
+
+	b, err := buffer.NewBufferFromFile(filePath, buffer.BTDefault)
+	if err != nil {
+		notifyError(fmt.Sprintf("Failed to open %s: %v", filepath.Base(filePath), err))
+		return nil
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(readGlobalString("typst.gotoOpenMode", "tab")))
+	if mode == "current" && bp != nil && bp.Buf != nil && bp.Buf.Modified() && !bp.Buf.Shared() {
+		mode = "tab"
+	}
+
+	switch mode {
+	case "vsplit":
+		if bp != nil && bp.Tab() != nil {
+			if newBP := bp.VSplitIndex(b, true); newBP != nil {
+				moveAndCenter(newBP)
+				return newBP
+			}
+		}
+	case "current":
+		if bp != nil {
+			bp.OpenBuffer(b)
+			if t := bp.Tab(); t != nil {
+				for i, p := range t.Panes {
+					if p == bp {
+						t.SetActive(i)
+						break
+					}
+				}
+			}
+			moveAndCenter(bp)
+			return bp
+		}
+	}
+
+	if action.Tabs == nil {
+		return nil
+	}
+	w, h := 80, 24
+	if screen.Screen != nil {
+		w, h = screen.Screen.Size()
+	}
+	iOffset := config.GetInfoBarOffset()
+	tp := action.NewTabFromBuffer(0, 0, w, h-1-iOffset, b)
+	action.Tabs.AddTab(tp)
+	action.Tabs.SetActive(len(action.Tabs.List) - 1)
+	action.Tabs.Resize()
+	newBP := tp.CurPane()
+	moveAndCenter(newBP)
+	return newBP
 }
 
 func notifyError(msg string) {

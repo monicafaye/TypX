@@ -19,6 +19,7 @@ const (
 	KindHeading ItemKind = iota
 	KindFigure
 	KindLabel
+	KindFile
 )
 
 // String returns a readable name for the ItemKind.
@@ -30,6 +31,8 @@ func (k ItemKind) String() string {
 		return "figure"
 	case KindLabel:
 		return "label"
+	case KindFile:
+		return "file"
 	default:
 		return "unknown"
 	}
@@ -37,12 +40,14 @@ func (k ItemKind) String() string {
 
 // Item represents a single navigable entry in the Document Outline.
 type Item struct {
-	Kind   ItemKind
-	Level  int    // 1..6 for headings, 0 for figures and labels
-	Title  string // Cleaned display text
-	Label  string // Optional attached <label> name (without angle brackets)
-	Line   int    // 0-based buffer line number
-	Column int    // 0-based rune column on Line
+	Kind      ItemKind
+	Level     int    // 1..6 for headings, 0 for figures, labels, and file headers
+	Title     string // Cleaned display text
+	Label     string // Optional attached <label> name (without angle brackets)
+	Line      int    // 0-based buffer line number
+	Column    int    // 0-based rune column on Line
+	FilePath  string // Source file path (empty for stateless Parse/ParseString)
+	canonPath string // Precomputed canonical path key for O(1) active-section tracking
 }
 
 // ParseOptions controls which optional elements the outline parser emits.
@@ -86,10 +91,17 @@ type labelPos struct {
 	col  int
 }
 
+type includeRef struct {
+	path string
+	line int
+	col  int
+}
+
 type cachedLine struct {
 	endState      lexState
 	items         []Item
 	attachedLabel []labelPos
+	includes      []includeRef
 	hasFigure     bool
 	hasHashHead   bool
 	spanEndLine   int
@@ -232,6 +244,50 @@ func (p *IncrementalParser) assemble(opts ParseOptions) []Item {
 		}
 	}
 	return out
+}
+
+func (p *IncrementalParser) includeRefs() []includeRef {
+	var out []includeRef
+	for _, cl := range p.lines {
+		if len(cl.includes) > 0 {
+			out = append(out, cl.includes...)
+		}
+	}
+	return out
+}
+
+// Includes returns all #include target paths discovered in the last Update in document order.
+func (p *IncrementalParser) Includes() []string {
+	refs := p.includeRefs()
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]string, len(refs))
+	for i, r := range refs {
+		out[i] = r.path
+	}
+	return out
+}
+
+// ParseIncludes scans src for #include target paths in document order.
+func ParseIncludes(src typst.LineSource) []string {
+	var p IncrementalParser
+	p.Update(src, 0, ParseOptions{})
+	return p.Includes()
+}
+
+// ParseIncludesString scans text for #include target paths in document order.
+func ParseIncludesString(text string) []string {
+	if text == "" {
+		return nil
+	}
+	rawLines := strings.Split(text, "\n")
+	lines := make([][]byte, len(rawLines))
+	for i, l := range rawLines {
+		l = strings.TrimSuffix(l, "\r")
+		lines[i] = []byte(l)
+	}
+	return ParseIncludes(typst.SliceSource(lines))
 }
 
 // scanOutlineLine scans a single line starting in lexical state st, returning
@@ -410,7 +466,16 @@ func scanOutlineLine(src typst.LineSource, lineIdx int, st lexState, opts ParseO
 			continue
 		}
 
-		// 10. #figure(...) and #heading(...) constructs.
+		// 9.5. Code string literal "..." (outside raw/comments/math) so "#include ..." in strings is ignored,
+		// without letting prose smart quotes (such as `5"` or multi-line closing `"`) swallow markup directives.
+		if b == '"' && isCodeStringOpener(line, i) {
+			inString = true
+			i++
+			col++
+			continue
+		}
+
+		// 10. #figure(...), #heading(...), and #include "..." / #include("...") constructs.
 		if b == '#' && i+1 < len(line) {
 			if matchKeywordAt(line, i+1, "figure") {
 				j := skipSpaces(line, i+1+len("figure"))
@@ -445,6 +510,22 @@ func scanOutlineLine(src typst.LineSource, lineIdx int, st lexState, opts ParseO
 					col += 1 + len("heading")
 					continue
 				}
+			} else if matchKeywordAt(line, i+1, "include") {
+				if incPath, endIdx, ok := parseIncludeAt(line, i); ok {
+					if incPath != "" {
+						cl.includes = append(cl.includes, includeRef{
+							path: incPath,
+							line: lineIdx,
+							col:  col,
+						})
+					}
+					col += utf8.RuneCount(line[i:endIdx])
+					i = endIdx
+					continue
+				}
+				i += 1 + len("include")
+				col += 1 + len("include")
+				continue
 			}
 		}
 
@@ -492,6 +573,99 @@ func skipSpaces(line []byte, idx int) int {
 		idx++
 	}
 	return idx
+}
+
+func skipSpacesAndInlineComments(line []byte, idx int) (int, bool) {
+	for idx < len(line) {
+		if line[idx] == ' ' || line[idx] == '\t' {
+			idx++
+			continue
+		}
+		if line[idx] == '/' && idx+1 < len(line) && line[idx+1] == '*' {
+			depth := 1
+			idx += 2
+			for idx < len(line) && depth > 0 {
+				if line[idx] == '/' && idx+1 < len(line) && line[idx+1] == '*' {
+					depth++
+					idx += 2
+				} else if line[idx] == '*' && idx+1 < len(line) && line[idx+1] == '/' {
+					depth--
+					idx += 2
+				} else {
+					_, sz := utf8.DecodeRune(line[idx:])
+					idx += sz
+				}
+			}
+			if depth > 0 {
+				return idx, false
+			}
+			continue
+		}
+		break
+	}
+	return idx, true
+}
+
+// parseIncludeAt parses `#include "..."` or `#include("...")` starting at hashIdx ('#').
+// Returns the unescaped string literal, byte index immediately after the closing quote, and ok.
+func parseIncludeAt(line []byte, hashIdx int) (string, int, bool) {
+	j := hashIdx + 1 + len("include")
+	var ok bool
+	j, ok = skipSpacesAndInlineComments(line, j)
+	if !ok {
+		return "", 0, false
+	}
+	if j < len(line) && line[j] == '(' {
+		j++
+		j, ok = skipSpacesAndInlineComments(line, j)
+		if !ok {
+			return "", 0, false
+		}
+	}
+	if j >= len(line) || line[j] != '"' {
+		return "", 0, false
+	}
+	return parseTypstStringLiteral(line, j)
+}
+
+func parseTypstStringLiteral(line []byte, openQuoteIdx int) (string, int, bool) {
+	if openQuoteIdx >= len(line) || line[openQuoteIdx] != '"' {
+		return "", 0, false
+	}
+	var sb strings.Builder
+	i := openQuoteIdx + 1
+	for i < len(line) {
+		b := line[i]
+		if b == '"' {
+			return sb.String(), i + 1, true
+		}
+		if b == '\\' && i+1 < len(line) {
+			next := line[i+1]
+			switch next {
+			case '\\', '"':
+				sb.WriteByte(next)
+				i += 2
+			case 'n':
+				sb.WriteByte('\n')
+				i += 2
+			case 'r':
+				sb.WriteByte('\r')
+				i += 2
+			case 't':
+				sb.WriteByte('\t')
+				i += 2
+			default:
+				r, sz := utf8.DecodeRune(line[i+1:])
+				sb.WriteRune(r)
+				i += 1 + sz
+			}
+			continue
+		}
+		r, sz := utf8.DecodeRune(line[i:])
+		sb.WriteRune(r)
+		i += sz
+	}
+	return "", 0, false
 }
 
 func isIdentChar(b byte) bool {
@@ -1380,4 +1554,24 @@ func isHeadingSymbolKind(kind int) bool {
 	default:
 		return false
 	}
+}
+
+func isCodeStringOpener(line []byte, quoteIdx int) bool {
+	if quoteIdx > 0 {
+		switch line[quoteIdx-1] {
+		case ' ', '\t', '=', '(', '[', '{', ',', ':', ';', '+', '#':
+		default:
+			return false
+		}
+	}
+	for j := quoteIdx + 1; j < len(line); j++ {
+		if line[j] == '\\' && j+1 < len(line) {
+			j++
+			continue
+		}
+		if line[j] == '"' {
+			return true
+		}
+	}
+	return false
 }

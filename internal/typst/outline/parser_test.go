@@ -349,3 +349,73 @@ func TestParsePerformance5000Lines(t *testing.T) {
 		t.Fatalf("5000-line parse too slow: %v", elapsed)
 	}
 }
+
+func TestParseIncludesLexicalRulesAndIncremental(t *testing.T) {
+	doc := strings.Join([]string{
+		`#include "chapters/intro.typ"`,
+		`#include("./methods.typ")`,
+		`#include /* inline /* nested */ comment */ ( /* c */ "results.typ" )`,
+		`#include "escaped\"quote\\dir.typ"`,
+		`#include "first.typ"; #include("second.typ") // #include "commented_out.typ"`,
+		`// #include "line_comment.typ"`,
+		`/* block comment #include "block_comment.typ" */`,
+		"/* multi-line",
+		`#include "multiline_comment.typ"`,
+		"*/",
+		"`#include \"inline_raw.typ\"`",
+		"````typ",
+		"```",
+		`#include "fenced_raw.typ"`,
+		"```",
+		"````",
+		`$ #include "math.typ" $`,
+		`"#include \"string_literal.typ\""`,
+		`\#include "escaped_hash.typ"`,
+		`#include_custom "not_include.typ"`,
+		`#include(dynamicVar)`,
+		`"Prose quote opening on line 1`,
+		`and closing here." #include "prose_after_quote.typ"`,
+		`5" display #include "after_inch_quote.typ"`,
+		`#include "appendix.typ"`,
+	}, "\n")
+
+	got := ParseIncludesString(doc)
+	want := []string{
+		"chapters/intro.typ",
+		"./methods.typ",
+		"results.typ",
+		`escaped"quote\dir.typ`,
+		"first.typ",
+		"second.typ",
+		"prose_after_quote.typ",
+		"after_inch_quote.typ",
+		"appendix.typ",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseIncludesString mismatch:\ngot:  %#v\nwant: %#v", got, want)
+	}
+
+	// Verify incremental updates on #include lines match full parse.
+	lines := strings.Split(doc, "\n")
+	toSource := func(ls []string) typst.SliceSource {
+		b := make([][]byte, len(ls))
+		for i, l := range ls {
+			b[i] = []byte(l)
+		}
+		return typst.SliceSource(b)
+	}
+	ip := NewIncrementalParser()
+	ip.Update(toSource(lines), 0, ParseOptions{})
+	if !reflect.DeepEqual(ip.Includes(), want) {
+		t.Fatalf("initial incremental includes mismatch: got %#v want %#v", ip.Includes(), want)
+	}
+
+	// Replace line 1 in-place and verify incremental convergence updates includes.
+	lines[1] = `#include("./methods_v2.typ")`
+	ip.Update(toSource(lines), 1, ParseOptions{})
+	wantUpdated := append([]string(nil), want...)
+	wantUpdated[1] = "./methods_v2.typ"
+	if !reflect.DeepEqual(ip.Includes(), wantUpdated) {
+		t.Fatalf("updated incremental includes mismatch: got %#v want %#v", ip.Includes(), wantUpdated)
+	}
+}

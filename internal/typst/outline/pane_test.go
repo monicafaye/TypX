@@ -2,6 +2,7 @@ package outline
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -53,6 +54,9 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	SetSymbolProvider(nil)
 	SetJumpHandler(nil)
+	SetMainFileResolver(nil)
+	SetRootResolver(nil)
+	SetFileOpener(nil)
 	buffer.CloseOpenBuffers()
 	buffer.FlushObservers()
 	action.DrainUIQueue()
@@ -64,6 +68,9 @@ func setupTabs(t *testing.T, w, h int, docs ...struct{ name, text string }) []*a
 	t.Helper()
 	SetSymbolProvider(nil)
 	SetJumpHandler(nil)
+	SetMainFileResolver(nil)
+	SetRootResolver(nil)
+	SetFileOpener(nil)
 	for tab := range defaultManager.panes {
 		defaultManager.CloseForTab(tab)
 	}
@@ -101,6 +108,9 @@ func setupTabs(t *testing.T, w, h int, docs ...struct{ name, text string }) []*a
 	t.Cleanup(func() {
 		SetSymbolProvider(nil)
 		SetJumpHandler(nil)
+		SetMainFileResolver(nil)
+		SetRootResolver(nil)
+		SetFileOpener(nil)
 		for tab := range defaultManager.panes {
 			defaultManager.CloseForTab(tab)
 		}
@@ -874,4 +884,433 @@ func TestOutlineJumpHandlerInvokedOnEnterClickAndFilter(t *testing.T) {
 	if len(jumps) != 3 || jumps[2].item.Kind != KindFigure || jumps[2].allCount != 4 {
 		t.Fatalf("unexpected filter jump record: %#v", jumps)
 	}
+}
+
+func TestOutlineLargeUnpinnedFileWithIncludes(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "main.typ")
+	ch1Path := filepath.Join(dir, "ch1.typ")
+
+	var lines []string
+	lines = append(lines, "= Root Intro")
+	for i := 0; i < 5010; i++ {
+		lines = append(lines, "Body paragraph line.")
+	}
+	lines = append(lines, `#include "ch1.typ"`)
+	lines = append(lines, "= Root Outro")
+	mainText := strings.Join(lines, "\n")
+
+	if err := os.WriteFile(mainPath, []byte(mainText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ch1Path, []byte("= Chapter One\n== Sub Section\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	panes := setupTabs(t, 90, 24, struct{ name, text string }{
+		name: mainPath,
+		text: mainText,
+	})
+	bp := panes[0]
+
+	var lspCalls int
+	SetSymbolProvider(func(b *buffer.Buffer, cb func(version uint64, symbols []Symbol)) bool {
+		lspCalls++
+		return true
+	})
+
+	op, ok := Open(bp, true)
+	if !ok || op == nil {
+		t.Fatal("failed to open outline on large unpinned file")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		action.DrainUIQueue()
+		if op.IsMultiFile() && len(op.Items()) > 0 {
+			break
+		}
+		select {
+		case <-action.UIQueueReady():
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	if !op.IsMultiFile() {
+		t.Fatalf("expected large unpinned file with #include to report isMultiFile=true, items=%#v", op.Items())
+	}
+	if lspCalls != 0 {
+		t.Fatalf("expected LSP enrichment skipped in multi-file mode, got %d calls", lspCalls)
+	}
+
+	var gotTitles []string
+	for _, it := range op.Items() {
+		gotTitles = append(gotTitles, it.Kind.String()+":"+it.Title)
+	}
+	wantTitles := []string{
+		"file:main.typ",
+		"heading:Root Intro",
+		"file:ch1.typ",
+		"heading:Chapter One",
+		"heading:Sub Section",
+		"file:main.typ",
+		"heading:Root Outro",
+	}
+	if strings.Join(gotTitles, "|") != strings.Join(wantTitles, "|") {
+		t.Fatalf("large unpinned multi-file outline mismatch:\ngot:  %v\nwant: %v", gotTitles, wantTitles)
+	}
+
+	// Toggle 'p' to [File] mode on large unpinned file: should still know hasProject=true and render [File].
+	action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'p', tcell.ModNone, ""))
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		action.DrainUIQueue()
+		if len(op.Items()) == 2 && op.hasProject {
+			break
+		}
+		select {
+		case <-action.UIQueueReady():
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if op.IsMultiFile() {
+		t.Fatal("expected isMultiFile=false in [File] mode")
+	}
+	if !op.hasProject {
+		t.Fatal("expected hasProject=true in [File] mode for large unpinned file with #include")
+	}
+	if lspCalls != 1 {
+		t.Fatalf("expected LSP enrichment requested in [File] mode, got %d calls", lspCalls)
+	}
+}
+
+func TestOutlineLargeFileToggleAndRefreshGenAsyncSafety(t *testing.T) {
+	makeLargeMainText := func() string {
+		var lines []string
+		lines = append(lines, "= Root Intro")
+		for i := 0; i < 5010; i++ {
+			lines = append(lines, "Body paragraph line.")
+		}
+		lines = append(lines, `#include "ch1.typ"`)
+		lines = append(lines, "= Root Outro")
+		return strings.Join(lines, "\n")
+	}
+
+	clearReadySignal := func() {
+		action.DrainUIQueue()
+		for {
+			select {
+			case <-action.UIQueueReady():
+			default:
+				return
+			}
+		}
+	}
+
+	waitReadySignal := func(t *testing.T, label string) {
+		t.Helper()
+		select {
+		case <-action.UIQueueReady():
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for UIQueueReady (%s)", label)
+		}
+	}
+
+	drainCount := func(t *testing.T, want int, label string) {
+		t.Helper()
+		drained := 0
+		deadline := time.Now().Add(5 * time.Second)
+		for drained < want && time.Now().Before(deadline) {
+			if n := action.DrainUIQueue(); n > 0 {
+				drained += n
+				continue
+			}
+			select {
+			case <-action.UIQueueReady():
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+		if drained != want {
+			t.Fatalf("%s: expected %d UI callbacks drained, got %d", label, want, drained)
+		}
+	}
+
+	itemSummary := func(items []Item) string {
+		parts := make([]string, len(items))
+		for i, it := range items {
+			parts[i] = it.Kind.String() + ":" + it.Title
+		}
+		return strings.Join(parts, "|")
+	}
+
+	t.Run("project_enqueues_before_file_on_toggle_to_file", func(t *testing.T) {
+		dir := t.TempDir()
+		mainPath := filepath.Join(dir, "main.typ")
+		ch1Path := filepath.Join(dir, "ch1.typ")
+		mainText := makeLargeMainText()
+		if err := os.WriteFile(mainPath, []byte(mainText), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(ch1Path, []byte("= Chapter One\n== Sub Section\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		panes := setupTabs(t, 90, 24, struct{ name, text string }{name: mainPath, text: mainText})
+		bp := panes[0]
+		clearReadySignal()
+
+		op, ok := Open(bp, true)
+		if !ok || op == nil {
+			t.Fatal("failed to open outline")
+		}
+		waitReadySignal(t, "project walk callback")
+
+		action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'p', tcell.ModNone, ""))
+		waitReadySignal(t, "single-file callback")
+
+		if n := action.DrainUIQueue(); n != 2 {
+			t.Fatalf("expected 2 queued callbacks drained in FIFO order, got %d", n)
+		}
+		if op.IsProjectMode() {
+			t.Fatal("expected IsProjectMode() == false after toggling 'p'")
+		}
+		if op.IsMultiFile() {
+			t.Fatal("expected IsMultiFile() == false when IsProjectMode() == false")
+		}
+		if op.includedFiles != nil {
+			t.Fatalf("expected includedFiles == nil in [File] mode, got %#v", op.includedFiles)
+		}
+		if !op.hasProject {
+			t.Fatal("expected hasProject == true because main.typ has #include")
+		}
+		if got, want := itemSummary(op.Items()), "heading:Root Intro|heading:Root Outro"; got != want {
+			t.Fatalf("unexpected items in [File] mode:\ngot:  %s\nwant: %s", got, want)
+		}
+	})
+
+	t.Run("file_enqueues_before_project_on_toggle_to_project", func(t *testing.T) {
+		dir := t.TempDir()
+		mainPath := filepath.Join(dir, "main.typ")
+		ch1Path := filepath.Join(dir, "ch1.typ")
+		mainText := makeLargeMainText()
+		if err := os.WriteFile(mainPath, []byte(mainText), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(ch1Path, []byte("= Chapter One\n== Sub Section\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		panes := setupTabs(t, 90, 24, struct{ name, text string }{name: mainPath, text: mainText})
+		bp := panes[0]
+		op, ok := Open(bp, true)
+		if !ok || op == nil {
+			t.Fatal("failed to open outline")
+		}
+		drainCount(t, 1, "initial open")
+
+		// Switch to [File] mode and settle.
+		action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'p', tcell.ModNone, ""))
+		drainCount(t, 1, "initial toggle to file")
+
+		clearReadySignal()
+		// Trigger overlapping [File] refresh, wait for its callback to enqueue, then toggle back to [Project].
+		op.RefreshNow(0, false)
+		waitReadySignal(t, "stale file callback")
+		action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'p', tcell.ModNone, ""))
+		waitReadySignal(t, "new project callback")
+
+		if n := action.DrainUIQueue(); n != 2 {
+			t.Fatalf("expected 2 queued callbacks drained in FIFO order, got %d", n)
+		}
+		if !op.IsProjectMode() {
+			t.Fatal("expected IsProjectMode() == true after toggling 'p'")
+		}
+		if !op.IsMultiFile() {
+			t.Fatal("expected IsMultiFile() == true when IsProjectMode() == true")
+		}
+		want := "file:main.typ|heading:Root Intro|file:ch1.typ|heading:Chapter One|heading:Sub Section|file:main.typ|heading:Root Outro"
+		if got := itemSummary(op.Items()); got != want {
+			t.Fatalf("unexpected items in [Project] mode:\ngot:  %s\nwant: %s", got, want)
+		}
+	})
+
+	t.Run("rapid_double_toggle_discards_older_same_mode_project_walk", func(t *testing.T) {
+		dir := t.TempDir()
+		mainPath := filepath.Join(dir, "main.typ")
+		ch1Path := filepath.Join(dir, "ch1.typ")
+		mainText := makeLargeMainText()
+		if err := os.WriteFile(mainPath, []byte(mainText), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(ch1Path, []byte("= Old Chapter\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		panes := setupTabs(t, 90, 24, struct{ name, text string }{name: mainPath, text: mainText})
+		bp := panes[0]
+		clearReadySignal()
+
+		op, ok := Open(bp, true)
+		if !ok || op == nil {
+			t.Fatal("failed to open outline")
+		}
+		waitReadySignal(t, "old project walk")
+
+		if err := os.WriteFile(ch1Path, []byte("= Updated Chapter\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'p', tcell.ModNone, ""))
+		waitReadySignal(t, "middle file walk")
+		action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'p', tcell.ModNone, ""))
+		waitReadySignal(t, "updated project walk")
+
+		if n := action.DrainUIQueue(); n != 3 {
+			t.Fatalf("expected 3 queued callbacks drained, got %d", n)
+		}
+		if !op.IsProjectMode() || !op.IsMultiFile() {
+			t.Fatalf("expected projectMode=true and isMultiFile=true, got projectMode=%v isMultiFile=%v", op.IsProjectMode(), op.IsMultiFile())
+		}
+		want := "file:main.typ|heading:Root Intro|file:ch1.typ|heading:Updated Chapter|file:main.typ|heading:Root Outro"
+		if got := itemSummary(op.Items()); got != want {
+			t.Fatalf("unexpected items after double toggle:\ngot:  %s\nwant: %s", got, want)
+		}
+	})
+
+	t.Run("rapid_ungated_toggle_never_desyncs", func(t *testing.T) {
+		dir := t.TempDir()
+		mainPath := filepath.Join(dir, "main.typ")
+		ch1Path := filepath.Join(dir, "ch1.typ")
+		mainText := makeLargeMainText()
+		if err := os.WriteFile(mainPath, []byte(mainText), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(ch1Path, []byte("= Chapter One\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		for iter := 0; iter < 20; iter++ {
+			panes := setupTabs(t, 90, 24, struct{ name, text string }{name: mainPath, text: mainText})
+			bp := panes[0]
+			clearReadySignal()
+
+			op, ok := Open(bp, true)
+			if !ok || op == nil {
+				t.Fatalf("iter %d: failed to open outline", iter)
+			}
+			// Immediately toggle 'p' before draining the UI queue so both goroutines race freely.
+			action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'p', tcell.ModNone, ""))
+			drainCount(t, 2, "ungated toggle")
+
+			if op.IsProjectMode() {
+				t.Fatalf("iter %d: expected IsProjectMode() == false", iter)
+			}
+			if op.IsMultiFile() {
+				t.Fatalf("iter %d: DESYNC after rapid 'p' toggle: projectMode=%v isMultiFile=%v items=%#v", iter, op.IsProjectMode(), op.IsMultiFile(), op.Items())
+			}
+			if op.includedFiles != nil {
+				t.Fatalf("iter %d: expected includedFiles == nil, got %#v", iter, op.includedFiles)
+			}
+			if got, want := itemSummary(op.Items()), "heading:Root Intro|heading:Root Outro"; got != want {
+				t.Fatalf("iter %d: unexpected items: got %s want %s", iter, got, want)
+			}
+		}
+	})
+
+	t.Run("large_file_mode_sync_symbol_provider_enriches_parsed_items", func(t *testing.T) {
+		dir := t.TempDir()
+		mainPath := filepath.Join(dir, "main.typ")
+		ch1Path := filepath.Join(dir, "ch1.typ")
+		mainText := makeLargeMainText()
+		if err := os.WriteFile(mainPath, []byte(mainText), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(ch1Path, []byte("= Chapter One\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		panes := setupTabs(t, 90, 24, struct{ name, text string }{name: mainPath, text: mainText})
+		bp := panes[0]
+
+		SetSymbolProvider(func(b *buffer.Buffer, cb func(version uint64, symbols []Symbol)) bool {
+			// Invoke cb synchronously on the UI thread inside provider(...).
+			cb(b.Version(), []Symbol{
+				{
+					Name: "Root Intro",
+					Kind: lspSymbolKindNamespace,
+					Line: 0,
+					Children: []Symbol{
+						{Name: "Dynamic Sub", Kind: lspSymbolKindNamespace, Line: 1},
+					},
+				},
+			})
+			return true
+		})
+
+		op, ok := Open(bp, true)
+		if !ok || op == nil {
+			t.Fatal("failed to open outline")
+		}
+		drainCount(t, 1, "initial project open")
+
+		clearReadySignal()
+		action.Tabs.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'p', tcell.ModNone, ""))
+		drainCount(t, 1, "toggle to file with sync LSP enrichment")
+
+		want := "heading:Root Intro|heading:Dynamic Sub|heading:Root Outro"
+		if got := itemSummary(op.Items()); got != want {
+			t.Fatalf("expected synchronous SymbolProvider to enrich parsed large-file items:\ngot:  %s\nwant: %s", got, want)
+		}
+	})
+
+	t.Run("async_lsp_enrichment_discarded_after_refresh_gen_bump", func(t *testing.T) {
+		panes := setupTabs(t, 90, 24, struct{ name, text string }{
+			name: "single.typ",
+			text: "= Intro\nBody\n",
+		})
+		bp := panes[0]
+
+		var wg sync.WaitGroup
+		release := make(chan struct{})
+		callNum := 0
+		SetSymbolProvider(func(b *buffer.Buffer, cb func(version uint64, symbols []Symbol)) bool {
+			callNum++
+			if callNum != 1 {
+				return false
+			}
+			ver := b.Version()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-release
+				action.EnqueueUI(func() {
+					cb(ver, []Symbol{
+						{
+							Name: "Intro",
+							Kind: lspSymbolKindNamespace,
+							Line: 0,
+							Children: []Symbol{
+								{Name: "Stale Dynamic", Kind: lspSymbolKindNamespace, Line: 1},
+							},
+						},
+					})
+				})
+			}()
+			return true
+		})
+
+		op, ok := Open(bp, false)
+		if !ok || op == nil {
+			t.Fatal("failed to open outline")
+		}
+
+		// Bump refreshGen via RefreshNow without changing buffer version.
+		op.RefreshNow(0, false)
+		close(release)
+		wg.Wait()
+		action.DrainUIQueue()
+
+		if got, want := itemSummary(op.Items()), "heading:Intro"; got != want {
+			t.Fatalf("expected stale LSP callback rejected by refreshGen:\ngot:  %s\nwant: %s", got, want)
+		}
+	})
 }
