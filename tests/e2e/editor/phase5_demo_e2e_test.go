@@ -155,7 +155,7 @@ func TestE2E_Phase5_DemoFixture_OfflineNoLSP(t *testing.T) {
 	ed.RunCommand("help typst")
 	ed.Pump(4)
 	helpText := string(ed.Buf().Bytes())
-	assert.Contains(t, helpText, "TypX — Typst Authoring Guide")
+	assert.Contains(t, helpText, "TypX Typst authoring guide")
 	assert.Contains(t, helpText, ":preview")
 	assert.Contains(t, helpText, ":outline")
 	assert.Contains(t, helpText, ":conceal")

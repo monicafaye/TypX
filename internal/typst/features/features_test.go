@@ -5,6 +5,8 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -16,8 +18,10 @@ import (
 	"github.com/monicafaye/TypX/internal/buffer"
 	"github.com/monicafaye/TypX/internal/config"
 	"github.com/monicafaye/TypX/internal/display"
+	"github.com/monicafaye/TypX/internal/lsp"
 	ulua "github.com/monicafaye/TypX/internal/lua"
 	"github.com/monicafaye/TypX/internal/screen"
+	"github.com/monicafaye/TypX/internal/typst/bib"
 	"github.com/monicafaye/TypX/internal/typst/outline"
 	"github.com/monicafaye/TypX/internal/typst/preview"
 	"github.com/monicafaye/TypX/internal/typst/shortcuts"
@@ -68,6 +72,8 @@ func TestInitIdempotentAndRegistersPhase2(t *testing.T) {
 	assert.Contains(t, action.BufKeyActions, "HeadingPromote")
 	assert.Contains(t, action.BufKeyActions, "HeadingDemote")
 	assert.Contains(t, action.BufKeyActions, "InsertPalette")
+	assert.Contains(t, action.BufKeyActions, "SymbolPicker")
+	assert.Contains(t, action.BufKeyActions, "CitePicker")
 }
 
 func TestConcealActionAndCommandTriggerOptionCallback(t *testing.T) {
@@ -278,4 +284,210 @@ func TestOutlineSelectionRepositionsPreviewPane(t *testing.T) {
 	assert.Equal(t, 3, bp.Cursor.Y, "editor cursor should jump to Methodology line")
 	fp, _, _ = pp.PageRange()
 	assert.Equal(t, 2, fp, "preview pane should reposition to page 2 for Methodology")
+}
+
+func TestWiredPickersInsertSymbolAndCiteOpenListPane(t *testing.T) {
+	initTestEnv(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "typst.toml"), []byte("[package]\nname = \"demo\"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "refs.bib"), []byte(`@article{vaswani2017,
+  title = {Attention Is All You Need},
+  author = {Ashish Vaswani},
+  year = {2017},
+}
+`), 0o644))
+	mainPath := filepath.Join(dir, "main.typ")
+	require.NoError(t, os.WriteFile(mainPath, []byte("#bibliography(\"refs.bib\")\n"), 0o644))
+
+	t.Cleanup(func() {
+		if tab := action.MainTab(); tab != nil {
+			lsp.CloseListPaneForTab(tab)
+		}
+		bib.ClearCache()
+		buffer.CloseOpenBuffers()
+		action.DrainUIQueue()
+	})
+
+	b, err := buffer.NewBufferFromFile(mainPath, buffer.BTDefault)
+	require.NoError(t, err)
+	action.InitTabs([]*buffer.Buffer{b})
+	action.Tabs.Resize()
+	tab := action.MainTab()
+	bp := tab.CurPane()
+	bp.Cursor.GotoLoc(buffer.Loc{X: 0, Y: 1})
+
+	// 1. :symbol opens ListPane with SYMBOLS badge and inserts $subset.eq$ in markup mode.
+	bp.HandleCommand("symbol subset.eq")
+	lp := lsp.ListPaneForTab(tab)
+	require.NotNil(t, lp)
+	assert.Equal(t, "SYMBOLS", lp.Badge())
+	assert.Equal(t, "Insert", lp.EnterLabel())
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, ""))
+	assert.Nil(t, lsp.ListPaneForTab(tab))
+	assert.Contains(t, string(b.LineBytes(1)), "$subset.eq$")
+
+	// 2. :cite opens ListPane with CITE badge and inserts @vaswani2017.
+	b.Insert(buffer.Loc{X: len("$subset.eq$"), Y: 1}, " ")
+	bp.Cursor.GotoLoc(buffer.Loc{X: len("$subset.eq$ "), Y: 1})
+	bp.HandleCommand("cite vaswani")
+	lp = lsp.ListPaneForTab(tab)
+	require.NotNil(t, lp)
+	assert.Equal(t, "CITE", lp.Badge())
+	assert.Equal(t, "Insert", lp.EnterLabel())
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, ""))
+	assert.Nil(t, lsp.ListPaneForTab(tab))
+	assert.Contains(t, string(b.LineBytes(1)), "@vaswani2017")
+
+	// 3. :insert opens ListPane with SNIPPETS badge and expands a snippet.
+	bp.HandleCommand("insert")
+	lp = lsp.ListPaneForTab(tab)
+	require.NotNil(t, lp)
+	assert.Equal(t, "SNIPPETS", lp.Badge())
+	assert.Equal(t, "Insert", lp.EnterLabel())
+	for _, r := range "callout" {
+		lp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone, ""))
+	}
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, ""))
+	assert.Nil(t, lsp.ListPaneForTab(tab))
+	assert.Contains(t, string(b.Bytes()), "#block(")
+}
+
+func TestOfflineCiteObserverBehavior(t *testing.T) {
+	initTestEnv(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "refs.bib"), []byte(`@article{vaswani2017,
+  title = {Attention Is All You Need},
+  author = {Ashish Vaswani},
+  year = {2017},
+}
+@inproceedings{vas2020intro,
+  title = {Intro Paper},
+  author = {Vas},
+  year = {2020},
+}
+`), 0o644))
+	mainPath := filepath.Join(dir, "main.typ")
+	require.NoError(t, os.WriteFile(mainPath, []byte("#bibliography(\"refs.bib\")\n"), 0o644))
+
+	t.Cleanup(func() {
+		config.GlobalSettings["typst.autoComplete"] = true
+		bib.ClearCache()
+		buffer.CloseOpenBuffers()
+		action.DrainUIQueue()
+	})
+
+	b, err := buffer.NewBufferFromFile(mainPath, buffer.BTDefault)
+	require.NoError(t, err)
+	win := display.NewBufWindow(0, 0, 80, 23, b)
+	bp := action.NewBufPane(b, win, nil)
+	require.True(t, lsp.IsOffline())
+
+	// 1. Typing @vas in Markup mode populates HasSuggestions with two matches.
+	bp.Cursor.GotoLoc(buffer.Loc{X: 0, Y: 1})
+	for _, r := range "@vas" {
+		bp.DoRuneInsert(r)
+		buffer.FlushObservers()
+	}
+	require.True(t, b.HasSuggestions)
+	assert.Equal(t, []string{"vas2020intro", "vaswani2017"}, b.Suggestions)
+	assert.Equal(t, -1, b.CurSuggestion)
+
+	// 2. Tab cycles via Autocomplete without OnBufferChange clobbering cycling.
+	require.True(t, bp.Autocomplete())
+	buffer.FlushObservers()
+	assert.True(t, b.HasSuggestions)
+	assert.Equal(t, 0, b.CurSuggestion)
+	assert.Contains(t, string(b.LineBytes(1)), "@vas2020intro")
+
+	require.True(t, bp.Autocomplete())
+	buffer.FlushObservers()
+	assert.True(t, b.HasSuggestions)
+	assert.Equal(t, 1, b.CurSuggestion)
+	assert.Contains(t, string(b.LineBytes(1)), "@vaswani2017")
+
+	// 3. Single-match completion does not re-open HasSuggestions after Tab.
+	b.Insert(buffer.Loc{X: len("@vaswani2017"), Y: 1}, " @vasw")
+	bp.Cursor.GotoLoc(buffer.Loc{X: len("@vaswani2017 @vasw"), Y: 1})
+	buffer.FlushObservers()
+	require.True(t, b.HasSuggestions)
+	assert.Equal(t, []string{"vaswani2017"}, b.Suggestions)
+	require.True(t, bp.Autocomplete())
+	buffer.FlushObservers()
+	assert.False(t, b.HasSuggestions)
+
+	// 4. Mid-identifier email and Math mode do not trigger offline citation suggestions.
+	b.Insert(buffer.Loc{X: len(b.LineBytes(1)), Y: 1}, " user@vas")
+	bp.Cursor.GotoLoc(buffer.Loc{X: len(b.LineBytes(1)), Y: 1})
+	buffer.FlushObservers()
+	assert.False(t, b.HasSuggestions)
+
+	b.Insert(buffer.Loc{X: len(b.LineBytes(1)), Y: 1}, " $@vas$")
+	bp.Cursor.GotoLoc(buffer.Loc{X: len(b.LineBytes(1)) - 1, Y: 1})
+	buffer.FlushObservers()
+	assert.False(t, b.HasSuggestions)
+
+	// 5. typst.autoComplete=false disables offline @ suggestions.
+	config.GlobalSettings["typst.autoComplete"] = false
+	b.Insert(buffer.Loc{X: len(b.LineBytes(1)), Y: 1}, " @vas")
+	bp.Cursor.GotoLoc(buffer.Loc{X: len(b.LineBytes(1)), Y: 1})
+	buffer.FlushObservers()
+	assert.False(t, b.HasSuggestions)
+}
+
+func TestSyncPreviewToOutlineItemSkipsKindFile(t *testing.T) {
+	initTestEnv(t)
+	if sim, ok := screen.Screen.(tcell.SimulationScreen); ok {
+		sim.SetSize(140, 36)
+	}
+	preview.SetCapsForTest(preview.TerminalCaps{Sixel: true, CellW: 10, CellH: 20, Source: "test", Probed: true})
+	preview.SetCompiler(&stubAnchoredCompiler{
+		pages: 2,
+		anchors: &preview.DocumentAnchors{
+			Outlines: []preview.OutlineAnchor{
+				{Title: "Intro", Depth: 1, PageIdx: 0, YFrac: 0.1},
+				{Title: "End", Depth: 1, PageIdx: 1, YFrac: 0.5},
+			},
+		},
+	})
+	t.Cleanup(func() {
+		preview.Shutdown()
+		if tab := action.MainTab(); tab != nil {
+			outline.CloseForTab(tab)
+		}
+		buffer.CloseOpenBuffers()
+		action.DrainUIQueue()
+	})
+
+	b := buffer.NewBufferFromString("= Intro\nbody\n= End\n", "paper.typ", buffer.BTDefault)
+	action.InitTabs([]*buffer.Buffer{b})
+	action.Tabs.Resize()
+	tab := action.MainTab()
+	bp := tab.CurPane()
+	pp, ok := preview.Open(bp, false)
+	require.True(t, ok)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		action.DrainUIQueue()
+		if !pp.IsCompiling() && pp.MaxScrollY() > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.False(t, pp.IsCompiling())
+
+	// Selecting a KindFile header must not scroll preview.
+	allItems := []outline.Item{
+		{Kind: outline.KindFile, Title: "main.typ"},
+		{Kind: outline.KindHeading, Level: 1, Title: "Intro", Line: 0},
+		{Kind: outline.KindFile, Title: "chapters/end.typ"},
+		{Kind: outline.KindHeading, Level: 1, Title: "End", Line: 2},
+	}
+	syncPreviewToOutlineItem(bp, allItems[2], allItems)
+	assert.Equal(t, 0, pp.ScrollY())
+
+	// Selecting a heading filters KindFile out of AllSections and scrolls to page 2.
+	syncPreviewToOutlineItem(bp, allItems[3], allItems)
+	fp, _, _ := pp.PageRange()
+	assert.Equal(t, 2, fp)
 }

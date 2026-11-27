@@ -28,10 +28,16 @@ See `> help typst` for a walkthrough of Typst authoring workflows.
    toggle the `inline` pane or `browser` preview, open or switch the inline pane
    between `kitty` and `sixel` graphics, `focus` the inline pane, jump to a
    1-based `page <n>` (or `:preview <n>`), toggle cursor-follow `sync`, toggle
-   `invert` (dark mode) or `trim` (margins), or `stop` any active preview.
+   `invert` (dark mode) or `trim` (margins), or `stop` any active preview. In
+   the inline pane, `0` resets `40%` to `250%` zoom, `h`/`l` pan horizontally,
+   and double-click or `Ctrl-Click` jumps to the source line. Browser preview
+   clicks sync back to the editor using `typst.gotoOpenMode`.
 
 * `outline ['on'|'off'|'open'|'close'|'toggle']`: toggles or controls the
-   docked Document Outline sidebar (default key: `Alt-o`).
+   docked Document Outline sidebar (default key: `Alt-o`). Follows `#include`
+   directives from the pinned main file or active file (`p` inside the sidebar
+   toggles between `[Project]` and `[File]` views, and cross-file jumps honor
+   `typst.gotoOpenMode`).
 
 * `templates ['toggle'|'open'|'close'|'focus'|'search [query]'|'universe'|'refresh']`: toggles
    or controls the docked Template Gallery sidebar in any buffer, including
@@ -66,16 +72,27 @@ See `> help typst` for a walkthrough of Typst authoring workflows.
 * `heading-demote`: demotes a Typst heading by one level (`= ` -> `== `,
    default key: `Alt-Right`).
 
-* `insert ['template']`: opens the Typst snippet insert palette (default key:
-   `Alt-i`), or directly expands a built-in template (`figure`, `table`, `frac`,
-   `matrix`, `cases`, `code`, `callout`, `vec`, `hat`, `bar`). Each template
-   is also available directly as `insert-<template>` (e.g., `insert-figure`,
-   `insert-table`, `insert-frac`, `insert-matrix`, `insert-cases`,
-   `insert-code`).
+* `insert ['template']`: opens the filterable bottom `Snippets` picker across
+   built-in snippets (`figure`, `table`, `frac`, `matrix`, `cases`, `code`,
+   `callout`, `vec`, `hat`, `bar`), user snippets (`<config-dir>/snippets.json`),
+   and project snippets (`<project-root>/.typx/snippets.json`) when no argument
+   is given (default key: `Alt-i`), or directly expands the named snippet. The
+   10 built-in names also have direct `insert-<template>` commands (for example,
+   `insert-figure`, `insert-table`) that pick up user or project overrides.
+
+* `symbol ['query']`: opens the filterable bottom math symbol picker (default
+   key: `Alt-y`), inserting `name` in math or raw mode and `$name$` in markup or
+   code mode.
+
+* `cite ['query']`: opens the filterable bottom bibliography picker (default key:
+   `Alt-r`) across BibTeX (`.bib`) and Hayagriva YAML (`.yml`, `.yaml`) entries
+   referenced by `#bibliography(...)` or root `*.bib` files, inserting `@key`
+   (or `key` when `@` already precedes the cursor).
 
 * `lsp-complete`: triggers `tinymist` LSP autocompletion at the cursor
-   (default key: `Ctrl-Space`; single-match snippets expand with `Tab` /
-   `Shift-Tab` tabstops).
+   (default key: `Ctrl-Space`). Press `Tab` or `Shift-Tab` to cycle
+   suggestions, `Enter` to commit and expand snippet tabstops, or `Esc` to
+   revert previewed text.
 
 * `hover`: requests `tinymist` LSP hover documentation at the cursor
    (default key: `Alt-k`).
@@ -103,8 +120,14 @@ See `> help typst` for a walkthrough of Typst authoring workflows.
    cursor or selection in a bottom `ListPane` (default key: `Alt-a`).
 
 * `symbols ['query']`: searches workspace symbols and headings via `tinymist`
-   in the bottom `ListPane` (`/` filters live, `Enter` jumps; default key:
-   `Alt-s`).
+   in the bottom `ListPane` (`/` filters live, `Enter` jumps honoring
+   `typst.gotoOpenMode`; default key: `Alt-s`).
+
+* `select-expand`: expands the selection to the next enclosing syntax range via
+   `tinymist` `textDocument/selectionRange` (default key: `Alt-w`).
+
+* `select-shrink`: shrinks the selection back through the per-pane selection
+   stack (default key: `Alt-W` or `Alt-Shift-w`).
 
 * `diag-next` / `diag-prev`: jumps to the next or previous diagnostic in the
    current buffer with wrap-around (default keys: `F8`, `Shift-F8`).

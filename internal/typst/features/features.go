@@ -16,6 +16,7 @@ import (
 	"github.com/monicafaye/TypX/internal/display"
 	"github.com/monicafaye/TypX/internal/lsp"
 	"github.com/monicafaye/TypX/internal/typst"
+	"github.com/monicafaye/TypX/internal/typst/bib"
 	"github.com/monicafaye/TypX/internal/typst/conceal"
 	"github.com/monicafaye/TypX/internal/typst/outline"
 	"github.com/monicafaye/TypX/internal/typst/preview"
@@ -30,7 +31,19 @@ var (
 	statusCacheMu sync.Mutex
 	wordCache     = make(map[*buffer.SharedBuffer]wordCacheEntry)
 	modeCache     = make(map[*buffer.SharedBuffer]modeCacheEntry)
+
+	offlineCiteMu              sync.Mutex
+	offlineCiteSessions        = make(map[*buffer.SharedBuffer]*offlineCiteSession)
+	offlineCiteSuppressVersion = make(map[*buffer.SharedBuffer]uint64)
 )
+
+type offlineCiteSession struct {
+	reqVersion    uint64
+	reqLoc        buffer.Loc
+	reqLinePrefix string
+	completions   []string
+	suggestions   []string
+}
 
 type wordCacheEntry struct {
 	version uint64
@@ -57,6 +70,7 @@ func (cacheEvictObserver) OnBufferClose(b *buffer.Buffer) {
 	delete(wordCache, b.SharedBuffer)
 	delete(modeCache, b.SharedBuffer)
 	statusCacheMu.Unlock()
+	clearOfflineCiteSession(b.SharedBuffer)
 }
 
 // Init registers TypX's Phase 2 Typst-native features (actions, commands,
@@ -80,23 +94,47 @@ func Init() {
 		action.RegisterDefaultBindingWithFallback("buffer", "Alt-c", "ToggleConceal")
 
 		// 3. Register LyX-style actions, commands, templates, and bindings.
+		shortcuts.SetRootResolver(lsp.FindProjectRoot)
+		shortcuts.SetPicker(func(bp *action.BufPane, title, badge, initialQuery string, items []shortcuts.PickerItem) bool {
+			listItems := make([]lsp.ListItem, len(items))
+			for i, it := range items {
+				listItems[i] = lsp.ListItem{
+					Badge:     it.Badge,
+					Primary:   it.Primary,
+					Secondary: it.Secondary,
+					OnSelect:  it.OnSelect,
+				}
+			}
+			return openBottomPicker(bp, title, badge, initialQuery, listItems)
+		})
 		shortcuts.RegisterAll()
 
-		// 4. Hook Typst-aware smart pairing, list continuation, and snippet Escape into editing actions.
+		// 4. Hook Typst-aware smart pairing, list continuation, LSP completion
+		// Enter/Autocomplete/Escape, offline '@' citation Enter/Escape, and
+		// snippet Escape into editing actions. Completion Escape hooks run
+		// before HandleSnippetEscape so canceling completion inside a tabstop
+		// does not discard the enclosing snippet session.
 		action.RegisterRuneHook(shortcuts.HandleTypstRune)
 		action.RegisterPreActionHook("Backspace", shortcuts.HandleTypstBackspace)
 		action.RegisterPreActionHook("InsertNewline", shortcuts.HandleTypstNewline)
-		action.RegisterPreActionHook("Escape", shortcuts.HandleSnippetEscape)
 		lsp.SetSnippetExpander(shortcuts.ExpandSnippetReplacing)
+		lsp.RegisterCompletionHooks()
+		action.RegisterPreActionHook("InsertNewline", handleOfflineCiteInsertNewline)
+		action.RegisterPreActionHook("Escape", handleOfflineCiteEscape)
+		action.RegisterPreActionHook("Escape", shortcuts.HandleSnippetEscape)
 
-		// 5. Register Phase 2 statusline providers, bottom bar provider, and cache eviction observers.
+		// 5. Register Phase 2 statusline providers, bottom bar provider, and observers.
 		display.SetStatusInfoFn("typst.mode", modeStatusInfo)
 		display.SetStatusInfoFn("typst.words", wordCountStatusInfo)
 		display.SetBottomBarProvider(buildBottomBarContext)
 		buffer.RegisterObserver(cacheEvictObserver{})
 		buffer.RegisterObserver(shortcuts.SnippetEvictObserver())
+		buffer.RegisterObserver(offlineCiteObserver{})
 
-		// 6. Wire Phase 4 Document Outline sidebar with optional tinymist documentSymbol enrichment.
+		// 6. Wire Phase 4 Document Outline sidebar with multi-file resolvers and optional tinymist enrichment.
+		outline.SetMainFileResolver(func(string) string { return lsp.PinnedMain() })
+		outline.SetRootResolver(lsp.FindProjectRoot)
+		outline.SetFileOpener(lsp.OpenFileAt)
 		outline.SetSymbolProvider(func(b *buffer.Buffer, cb func(version uint64, symbols []outline.Symbol)) bool {
 			return lsp.RequestDocumentSymbols(b, func(ver uint64, syms []lsp.DocumentSymbol) {
 				cb(ver, convertLSPSymbols(syms))
@@ -148,7 +186,10 @@ func Init() {
 		})
 		preview.Init()
 		lsp.SetInlinePreviewHandler(inlinePreviewAdapter{})
-		lsp.SetPinChangeHandler(func(string) { preview.NotifyMainFileChanged() })
+		lsp.SetPinChangeHandler(func(string) {
+			preview.NotifyMainFileChanged()
+			outline.NotifyMainFileChanged()
+		})
 
 		// 8. Wire Template Gallery & scaffolding with optional tinymist template RPCs
 		// and live in-terminal Sixel visual preview.
@@ -156,7 +197,40 @@ func Init() {
 		templates.SetRootResolver(lsp.FindProjectRoot)
 		templates.SetPreviewProvider(previewTemplateAdapter{})
 		templates.Init()
+
+		// 9. Wire pure-Go bibliography picker (:cite / Alt-r) and resolvers.
+		bib.SetMainFileResolver(func(string) string { return lsp.PinnedMain() })
+		bib.SetRootResolver(lsp.FindProjectRoot)
+		bib.SetPicker(func(bp *action.BufPane, title, badge, initialQuery string, items []bib.PickerItem) bool {
+			if badge == "" {
+				badge = "CITE"
+			}
+			listItems := make([]lsp.ListItem, len(items))
+			for i, it := range items {
+				listItems[i] = lsp.ListItem{
+					Badge:     it.Badge,
+					Primary:   it.Primary,
+					Secondary: it.Secondary,
+					OnSelect:  it.OnSelect,
+				}
+			}
+			return openBottomPicker(bp, title, badge, initialQuery, listItems)
+		})
+		bib.RegisterAll()
 	})
+}
+
+func openBottomPicker(bp *action.BufPane, title, badge, initialQuery string, items []lsp.ListItem) bool {
+	lp := lsp.OpenListPaneWithOptions(bp, lsp.ListPaneOptions{
+		Title:           title,
+		StartFiltering:  true,
+		InitialQuery:    initialQuery,
+		EnterLabel:      "Insert",
+		Badge:           badge,
+		DiagnosticsMode: false,
+		CloseOnSelect:   true,
+	}, items)
+	return lp != nil
 }
 
 type previewTemplateAdapter struct{}
@@ -265,28 +339,53 @@ func syncPreviewToOutlineItem(bp *action.BufPane, item outline.Item, allItems []
 	if bp == nil || bp.Buf == nil || !bp.Buf.IsTypst() {
 		return
 	}
+	if item.Kind == outline.KindFile {
+		return
+	}
+	var pp *preview.PreviewPane
 	if tab := bp.Tab(); tab != nil {
-		if pp := preview.PaneForTab(tab); pp != nil {
-			entries := make([]preview.SectionEntry, len(allItems))
-			for i, it := range allItems {
-				entries[i] = preview.SectionEntry{
-					Kind:  convertOutlineKind(it.Kind),
-					Level: it.Level,
-					Title: it.Title,
-					Label: it.Label,
-					Line:  it.Line,
+		pp = preview.PaneForTab(tab)
+	}
+	if pp == nil && action.Tabs != nil {
+		// When cross-file jumps open a new tab (default typst.gotoOpenMode="tab"),
+		// locate the open preview pane accompanying the project outline.
+		for _, t := range action.Tabs.List {
+			if t == nil {
+				continue
+			}
+			if cand := preview.PaneForTab(t); cand != nil {
+				if outline.PaneForTab(t) != nil || lsp.PinnedMain() != "" {
+					pp = cand
+					break
 				}
 			}
-			pp.ScrollToSection(preview.SectionTarget{
-				Kind:        convertOutlineKind(item.Kind),
-				Level:       item.Level,
-				Title:       item.Title,
-				Label:       item.Label,
-				Line:        item.Line,
-				TotalLines:  bp.Buf.LinesNum(),
-				AllSections: entries,
+		}
+	}
+	if pp != nil {
+		entries := make([]preview.SectionEntry, 0, len(allItems))
+		for _, it := range allItems {
+			if it.Kind == outline.KindFile {
+				continue
+			}
+			entries = append(entries, preview.SectionEntry{
+				Kind:     convertOutlineKind(it.Kind),
+				Level:    it.Level,
+				Title:    it.Title,
+				Label:    it.Label,
+				FilePath: it.FilePath,
+				Line:     it.Line,
 			})
 		}
+		pp.ScrollToSection(preview.SectionTarget{
+			Kind:        convertOutlineKind(item.Kind),
+			Level:       item.Level,
+			Title:       item.Title,
+			Label:       item.Label,
+			FilePath:    item.FilePath,
+			Line:        item.Line,
+			TotalLines:  bp.Buf.LinesNum(),
+			AllSections: entries,
+		})
 	}
 	if lsp.IsPreviewActive() {
 		lsp.ScrollPreviewTo(bp.Buf, item.Line, item.Column)
@@ -430,12 +529,19 @@ func detectBufferMode(b *buffer.Buffer) typst.Mode {
 	if c == nil {
 		return typst.ModeMarkup
 	}
+	return detectBufferModeAt(b, c.Loc)
+}
+
+func detectBufferModeAt(b *buffer.Buffer, loc buffer.Loc) typst.Mode {
+	if b == nil || !b.IsTypst() {
+		return typst.ModeMarkup
+	}
 	ver := b.Version()
 	var states []typst.LineState
 	if b.SharedBuffer != nil {
 		statusCacheMu.Lock()
 		if entry, ok := modeCache[b.SharedBuffer]; ok && entry.version == ver {
-			if entry.line == c.Y && entry.col == c.X {
+			if entry.line == loc.Y && entry.col == loc.X {
 				statusCacheMu.Unlock()
 				return entry.mode
 			}
@@ -445,16 +551,16 @@ func detectBufferMode(b *buffer.Buffer) typst.Mode {
 	}
 
 	var m typst.Mode
-	if c.Y >= 0 && c.Y < b.LinesNum() {
+	if loc.Y >= 0 && loc.Y < b.LinesNum() {
 		if len(states) == 0 {
 			states = append(states, typst.LineState{})
 		}
-		for len(states) <= c.Y {
+		for len(states) <= loc.Y {
 			idx := len(states) - 1
 			next, _ := typst.ScanLineState(states[idx], b.LineBytes(idx))
 			states = append(states, next)
 		}
-		m = typst.DetectModeAtLine(states[c.Y], b.LineBytes(c.Y), c.X)
+		m = typst.DetectModeAtLine(states[loc.Y], b.LineBytes(loc.Y), loc.X)
 	} else {
 		m = typst.ModeMarkup
 	}
@@ -466,14 +572,295 @@ func detectBufferMode(b *buffer.Buffer) typst.Mode {
 		}
 		modeCache[b.SharedBuffer] = modeCacheEntry{
 			version: ver,
-			line:    c.Y,
-			col:     c.X,
+			line:    loc.Y,
+			col:     loc.X,
 			mode:    m,
 			states:  states,
 		}
 		statusCacheMu.Unlock()
 	}
 	return m
+}
+
+type offlineCiteObserver struct {
+	buffer.NopObserver
+}
+
+func (offlineCiteObserver) OnBufferChange(b *buffer.Buffer, ev buffer.ChangeEvent) {
+	if b == nil || !b.IsTypst() || b.Type.Readonly || b.Type.Scratch || b.Type.Kind != buffer.BTDefault.Kind {
+		return
+	}
+	if b.SharedBuffer != nil {
+		offlineCiteMu.Lock()
+		if supVer, ok := offlineCiteSuppressVersion[b.SharedBuffer]; ok {
+			delete(offlineCiteSuppressVersion, b.SharedBuffer)
+			if supVer == ev.Version {
+				offlineCiteMu.Unlock()
+				return
+			}
+		}
+		offlineCiteMu.Unlock()
+	}
+	if !lsp.IsOffline() {
+		return
+	}
+	if autoComp, ok := config.GetGlobalOption("typst.autoComplete").(bool); ok && !autoComp {
+		return
+	}
+	if b.NumCursors() != 1 {
+		return
+	}
+	c := b.GetActiveCursor()
+	if c == nil || c.HasSelection() {
+		return
+	}
+	// Do not clobber active multi-candidate Tab cycling.
+	if b.HasSuggestions && b.CurSuggestion >= 0 {
+		return
+	}
+
+	prefix, atCharX, ok := extractOfflineCitePrefix(b.LineBytes(c.Y), c.X)
+	if !ok {
+		return
+	}
+	if detectBufferModeAt(b, buffer.Loc{X: atCharX, Y: c.Y}) != typst.ModeMarkup {
+		return
+	}
+	comps, sugs := bib.SuggestEntries(b, prefix)
+	if len(comps) == 0 || len(sugs) == 0 || len(comps) != len(sugs) {
+		return
+	}
+	// Do not re-open suggestions immediately after an exact single-match completion.
+	if len(comps) == 1 && comps[0] == "" {
+		return
+	}
+	reqVersion := b.Version()
+	reqLoc := c.Loc
+	reqLinePrefix := ""
+	if reqLoc.Y >= 0 && reqLoc.Y < b.LinesNum() {
+		reqLinePrefix = string(b.Substr(buffer.Loc{X: 0, Y: reqLoc.Y}, reqLoc))
+	}
+	b.ShowSuggestions(func(*buffer.Buffer) ([]string, []string) {
+		return comps, sugs
+	})
+	if b.HasSuggestions && b.SharedBuffer != nil {
+		setOfflineCiteSession(b.SharedBuffer, &offlineCiteSession{
+			reqVersion:    reqVersion,
+			reqLoc:        reqLoc,
+			reqLinePrefix: reqLinePrefix,
+			completions:   append([]string(nil), comps...),
+			suggestions:   append([]string(nil), sugs...),
+		})
+	} else {
+		clearOfflineCiteSession(b.SharedBuffer)
+	}
+}
+
+func setOfflineCiteSession(sb *buffer.SharedBuffer, sess *offlineCiteSession) {
+	if sb == nil {
+		return
+	}
+	offlineCiteMu.Lock()
+	if sess == nil {
+		delete(offlineCiteSessions, sb)
+	} else {
+		offlineCiteSessions[sb] = sess
+	}
+	offlineCiteMu.Unlock()
+}
+
+func getOfflineCiteSession(sb *buffer.SharedBuffer) *offlineCiteSession {
+	if sb == nil {
+		return nil
+	}
+	offlineCiteMu.Lock()
+	sess := offlineCiteSessions[sb]
+	offlineCiteMu.Unlock()
+	return sess
+}
+
+func clearOfflineCiteSession(sb *buffer.SharedBuffer) {
+	if sb == nil {
+		return
+	}
+	offlineCiteMu.Lock()
+	delete(offlineCiteSessions, sb)
+	delete(offlineCiteSuppressVersion, sb)
+	offlineCiteMu.Unlock()
+}
+
+func suppressOfflineCiteAtVersion(sb *buffer.SharedBuffer, ver uint64) {
+	if sb == nil {
+		return
+	}
+	offlineCiteMu.Lock()
+	offlineCiteSuppressVersion[sb] = ver
+	offlineCiteMu.Unlock()
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func resolveOfflineCiteSession(bp *action.BufPane) (*offlineCiteSession, int, buffer.Loc, bool) {
+	if bp == nil || bp.Buf == nil || bp.Buf.SharedBuffer == nil || !bp.Buf.HasSuggestions {
+		if bp != nil && bp.Buf != nil && bp.Buf.SharedBuffer != nil {
+			clearOfflineCiteSession(bp.Buf.SharedBuffer)
+		}
+		return nil, 0, buffer.Loc{}, false
+	}
+	sess := getOfflineCiteSession(bp.Buf.SharedBuffer)
+	if sess == nil {
+		return nil, 0, buffer.Loc{}, false
+	}
+	b := bp.Buf
+	if !slicesEqual(b.Completions, sess.completions) || !slicesEqual(b.Suggestions, sess.suggestions) {
+		clearOfflineCiteSession(b.SharedBuffer)
+		return nil, 0, buffer.Loc{}, false
+	}
+	if !b.IsTypst() || b.Type.Readonly || b.NumCursors() != 1 || bp.Cursor == nil || bp.Cursor.HasSelection() {
+		clearOfflineCiteSession(b.SharedBuffer)
+		b.HasSuggestions = false
+		return nil, 0, buffer.Loc{}, false
+	}
+	if sess.reqLoc.Y < 0 || sess.reqLoc.Y >= b.LinesNum() ||
+		util.CharacterCount(b.LineBytes(sess.reqLoc.Y)) < sess.reqLoc.X ||
+		string(b.Substr(buffer.Loc{X: 0, Y: sess.reqLoc.Y}, sess.reqLoc)) != sess.reqLinePrefix {
+		clearOfflineCiteSession(b.SharedBuffer)
+		b.HasSuggestions = false
+		return nil, 0, buffer.Loc{}, false
+	}
+	if b.CurSuggestion == -1 {
+		if b.Version() != sess.reqVersion || bp.Cursor.Loc != sess.reqLoc {
+			clearOfflineCiteSession(b.SharedBuffer)
+			b.HasSuggestions = false
+			return nil, 0, buffer.Loc{}, false
+		}
+		return sess, 0, sess.reqLoc, true
+	}
+	if b.CurSuggestion >= 0 && b.CurSuggestion < len(sess.completions) {
+		suffix := sess.completions[b.CurSuggestion]
+		expectedEnd := sess.reqLoc.Move(util.CharacterCountInString(suffix), b)
+		if bp.Cursor.Loc != expectedEnd || string(b.Substr(sess.reqLoc, bp.Cursor.Loc)) != suffix {
+			clearOfflineCiteSession(b.SharedBuffer)
+			b.HasSuggestions = false
+			return nil, 0, buffer.Loc{}, false
+		}
+		return sess, b.CurSuggestion, bp.Cursor.Loc, true
+	}
+	clearOfflineCiteSession(b.SharedBuffer)
+	b.HasSuggestions = false
+	return nil, 0, buffer.Loc{}, false
+}
+
+func handleOfflineCiteInsertNewline(bp *action.BufPane) bool {
+	sess, idx, _, ok := resolveOfflineCiteSession(bp)
+	if !ok {
+		return false
+	}
+	curSel := bp.Buf.CurSuggestion
+	suffix := sess.completions[idx]
+	clearOfflineCiteSession(bp.Buf.SharedBuffer)
+	bp.Buf.HasSuggestions = false
+	if curSel < 0 && suffix != "" {
+		bp.Buf.Insert(sess.reqLoc, suffix)
+		suppressOfflineCiteAtVersion(bp.Buf.SharedBuffer, bp.Buf.Version())
+		if bp.Cursor != nil {
+			bp.Cursor.StoreVisualX()
+		}
+		if bp.BWindow != nil {
+			bp.Relocate()
+		}
+	}
+	bp.Buf.HasSuggestions = false
+	return true
+}
+
+func handleOfflineCiteEscape(bp *action.BufPane) bool {
+	sess, _, curLoc, ok := resolveOfflineCiteSession(bp)
+	if !ok {
+		return false
+	}
+	curSel := bp.Buf.CurSuggestion
+	clearOfflineCiteSession(bp.Buf.SharedBuffer)
+	if curSel >= 0 && sess.reqLoc != curLoc {
+		bp.Buf.Remove(sess.reqLoc, curLoc)
+		suppressOfflineCiteAtVersion(bp.Buf.SharedBuffer, bp.Buf.Version())
+		if bp.Cursor != nil {
+			bp.Cursor.GotoLoc(sess.reqLoc)
+			bp.Cursor.ResetSelection()
+			bp.Cursor.StoreVisualX()
+		}
+		if bp.BWindow != nil {
+			bp.Relocate()
+		}
+	}
+	bp.Buf.HasSuggestions = false
+	return true
+}
+
+func isCiteKeyRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' || r == '.' || r == ':'
+}
+
+func extractOfflineCitePrefix(line []byte, charX int) (prefix string, atCharX int, ok bool) {
+	if charX <= 0 || len(line) == 0 {
+		return "", 0, false
+	}
+	type charCluster struct {
+		r        rune
+		hasCombc bool
+		byteEnd  int
+	}
+	clusters := make([]charCluster, 0, charX)
+	off := 0
+	for i := 0; i < charX && off < len(line); i++ {
+		r, combc, size := util.DecodeCharacter(line[off:])
+		if size <= 0 {
+			break
+		}
+		off += size
+		clusters = append(clusters, charCluster{
+			r:        r,
+			hasCombc: len(combc) > 0,
+			byteEnd:  off,
+		})
+	}
+	if len(clusters) == 0 {
+		return "", 0, false
+	}
+
+	idx := len(clusters) - 1
+	for idx >= 0 {
+		cl := clusters[idx]
+		if cl.hasCombc {
+			return "", 0, false
+		}
+		if cl.r == '@' {
+			if idx > 0 {
+				prev := clusters[idx-1]
+				if prev.hasCombc || unicode.IsLetter(prev.r) || unicode.IsDigit(prev.r) || prev.r == '_' || prev.r == '\\' {
+					return "", 0, false
+				}
+			}
+			startByte := cl.byteEnd
+			endByte := clusters[len(clusters)-1].byteEnd
+			return string(line[startByte:endByte]), idx, true
+		}
+		if !isCiteKeyRune(cl.r) {
+			return "", 0, false
+		}
+		idx--
+	}
+	return "", 0, false
 }
 
 func wordCountStatusInfo(b *buffer.Buffer) string {

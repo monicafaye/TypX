@@ -1,9 +1,9 @@
-# TypX — Typst Authoring Guide
+# TypX Typst authoring guide
 
-TypX (`typx`) is a terminal editor for Typst forked from `micro`, combining
-standard keybindings and live math concealment with structural/math shortcuts, a
-docked Document Outline sidebar, a Template Gallery, and `tinymist` LSP +
-side-by-side Kitty, Sixel, and browser live preview.
+TypX (`typx`) is a terminal editor for Typst forked from `micro`. It combines
+standard keybindings and live math concealment with structural and math
+shortcuts, a docked Document Outline sidebar, a Template Gallery, a bibliography
+picker, and `tinymist` LSP with Kitty, Sixel, and browser live preview.
 
 ---
 
@@ -55,28 +55,49 @@ All TypX shortcuts apply in `.typ` buffers and fall back cleanly in other files:
 - `Alt-e` (`:wrap-italic`): Wrap selection or insert `_..._`.
 - `Alt-Left` (`:heading-promote`): Promote heading (`== ` -> `= `).
 - `Alt-Right` (`:heading-demote`): Demote heading (`= ` -> `== `).
-- `Alt-i` (`:insert`): Open the interactive snippet insert palette.
+- `Alt-i` (`:insert`): Open the interactive snippet picker across built-in, user,
+  and project snippets.
+- `Alt-y` (`:symbol [query]`): Open the math symbol picker across 192 symbols in
+  8 categories (`greek`, `arrows`, `relations`, `sets`, `logic`, `brackets`,
+  `operators`, `big-operators`). Inserts `name` in math or raw mode and
+  `$name$` in markup or code mode.
+- `Alt-r` (`:cite [query]`): Open the bibliography citation picker across local
+  BibTeX (`.bib`) and Hayagriva YAML (`.yml`, `.yaml`) entries, inserting `@key`
+  (or `key` when `@` already precedes the cursor).
 
-### Built-in Snippets (`:insert <name>` or `:insert-<name>`)
+### Snippets (`:insert <name>` or `:insert-<name>`)
 
-- `figure` (`:insert-figure`) — `#figure(..., caption: []) <fig:>`
-- `table` (`:insert-table`) — `#table(columns: 2, [...], [])`
-- `frac` (`:insert-frac`) — `frac(, )`
-- `matrix` (`:insert-matrix`) — `mat(, ; , )`
-- `cases` (`:insert-cases`) — `cases(, )`
-- `code` (`:insert-code`) — fenced raw code block
-- `callout` (`:insert-callout`) — styled `#block(...)` callout box
-- `vec`, `hat`, `bar` — math accent and vector helpers
+TypX merges snippets in three layers from lowest to highest precedence:
 
-### Typst-Aware Smart Pairing & List Continuation (`typst.smartPairs`)
+1. Built-in snippets: `figure`, `table`, `frac`, `matrix`, `cases`, `code`,
+   `callout`, `vec`, `hat`, and `bar` (each also has a direct `:insert-<name>`
+   command that picks up user or project overrides with the same name).
+2. User snippets in `<config-dir>/snippets.json`.
+3. Project snippets in `<project-root>/.typx/snippets.json`.
+
+JSON files accept either `"name": "body"` strings or
+`"name": {"body": "...", "description": "..."}` objects. Invalid JSON prints a
+non-fatal infobar warning while preserving lower-layer snippets.
+
+### Bibliography and offline citations
+
+`:cite` (`Alt-r`) scans `#bibliography("...")` and `#bibliography(("a.bib",
+"b.yml"))` calls in the active buffer and pinned main file, falling back to
+`*.bib` files in the project root. When `tinymist` is off or missing and
+`typst.autoComplete` is enabled, typing `@` in markup mode populates statusline
+suggestions from local bibliography entries (`Tab` cycles, `Esc` dismisses).
+
+### Typst-aware smart pairing and list continuation (`typst.smartPairs`)
 
 When `typst.smartPairs` is `true` (default), TypX auto-closes `$`, `[`, `(`,
 `{`, and `"`, skips over closing delimiters when retyped, deletes empty pairs on
 Backspace, and continues Typst markup lists (`-`, `+`, `N.`, `/`) on `Enter`
 (pressing `Enter` on an empty list item exits the list cleanly), while staying
-out of the way inside raw spans, math, code, and strings. Built-in `:insert`
-snippets and LSP snippet completions support `Tab` and `Shift-Tab` tabstop
-navigation (`Esc` exits the active snippet session).
+out of the way inside raw spans, math, code, and strings. Snippets from
+`:insert` and LSP snippet completions support `Tab` and `Shift-Tab` tabstop
+navigation (`Esc` exits the active snippet session). Multi-candidate LSP
+completions use `Tab` or `Shift-Tab` to cycle, `Enter` to accept and expand
+snippet tabstops, and `Esc` to revert previewed suffixes.
 
 ---
 
@@ -85,8 +106,12 @@ navigation (`Esc` exits the active snippet session).
 Press `Alt-o` or run `> outline` to toggle the docked Document Outline sidebar
 on the left edge of the active tab.
 
-- Extracts `= Headings` (levels 1–6), `#figure(...)` captions, and (when
+- Extracts `= Headings` (levels 1 to 6), `#figure(...)` captions, and (when
   `typst.outlineShowLabels` is `true`) standalone `<labels>`.
+- Scans `#include "..."` directives recursively (outside comments, raw blocks,
+  math, and strings) from the pinned main file or active file, displaying
+  relative-path file headers when multiple files are present. Cross-file jumps
+  honor `typst.gotoOpenMode`.
 - Ignores heading-like lines inside fenced raw blocks and `/* ... */` comments.
 - Works immediately offline via a pure-Go incremental parser, and enriches with
   `tinymist` `textDocument/documentSymbol` when LSP is connected.
@@ -98,6 +123,7 @@ on the left edge of the active tab.
 - `Up` / `Down` or `k` / `j`: Move selection.
 - `Home` / `End` / `PgUp` / `PgDn`: Jump or page through entries.
 - `Enter` or Mouse Click: Jump editor to item, center view, and focus editor.
+- `p`: Toggle between multi-file `[Project]` view and current-file `[File]` view.
 - `/`: Filter entries interactively (`Esc` clears filter, `Enter` accepts).
 - `Esc` or `Tab`: Return focus to the editor without jumping.
 
@@ -195,10 +221,15 @@ and `tinymist` discovery, or run `typx --no-lsp file.typ` for offline editing.
   `:preview <n>`) to jump directly to a page, `sync` to toggle cursor-to-preview
   scroll sync, `invert` / `trim` to toggle dark-mode inversion or margin
   trimming, and `stop` to close any active preview. Inside `tmux`, enable
-  `set -g allow-passthrough on` for Kitty graphics passthrough.
+  `set -g allow-passthrough on` for Kitty graphics passthrough. Clicking a
+  location in browser preview sends `tinymist/preview/scrollSource` or
+  `editorScrollTo` back to the editor, opening or switching files according to
+  `typst.gotoOpenMode`.
 - `:lsp-complete` (`Ctrl-Space`): Trigger `tinymist` autocompletion (also
   auto-suggests non-destructively on `#`, `@`, `.`, `<` when `typst.autoComplete`
-  is enabled; press `Tab` to accept and navigate snippet tabstops).
+  is enabled; press `Tab` or `Shift-Tab` to cycle, `Enter` to commit and expand
+  snippet tabstops, or `Esc` to revert previewed suffixes). When `tinymist` is
+  off or missing, `@` suggests matching keys from local bibliography files.
 - `:hover` (`Alt-k`): Display `tinymist` hover documentation at the cursor.
 - `:signature-help` (`Alt-h`): Display `tinymist` active function parameter
   hints in the infobar (also triggers automatically on `(` and `,` when
@@ -215,6 +246,13 @@ and `tinymist` discovery, or run `typx --no-lsp file.typ` for offline editing.
   cursor or selection.
 - `:symbols [query]` (`Alt-s`): Search workspace symbols and headings (`/`
   filters live, `Enter` jumps).
+- `:select-expand` (`Alt-w`) / `:select-shrink` (`Alt-W` or `Alt-Shift-w`):
+  Expand selection to the next enclosing syntax range via `tinymist`
+  `textDocument/selectionRange`, or shrink back through the per-pane selection
+  stack.
+- Symbol occurrence highlighting: Moving the cursor onto an identifier highlights
+  all matching occurrences in the buffer via `tinymist`
+  `textDocument/documentHighlight` when `typst.documentHighlight` is `true`.
 - `:diag-next` (`F8`) / `:diag-prev` (`Shift-F8`): Jump to the next or previous
   diagnostic in the current buffer (wraps around).
 - `:diagnostics`: Open the interactive bottom-docked diagnostics drawer across
@@ -239,9 +277,16 @@ When the right-docked inline preview pane is opened with `:preview inline`,
 
 - `Up` / `Down`, `k` / `j`, `w` / `s`, or Mouse Wheel: Scroll through pages.
 - `PgUp` / `PgDn`, `Ctrl-u` / `Ctrl-d`, or `Space`: Page up or down.
-- `[` / `]` or `Left` / `Right`: Jump to previous or next page.
+- `[` / `]`: Jump to previous or next page.
+- `Left` / `Right`: Pan horizontally when zoomed past `100%`, or jump to
+  previous or next page at `100%` or below.
+- `h` / `l` or Horizontal Mouse Wheel: Pan left or right when zoomed wider than
+  the pane.
 - `g` / `G` or `Home` / `End`: Jump to top or bottom of document.
-- `+` / `-`: Zoom preview in or out.
+- `+` / `-`: Zoom preview in or out (`40%` to `250%`).
+- `0`: Reset zoom to `100%` and horizontal pan to `0`.
+- `Double-click` or `Ctrl-Click`: Jump the editor cursor to that source line
+  and return focus to the editor.
 - `<` / `>`: Widen or narrow the docked preview pane.
 - `t`: Toggle dark-mode color inversion (`typst.previewInvert`).
 - `m`: Toggle page margin trimming (`typst.previewTrimMargins`).
@@ -261,7 +306,11 @@ See `> help options` for the full list of editor options. TypX-specific keys:
 - `typst.smartPairs` (default `true`): Typst-aware delimiter auto-pairing.
 - `typst.keyHints` (default `true`): Show clickable context-aware shortcut hints on the bottom bar.
 - `typst.lspEnabled` (default `true`): Enable `tinymist` LSP integration.
-- `typst.autoComplete` (default `true`): Show non-mutating LSP completion suggestions on `#`, `@`, `.`, and `<`.
+- `typst.autoComplete` (default `true`): Show non-mutating LSP completion
+  suggestions on `#`, `@`, `.`, and `<`, and offline `@` citation suggestions
+  from local bibliography files when `tinymist` is off or missing.
+- `typst.documentHighlight` (default `true`): Highlight matching symbol
+  occurrences under the cursor via `tinymist`.
 - `typst.signatureHelp` (default `true`): Show LSP signature help in the infobar on `(` and `,`.
 - `typst.tinymistPath` (default `""`): Custom path to `tinymist` binary.
 - `typst.debounceMs` (default `150`): Debounce delay (ms) for LSP edits.
@@ -279,8 +328,8 @@ See `> help options` for the full list of editor options. TypX-specific keys:
 - `typst.exportOnSave` (default `"off"`): Auto-export on explicit save (`"off"`, `"pdf"`, `"png"`, `"svg"`, `"html"`).
 - `typst.formatOnSave` (default `false`): Format `.typ` buffers before explicit save (with 1s timeout fallback).
 - `typst.formatter` (default `"typstyle"`): Formatter backend passed to `tinymist` (`"typstyle"`, `"typstfmt"`, `"disable"`).
-- `typst.gotoOpenMode` (default `"tab"`): How `:definition`, `:references`, `:symbols`, and `:diagnostics` open unopened files (`"tab"`, `"vsplit"`, `"current"`).
-- `typst.listPaneHeight` (default `10`): Preferred height in rows for bottom-docked drawers (`ListPane`).
+- `typst.gotoOpenMode` (default `"tab"`): How `:definition`, `:references`, `:symbols`, `:diagnostics`, cross-file Document Outline jumps, and browser preview reverse sync open unopened files (`"tab"`, `"vsplit"`, `"current"`).
+- `typst.listPaneHeight` (default `10`): Preferred height in rows for bottom-docked drawers (`:diagnostics`, multi-target `:definition`, `:references`, `:code-action`, `:symbols`, `:insert`, `:symbol`, and `:cite`).
 
 ### Colorschemes
 

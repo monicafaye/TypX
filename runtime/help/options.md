@@ -49,7 +49,15 @@ globally, via CLI flag, or in an `"ft:typst"` block in `settings.json`.
 
 * `typst.autoComplete`: `global only`. Automatically display non-mutating
    `tinymist` completion suggestions in the statusline when typing trigger
-   characters (`#`, `@`, `.`, `<`). Press `Tab` to insert.
+   characters (`#`, `@`, `.`, `<`). When `tinymist` is off or missing, typing
+   `@` in markup mode suggests citation keys from local `.bib`, `.yml`, and
+   `.yaml` bibliography files. Press `Tab` to insert or cycle, `Enter` to
+   commit LSP completions and expand snippets, or `Esc` to revert.
+
+    default value: `true`
+
+* `typst.documentHighlight`: `global only`. Highlight all occurrences of the
+   symbol under the cursor via `tinymist` `textDocument/documentHighlight`.
 
     default value: `true`
 
@@ -155,14 +163,14 @@ globally, via CLI flag, or in an `"ft:typst"` block in `settings.json`.
     default value: `typstyle`
 
 * `typst.gotoOpenMode`: `global only`. How `:definition` (`F12`), `:references`,
-   `:symbols`, and `:diagnostics` open unopened files (`tab`, `vsplit`, or
-   `current`).
+   `:symbols`, `:diagnostics`, cross-file Document Outline jumps, and browser
+   preview reverse sync open unopened files (`tab`, `vsplit`, or `current`).
 
     default value: `tab`
 
 * `typst.listPaneHeight`: `global only`. Preferred row height for bottom-docked
    drawers (`:diagnostics`, multi-target `:definition`, `:references`,
-   `:code-action`, and `:symbols`).
+   `:code-action`, `:symbols`, `:insert`, `:symbol`, and `:cite`).
 
     default value: `10`
 
@@ -792,6 +800,7 @@ options in JSON format:
     "typst.conceal": true,
     "typst.concealMode": "line",
     "typst.debounceMs": 150,
+    "typst.documentHighlight": true,
     "typst.exportOnSave": "off",
     "typst.formatOnSave": false,
     "typst.formatter": "typstyle",
@@ -806,8 +815,10 @@ options in JSON format:
     "typst.previewOpenBrowser": true,
     "typst.previewPPI": 144,
     "typst.previewProtocol": "auto",
+    "typst.previewSyncCursor": false,
     "typst.previewTrimMargins": false,
     "typst.previewWidth": 48,
+    "typst.signatureHelp": true,
     "typst.smartPairs": true,
     "typst.templatesWidth": 36,
     "typst.tinymistPath": "",

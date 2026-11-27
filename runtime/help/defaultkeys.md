@@ -20,22 +20,26 @@ editor defaults.
 | Alt-c         | `> conceal`        | Toggle live Unicode math/typography concealment                           |
 | Alt-m         | `> math-inline`    | Insert inline math `$|$`, wrap selection, or exit inline math             |
 | Alt-M         | `> math-display`   | Insert multi-line display math block (`Alt-Shift-m`)                      |
-| Alt-i         | `> insert`         | Open Typst snippet insert palette                                         |
+| Alt-i         | `> insert`         | Open snippet picker (built-in, user, and project snippets)                |
+| Alt-y         | `> symbol`         | Open math symbol picker (inserts `name` in math or `$name$` in markup)    |
+| Alt-r         | `> cite`           | Open bibliography citation picker (inserts `@key`)                        |
 | Alt-N         | `> templates`      | Toggle docked Template Gallery sidebar (`Alt-Shift-n`, works in any buffer) |
 | Alt-b         | `> wrap-bold`      | Wrap selection or insert `*bold*`                                         |
 | Alt-e         | `> wrap-italic`    | Wrap selection or insert `_italic_`                                       |
-| Alt-Left      | `> heading-promote`| Promote heading level (`== ` -> `= `)                                     |
-| Alt-Right     | `> heading-demote` | Demote heading level (`= ` -> `== `)                                      |
-| Ctrl-Space    | `> lsp-complete`   | Trigger `tinymist` LSP completion (with snippet tabstops)                 |
+| Alt-Left      | `> heading-promote`| Promote heading level (`== ` to `= `)                                     |
+| Alt-Right     | `> heading-demote` | Demote heading level (`= ` to `== `)                                      |
+| Ctrl-Space    | `> lsp-complete`   | Trigger `tinymist` completion (`Tab` cycle, `Enter` commit, `Esc` revert) |
 | Alt-k         | `> hover`          | Show `tinymist` LSP hover documentation                                   |
 | Alt-h         | `> signature-help` | Show `tinymist` LSP function signature help in the infobar                |
-| Tab / Shift-Tab | (snippet)        | Jump to next or previous active snippet tabstop (`Esc` exits)             |
+| Tab / Shift-Tab | (snippet / complete) | Cycle active suggestions or jump between snippet tabstops (`Esc` exits) |
 | F12           | `> definition`     | Jump to definition across `.typ`, `.bib`, and `@preview` packages         |
 | Shift-F12     | `> references`     | Find symbol references across the workspace                               |
 | Alt-u         | `> jump-back`      | Return to the previous location in the tab's jump stack                   |
 | F2            | `> lsp-rename`     | Rename symbol across workspace (falls back to Save outside `.typ`)        |
 | Alt-a         | `> code-action`    | Open quickfixes and code actions at cursor (StartOfText outside `.typ`)   |
 | Alt-s         | `> symbols`        | Search workspace symbols and headings (`/` filters live)                  |
+| Alt-w         | `> select-expand`  | Expand selection to next enclosing syntax range                           |
+| Alt-W         | `> select-shrink`  | Shrink selection back through selection stack (`Alt-Shift-w`)             |
 | F8            | `> diag-next`      | Jump to next diagnostic in buffer (wraps around)                          |
 | Shift-F8      | `> diag-prev`      | Jump to previous diagnostic in buffer (wraps around)                      |
 
@@ -48,9 +52,13 @@ with `:preview focus`:
 |----------------------------------|-------------------------------------------------------|
 | Up / Down, k / j, w / s, Wheel   | Scroll up / down through pages                        |
 | PgUp / PgDn, Ctrl-u / Ctrl-d, Space | Page up / down through the document                |
-| [ / ] or Left / Right            | Jump to previous / next page                          |
+| [ / ]                            | Jump to previous / next page                          |
+| Left / Right                     | Pan horizontally past `100%` zoom, or jump page at `100%` or below |
+| h / l or Horizontal Wheel        | Pan left / right when zoomed wider than pane          |
 | g / G or Home / End              | Jump to top / bottom of document                      |
-| + / -                            | Zoom preview in / out                                 |
+| + / -                            | Zoom preview in / out (`40%` to `250%`)               |
+| 0                                | Reset zoom to `100%` and horizontal scroll to `0`     |
+| Double-click / Ctrl-Click        | Jump editor cursor to clicked source line and return focus |
 | < / >                            | Widen / narrow the docked preview pane                |
 | t                                | Toggle dark-mode color inversion (`typst.previewInvert`) |
 | m                                | Toggle page margin trimming (`typst.previewTrimMargins`) |
@@ -67,6 +75,7 @@ with `:preview focus`:
 | Home / End           | Jump to first / last outline entry                               |
 | PgUp / PgDn          | Page up / down through outline entries                           |
 | Enter / Mouse Click  | Jump editor to entry, center viewport, and return focus          |
+| p                    | Toggle between multi-file `[Project]` view and current-file `[File]` view |
 | /                    | Filter outline entries (`Esc` clears, `Enter` accepts)           |
 | Esc / Tab            | Return focus to the editor without jumping                       |
 

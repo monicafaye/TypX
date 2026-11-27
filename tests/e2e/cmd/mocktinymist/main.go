@@ -241,6 +241,8 @@ func runLSP() {
 						"triggerCharacters": []string{"(", ","},
 					},
 					"documentSymbolProvider":     true,
+					"documentHighlightProvider":  true,
+					"selectionRangeProvider":     true,
 					"definitionProvider":         true,
 					"referencesProvider":         true,
 					"renameProvider":             map[string]any{"prepareProvider": true},
@@ -316,7 +318,8 @@ func runLSP() {
 				} `json:"contentChanges"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
-			text := docs[p.TextDocument.URI]
+			prevText := docs[p.TextDocument.URI]
+			text := prevText
 			for _, ch := range p.ContentChanges {
 				if ch.Range == nil {
 					text = ch.Text
@@ -338,6 +341,7 @@ func runLSP() {
 				os.Exit(42)
 			}
 			publishDiagsForText(p.TextDocument.URI, p.TextDocument.Version, text, false)
+			emitReverseSyncMarkers(p.TextDocument.URI, prevText, text)
 
 		case "textDocument/didSave":
 			var p struct {
@@ -391,6 +395,9 @@ func runLSP() {
 					{"label": "figure", "kind": 3, "detail": "Typst figure"},
 					{"label": "heading", "kind": 14, "detail": "Typst heading"},
 					{"label": "beta", "kind": 14, "detail": "Greek letter beta"},
+					{"label": "mkplain", "kind": 3, "detail": "Plain mk completion"},
+					{"label": "mksnip", "kind": 15, "detail": "Snippet mk completion", "insertText": "mksnip($1, $2)$0", "insertTextFormat": 2},
+					{"label": "callout", "kind": 15, "detail": "Callout snippet", "insertText": "callout($1)$0", "insertTextFormat": 2},
 				},
 			}
 			writeRPCResponse(msg.ID, result, nil)
@@ -466,6 +473,55 @@ func runLSP() {
 				},
 			}
 			writeRPCResponse(msg.ID, result, nil)
+
+		case "textDocument/documentHighlight":
+			var p struct {
+				TextDocument struct {
+					URI string `json:"uri"`
+				} `json:"textDocument"`
+				Position struct {
+					Line      int `json:"line"`
+					Character int `json:"character"`
+				} `json:"position"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			appendTrace(traceRecord{Method: msg.Method, ID: msg.ID, URI: p.TextDocument.URI, Params: msg.Params})
+			text := docs[p.TextDocument.URI]
+			tok, _, _, ok := tokenSpanAtUTF16(lineAtOffset(text, p.Position.Line), p.Position.Character)
+			if !ok {
+				writeRPCResponse(msg.ID, []map[string]any{}, nil)
+				break
+			}
+			locs := findTokenLocationsInText(p.TextDocument.URI, text, tok)
+			highlights := make([]map[string]any, 0, len(locs))
+			for _, loc := range locs {
+				highlights = append(highlights, map[string]any{
+					"range": loc["range"],
+					"kind":  1,
+				})
+			}
+			writeRPCResponse(msg.ID, highlights, nil)
+
+		case "textDocument/selectionRange":
+			var p struct {
+				TextDocument struct {
+					URI string `json:"uri"`
+				} `json:"textDocument"`
+				Positions []struct {
+					Line      int `json:"line"`
+					Character int `json:"character"`
+				} `json:"positions"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			appendTrace(traceRecord{Method: msg.Method, ID: msg.ID, URI: p.TextDocument.URI, Params: msg.Params})
+			text := docs[p.TextDocument.URI]
+			out := make([]map[string]any, 0, len(p.Positions))
+			for _, pos := range p.Positions {
+				if sr := buildSelectionRange(text, pos.Line, pos.Character); sr != nil {
+					out = append(out, sr)
+				}
+			}
+			writeRPCResponse(msg.ID, out, nil)
 
 		case "textDocument/definition":
 			var p struct {
@@ -1366,4 +1422,130 @@ func applyIncrementalEdit(text string, startLine, startChar, endLine, endChar in
 		out.WriteString(lines[i])
 	}
 	return out.String()
+}
+
+func makeRPCRange(sLine, sChar, eLine, eChar int) map[string]any {
+	return map[string]any{
+		"start": map[string]any{"line": sLine, "character": sChar},
+		"end":   map[string]any{"line": eLine, "character": eChar},
+	}
+}
+
+func sameRPCRange(a, b map[string]any) bool {
+	as, _ := a["start"].(map[string]any)
+	ae, _ := a["end"].(map[string]any)
+	bs, _ := b["start"].(map[string]any)
+	be, _ := b["end"].(map[string]any)
+	return as["line"] == bs["line"] && as["character"] == bs["character"] &&
+		ae["line"] == be["line"] && ae["character"] == be["character"]
+}
+
+func buildSelectionRange(text string, lineIdx, utf16Col int) map[string]any {
+	normalized := strings.ReplaceAll(text, "\r\n", "\n")
+	lines := strings.Split(normalized, "\n")
+	if len(lines) == 0 {
+		return map[string]any{"range": makeRPCRange(0, 0, 0, 0)}
+	}
+	if lineIdx < 0 {
+		lineIdx = 0
+	}
+	if lineIdx >= len(lines) {
+		lineIdx = len(lines) - 1
+	}
+	lastLine := len(lines) - 1
+	docRange := makeRPCRange(0, 0, lastLine, utf16Units(lines[lastLine]))
+	cur := map[string]any{"range": docRange}
+
+	lineText := lines[lineIdx]
+	lineRange := makeRPCRange(lineIdx, 0, lineIdx, utf16Units(lineText))
+	if !sameRPCRange(lineRange, docRange) {
+		cur = map[string]any{
+			"range":  lineRange,
+			"parent": cur,
+		}
+	}
+
+	if _, startU16, endU16, ok := tokenSpanAtUTF16(lineText, utf16Col); ok {
+		tokRange := makeRPCRange(lineIdx, startU16, lineIdx, endU16)
+		if !sameRPCRange(tokRange, lineRange) && !sameRPCRange(tokRange, docRange) {
+			cur = map[string]any{
+				"range":  tokRange,
+				"parent": cur,
+			}
+		}
+	}
+	return cur
+}
+
+func emitReverseSyncMarkers(docURI, prevText, newText string) {
+	prevSet := make(map[string]bool)
+	for _, line := range strings.Split(strings.ReplaceAll(prevText, "\r\n", "\n"), "\n") {
+		prevSet[line] = true
+	}
+	docPath := uriToLocalPath(docURI)
+	docDir := filepath.Dir(docPath)
+
+	for _, line := range strings.Split(strings.ReplaceAll(newText, "\r\n", "\n"), "\n") {
+		if prevSet[line] {
+			continue
+		}
+		if idx := strings.Index(line, "MOCK_SCROLL_SOURCE:"); idx >= 0 {
+			spec := strings.TrimSpace(line[idx+len("MOCK_SCROLL_SOURCE:"):])
+			if targetPath, ln, ch, ok := parseMarkerSpec(spec, docPath, docDir); ok {
+				writeRPCNotification("tinymist/preview/scrollSource", map[string]any{
+					"taskId": "default_preview",
+					"uri":    pathToFileURI(targetPath),
+					"range":  makeRPCRange(ln, ch, ln, ch),
+				})
+				appendTrace(traceRecord{Event: "emit_scroll_source", URI: pathToFileURI(targetPath), Note: fmt.Sprintf("%d:%d", ln, ch)})
+			}
+		}
+		if idx := strings.Index(line, "MOCK_EDITOR_SCROLL_TO:"); idx >= 0 {
+			spec := strings.TrimSpace(line[idx+len("MOCK_EDITOR_SCROLL_TO:"):])
+			if targetPath, ln, ch, ok := parseMarkerSpec(spec, docPath, docDir); ok {
+				writeRPCNotification("editorScrollTo", map[string]any{
+					"filepath":  targetPath,
+					"line":      ln,
+					"character": ch,
+				})
+				appendTrace(traceRecord{Event: "emit_editor_scroll_to", URI: pathToFileURI(targetPath), Note: fmt.Sprintf("%d:%d", ln, ch)})
+			}
+		}
+	}
+}
+
+func parseMarkerSpec(spec, docPath, docDir string) (targetPath string, line, char int, ok bool) {
+	lastColon := strings.LastIndexByte(spec, ':')
+	if lastColon <= 0 {
+		return "", 0, 0, false
+	}
+	charStr := strings.Fields(spec[lastColon+1:])
+	if len(charStr) == 0 {
+		return "", 0, 0, false
+	}
+	c, err := strconv.Atoi(charStr[0])
+	if err != nil {
+		return "", 0, 0, false
+	}
+	rest := spec[:lastColon]
+	prevColon := strings.LastIndexByte(rest, ':')
+	if prevColon <= 0 {
+		return "", 0, 0, false
+	}
+	l, err := strconv.Atoi(strings.TrimSpace(rest[prevColon+1:]))
+	if err != nil {
+		return "", 0, 0, false
+	}
+	target := strings.TrimSpace(rest[:prevColon])
+	if target == "" {
+		return "", 0, 0, false
+	}
+	if strings.EqualFold(target, "SELF") {
+		targetPath = docPath
+	} else if filepath.IsAbs(target) {
+		targetPath = target
+	} else {
+		targetPath = filepath.Join(docDir, target)
+	}
+	return targetPath, l, c, true
 }

@@ -359,8 +359,13 @@ WrapItalic
 HeadingPromote
 HeadingDemote
 InsertPalette
+SymbolPicker
+CitePicker
+SnippetNext
+SnippetPrev
 LspComplete
 LspHover
+LspSignatureHelp
 LspFormat
 LspDefinition
 LspJumpBack
@@ -368,6 +373,8 @@ LspReferences
 LspRename
 LspCodeAction
 LspWorkspaceSymbols
+SelectExpand
+SelectShrink
 NextDiagnostic
 PrevDiagnostic
 ```

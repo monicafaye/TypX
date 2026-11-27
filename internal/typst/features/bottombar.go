@@ -2,6 +2,7 @@ package features
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/monicafaye/TypX/internal/action"
 	"github.com/monicafaye/TypX/internal/buffer"
@@ -132,6 +133,7 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 		}
 		hints = append(hints,
 			display.BottomBarItem{Key: "Alt+I", Label: "Snippets", Action: "InsertPalette", Priority: 0},
+			display.BottomBarItem{Key: "Alt+Y", Label: "Symbol", Action: "SymbolPicker", Priority: 0},
 			display.BottomBarItem{Key: "^Space", Label: "Complete", Action: "LspComplete", Priority: 1},
 			display.BottomBarItem{Key: "Alt+M", Label: "Exit Math", Action: "MathInline", Priority: 1},
 			display.BottomBarItem{Key: "Alt+C", Label: "Conceal", Action: "ToggleConceal", Priority: 2, Active: concealOn},
@@ -193,6 +195,8 @@ func typstBottomBarContext(tab *action.Tab, bp *action.BufPane) display.BottomBa
 			display.BottomBarItem{Key: "Alt+C", Label: "Conceal", Action: "ToggleConceal", Priority: 2, Active: concealOn},
 			display.BottomBarItem{Key: "Alt+M", Label: "Math", Action: "MathInline", Priority: 2},
 			display.BottomBarItem{Key: "Alt+I", Label: "Insert", Action: "InsertPalette", Priority: 3},
+			display.BottomBarItem{Key: "Alt+R", Label: "Cite", Action: "CitePicker", Priority: 3},
+			display.BottomBarItem{Key: "Alt+Y", Label: "Symbol", Action: "SymbolPicker", Priority: 4},
 			display.BottomBarItem{Key: "Alt+K", Label: "Hover", Action: "LspHover", Priority: 5},
 			display.BottomBarItem{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 0, AlignRight: true},
 			display.BottomBarItem{Key: "^G", Label: "Help", Action: "ToggleHelp", Priority: 4, AlignRight: true},
@@ -234,9 +238,13 @@ func typstKeyMenuRows(previewOn, outlineOn, concealOn, treeOn, templatesOn bool)
 				{Key: "Alt+M", Label: "Math", Action: "MathInline", Priority: 1},
 				{Key: "Alt+⇧M", Label: "Display", Action: "MathDisplay", Priority: 3},
 				{Key: "Alt+I", Label: "Insert", Action: "InsertPalette", Priority: 2},
+				{Key: "Alt+Y", Label: "Symbol", Action: "SymbolPicker", Priority: 2},
+				{Key: "Alt+R", Label: "Cite", Action: "CitePicker", Priority: 2},
 				{Key: "Alt+⇧N", Label: "Templates", Action: "ToggleTemplates", Priority: 2, Active: templatesOn},
 				{Key: "Alt+B", Label: "Bold", Action: "WrapBold", Priority: 4},
 				{Key: "Alt+E", Label: "Italic", Action: "WrapItalic", Priority: 4},
+				{Key: "Alt+W", Label: "Expand", Action: "SelectExpand", Priority: 4},
+				{Key: "Alt+⇧W", Label: "Shrink", Action: "SelectShrink", Priority: 5},
 				{Key: "Alt+K", Label: "Hover", Action: "LspHover", Priority: 3},
 				{Key: "Alt+H", Label: "Sig", Action: "LspSignatureHelp", Priority: 4},
 				{Key: "F12", Label: "Def", Action: "LspDefinition", Priority: 3},
@@ -285,6 +293,7 @@ func outlineBottomBarContext(op *outline.OutlinePane) display.BottomBarContext {
 		hints = []display.BottomBarItem{
 			{Key: "↑/↓", Label: "Navigate", Priority: 1},
 			{Key: "Enter", Label: "Jump", Action: "pane:Enter", Priority: 0},
+			{Key: "p", Label: "Project", Action: "pane:p", Priority: 1, Active: op.IsProjectMode()},
 			{Key: "/", Label: "Filter", Action: "pane:/", Priority: 0},
 			{Key: "Esc", Label: "Editor", Action: "pane:Esc", Priority: 0},
 			{Key: "Alt+O", Label: "Close", Action: "ToggleOutline", Priority: 1},
@@ -296,7 +305,7 @@ func outlineBottomBarContext(op *outline.OutlinePane) display.BottomBarContext {
 		Badge:    "OUTLINE",
 		Hints:    hints,
 		MenuRows: typstKeyMenuRows(false, true, true, false, false),
-		MenuTip:  "Outline focused · Enter to jump · / to filter · Esc returns to editor",
+		MenuTip:  "Outline focused · Enter to jump · p toggles project/file · / to filter · Esc returns to editor",
 	}
 }
 
@@ -337,17 +346,31 @@ func templatesBottomBarContext(tp *templates.TemplatePane) display.BottomBarCont
 }
 
 func listPaneBottomBarContext(lp *lsp.ListPane) display.BottomBarContext {
-	badge := "LIST"
-	tip := "List focused · Enter to jump · / to filter · Esc closes"
-	if lp.IsFilterable() {
-		badge = "DIAGNOSTICS"
+	isDiag := lp.IsDiagnosticsMode()
+	badge := lp.Badge()
+	if badge == "" {
+		if isDiag {
+			badge = "DIAGNOSTICS"
+		} else {
+			badge = "LIST"
+		}
+	}
+	enterLabel := lp.EnterLabel()
+	if enterLabel == "" {
+		enterLabel = "Jump"
+	}
+	tip := "List focused · Enter to " + strings.ToLower(enterLabel) + " · / to filter · Esc closes"
+	if lp.Badge() != "" {
+		tip = fmt.Sprintf("%s focused · Enter to %s · / to filter · Esc closes", badge, strings.ToLower(enterLabel))
+	}
+	if isDiag {
 		tip = "Diagnostics focused · Enter to jump · / to filter · f toggles errors only · Esc closes"
 	}
 	if lp.IsFiltering() {
 		return display.BottomBarContext{
 			Badge: badge,
 			Hints: []display.BottomBarItem{
-				{Key: "Enter", Label: "Jump", Action: "pane:Enter", Priority: 0},
+				{Key: "Enter", Label: enterLabel, Action: "pane:Enter", Priority: 0},
 				{Key: "↑/↓", Label: "Select", Priority: 1},
 				{Key: "Esc", Label: "Clear Filter", Action: "pane:Esc", Priority: 0},
 				{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 2, AlignRight: true},
@@ -359,10 +382,10 @@ func listPaneBottomBarContext(lp *lsp.ListPane) display.BottomBarContext {
 
 	hints := []display.BottomBarItem{
 		{Key: "↑/↓", Label: "Navigate", Priority: 1},
-		{Key: "Enter", Label: "Jump", Action: "pane:Enter", Priority: 0},
+		{Key: "Enter", Label: enterLabel, Action: "pane:Enter", Priority: 0},
 		{Key: "/", Label: "Filter", Action: "pane:/", Priority: 1},
 	}
-	if lp.IsFilterable() {
+	if isDiag {
 		hints = append(hints, display.BottomBarItem{
 			Key:      "f",
 			Label:    "Errors",
@@ -385,25 +408,36 @@ func listPaneBottomBarContext(lp *lsp.ListPane) display.BottomBarContext {
 }
 
 func previewBottomBarContext(pp *preview.PreviewPane) display.BottomBarContext {
+	panPriority := 4
+	if pp.MaxScrollX() > 0 {
+		panPriority = 2
+	}
 	hints := []display.BottomBarItem{
 		{Key: "↑/↓", Label: "Scroll", Priority: 1},
+		{Key: "h/l", Label: "Pan", Priority: panPriority},
 		{Key: "[/]", Label: "Page", Priority: 2},
 		{Key: "</>", Label: "Width", Priority: 2},
 		{Key: "+/-", Label: "Zoom", Priority: 3},
-		{Key: "t", Label: "Dark", Action: "pane:t", Priority: 0, Active: pp.IsInverted()},
-		{Key: "m", Label: "Trim", Action: "pane:m", Priority: 1, Active: pp.IsTrimMargins()},
-		{Key: "f", Label: "Sync", Action: "pane:f", Priority: 2, Active: pp.IsSyncCursor()},
-		{Key: "r", Label: "Reload", Action: "pane:r", Priority: 3},
-		{Key: "Esc", Label: "Editor", Action: "pane:Esc", Priority: 0},
-		{Key: "q", Label: "Close", Action: "pane:q", Priority: 0, AlignRight: true},
-		{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 3, AlignRight: true},
 	}
+	if pp.ZoomPct() != 100 {
+		hints = append(hints, display.BottomBarItem{Key: "0", Label: "Reset", Action: "pane:0", Priority: 2})
+	}
+	hints = append(hints,
+		display.BottomBarItem{Key: "DblClick", Label: "Source", Priority: 4},
+		display.BottomBarItem{Key: "t", Label: "Dark", Action: "pane:t", Priority: 0, Active: pp.IsInverted()},
+		display.BottomBarItem{Key: "m", Label: "Trim", Action: "pane:m", Priority: 1, Active: pp.IsTrimMargins()},
+		display.BottomBarItem{Key: "f", Label: "Sync", Action: "pane:f", Priority: 2, Active: pp.IsSyncCursor()},
+		display.BottomBarItem{Key: "r", Label: "Reload", Action: "pane:r", Priority: 3},
+		display.BottomBarItem{Key: "Esc", Label: "Editor", Action: "pane:Esc", Priority: 0},
+		display.BottomBarItem{Key: "q", Label: "Close", Action: "pane:q", Priority: 0, AlignRight: true},
+		display.BottomBarItem{Key: "Alt+G", Label: "Keys", Action: "ToggleKeyMenu", Priority: 3, AlignRight: true},
+	)
 	return display.BottomBarContext{
 		Badge:       "PREVIEW",
 		BadgeAccent: "math",
 		Hints:       hints,
 		MenuRows:    typstKeyMenuRows(true, false, true, false, false),
-		MenuTip:     "Preview focused · Wheel/j/k scroll · </> width · t invert · m trim · Esc returns to editor",
+		MenuTip:     "Preview focused · Wheel/j/k scroll · h/l pan · +/-/0 zoom · DblClick/Ctrl+Click source · </> width · t invert · m trim · Esc editor",
 	}
 }
 
