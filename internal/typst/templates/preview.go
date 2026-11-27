@@ -74,6 +74,9 @@ func LoadTemplatePreviewImages(
 	cacheDir string,
 	compileFn func(ctx context.Context, filePath, rootDir string, content []byte) ([]*image.RGBA, error),
 ) ([]*image.RGBA, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if t.ThumbnailPath != "" {
 		raw, err := os.ReadFile(t.ThumbnailPath)
 		if err == nil {
@@ -95,6 +98,9 @@ func LoadTemplatePreviewImages(
 				return []*image.RGBA{img}, nil
 			}
 			err = decErr
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
 		}
 		if t.FilePath != "" && compileFn != nil {
 			root := t.DirPath
@@ -129,6 +135,9 @@ func LoadTemplatePreviewImages(
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if compileFn == nil {
 		return nil, errors.New("preview compiler unavailable")
 	}
@@ -150,13 +159,16 @@ func LoadTemplatePreviewImages(
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(imgs) == 0 {
 		return nil, errors.New("template preview produced no pages")
 	}
 
 	if cachePath != "" && imgs[0] != nil {
 		var buf bytes.Buffer
-		if encErr := png.Encode(&buf, imgs[0]); encErr == nil {
+		if encErr := png.Encode(&buf, imgs[0]); encErr == nil && ctx.Err() == nil {
 			_ = writeBytesAtomic(cachePath, buf.Bytes())
 		}
 	}

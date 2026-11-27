@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"image"
 	"image/color"
 	"image/draw"
@@ -183,4 +184,41 @@ func TestLoadTemplatePreviewImagesLocalUniverseAndCompiledCache(t *testing.T) {
 	require.Len(t, secondImgs, 1)
 	assert.Equal(t, int32(1), compileCount.Load(), "second call must hit SHA-256 PNG cache on disk")
 	assert.Equal(t, image.Rect(0, 0, 40, 60), secondImgs[0].Bounds())
+}
+
+func TestLoadTemplatePreviewImagesRespectsCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	persDir := filepath.Join(tmp, "cfg", "templates")
+	require.NoError(t, os.MkdirAll(persDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(persDir, "notes.typ"), []byte("= {{title}}\n"), 0o644))
+	all := DiscoverOffline(DiscoverOptions{ConfigDir: filepath.Join(tmp, "cfg")})
+	notes, ok := ResolveByName(all, "notes")
+	require.True(t, ok)
+
+	// 1. Pre-canceled context must not compile or touch cacheDir.
+	preCanceled, cancelPre := context.WithCancel(context.Background())
+	cancelPre()
+	preCacheDir := filepath.Join(tmp, "pre-canceled-cache")
+	var compileCalls atomic.Int32
+	_, err := LoadTemplatePreviewImages(preCanceled, notes, nil, preCacheDir, func(ctx context.Context, filePath, rootDir string, content []byte) ([]*image.RGBA, error) {
+		compileCalls.Add(1)
+		return []*image.RGBA{image.NewRGBA(image.Rect(0, 0, 10, 10))}, nil
+	})
+	require.True(t, errors.Is(err, context.Canceled), "expected context.Canceled, got %v", err)
+	assert.Equal(t, int32(0), compileCalls.Load())
+	_, statErr := os.Stat(preCacheDir)
+	assert.True(t, os.IsNotExist(statErr), "canceled load must not create cache directory")
+
+	// 2. Context canceled during compilation must not write a cache file afterward.
+	midCtx, cancelMid := context.WithCancel(context.Background())
+	midCacheDir := filepath.Join(tmp, "mid-canceled-cache")
+	_, err = LoadTemplatePreviewImages(midCtx, notes, nil, midCacheDir, func(ctx context.Context, filePath, rootDir string, content []byte) ([]*image.RGBA, error) {
+		cancelMid()
+		return []*image.RGBA{image.NewRGBA(image.Rect(0, 0, 10, 10))}, nil
+	})
+	require.True(t, errors.Is(err, context.Canceled), "expected context.Canceled, got %v", err)
+	_, statErr = os.Stat(midCacheDir)
+	assert.True(t, os.IsNotExist(statErr), "context canceled during compile must not write to cacheDir")
 }

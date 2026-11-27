@@ -151,6 +151,9 @@ func (c *UniverseClient) FetchUniverse(ctx context.Context, forceRefresh bool) (
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotModified && hasCache {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		cached.FetchedAt = time.Now().UTC()
 		if etag := strings.TrimSpace(resp.Header.Get("ETag")); etag != "" {
 			cached.ETag = etag
@@ -174,6 +177,9 @@ func (c *UniverseClient) FetchUniverse(ctx context.Context, forceRefresh bool) (
 			return cached.Templates, err
 		}
 		return nil, fmt.Errorf("decode universe index: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	templates := extractLatestUniverseTemplates(entries)
@@ -314,6 +320,9 @@ func (c *UniverseClient) FetchThumbnail(ctx context.Context, name, version, prev
 	if !isSafePkgToken(name) || !isSafePkgToken(version) {
 		return nil, fmt.Errorf("invalid package coordinates: %q %q", name, version)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	var cachePath string
 	if strings.TrimSpace(previewCacheDir) != "" {
@@ -353,6 +362,9 @@ func (c *UniverseClient) FetchThumbnail(ctx context.Context, name, version, prev
 		resp.Body.Close()
 		if readErr != nil {
 			return nil, readErr
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		if len(raw) > maxThumbnailBytes {
 			return nil, fmt.Errorf("thumbnail exceeds %d byte limit", maxThumbnailBytes)

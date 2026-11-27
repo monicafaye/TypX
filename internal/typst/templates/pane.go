@@ -1203,12 +1203,17 @@ type Manager struct {
 	rootResolver    func(string) string
 	previewProvider PreviewProvider
 	previewCacheDir string
+	previewWG       sync.WaitGroup
 	universeClient  *UniverseClient
 	universeItems   []Template
 	universeLoaded  bool
 	universeLoading bool
 	universeGen     uint64
 	universeCancel  context.CancelFunc
+}
+
+func (m *Manager) waitPendingPreviews() {
+	m.previewWG.Wait()
 }
 
 func newManager() *Manager {
@@ -2444,11 +2449,14 @@ func (tp *TemplatePane) runPreviewNow(force bool) {
 	tp.previewCancel = cancel
 	tp.previewMu.Unlock()
 
-	client := tp.mgr.getUniverseClient()
-	cacheDir := tp.mgr.getPreviewCacheDir()
+	mgr := tp.mgr
+	client := mgr.getUniverseClient()
+	cacheDir := mgr.getPreviewCacheDir()
 	tab := tp.tab
 
+	mgr.previewWG.Add(1)
 	go func() {
+		defer mgr.previewWG.Done()
 		imgs, err := LoadTemplatePreviewImages(ctx, tmpl, client, cacheDir, provider.CompileTypst)
 		canceled := ctx.Err() == context.Canceled
 		cancel()

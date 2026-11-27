@@ -77,13 +77,23 @@ func initPaneTestEnv(t *testing.T, width, height int) {
 	action.InitGlobals()
 	buffer.SetMessager(action.InfoBar)
 	t.Cleanup(func() {
+		defaultManager.pruneStaleTabs()
+		if action.Tabs != nil {
+			for _, tab := range action.Tabs.List {
+				CloseForTab(tab)
+			}
+		}
+		defaultManager.mu.Lock()
+		if defaultManager.universeCancel != nil {
+			defaultManager.universeCancel()
+			defaultManager.universeCancel = nil
+		}
+		defaultManager.mu.Unlock()
+		defaultManager.waitPendingPreviews()
 		SetExternalBackend(nil)
 		SetUniverseClient(nil)
 		SetPreviewProvider(nil)
 		SetPreviewCacheDir("")
-		if tab := action.MainTab(); tab != nil {
-			CloseForTab(tab)
-		}
 		buffer.CloseOpenBuffers()
 		action.DrainUIQueue()
 	})
@@ -268,6 +278,9 @@ func (f *fakePreviewProvider) Clear(tab *action.Tab) {
 }
 
 func (f *fakePreviewProvider) CompileTypst(ctx context.Context, filePath, rootDir string, content []byte) ([]*image.RGBA, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return []*image.RGBA{image.NewRGBA(image.Rect(0, 0, 50, 70))}, nil
 }
 
