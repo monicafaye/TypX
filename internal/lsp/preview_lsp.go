@@ -2,8 +2,10 @@ package lsp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -16,9 +18,15 @@ import (
 	"github.com/monicafaye/TypX/internal/buffer"
 )
 
-// OnCursorMove debounces preview cursor scroll synchronization when live preview is active.
+// OnCursorMove debounces documentHighlight and, when live preview is active,
+// preview cursor scroll synchronization.
 func (m *Manager) OnCursorMove(b *buffer.Buffer, ev buffer.CursorEvent) {
-	if !isTrackableTypst(b) || !m.atomicPreview.Load() {
+	if !isTrackableTypst(b) {
+		return
+	}
+	m.scheduleDocumentHighlight(b, ev.New)
+
+	if !m.atomicPreview.Load() {
 		return
 	}
 	absPath := b.AbsPath
@@ -623,4 +631,409 @@ func extractURLFromJSON(raw json.RawMessage) string {
 		return u
 	}
 	return ""
+}
+
+type previewScrollTarget struct {
+	TaskID   string
+	FilePath string
+	Pos      Position
+}
+
+func parsePreviewScrollSource(raw json.RawMessage) (previewScrollTarget, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return previewScrollTarget{}, false
+	}
+	var payload struct {
+		TaskID       string          `json:"taskId"`
+		FilePath     string          `json:"filepath"`
+		URI          string          `json:"uri"`
+		Path         string          `json:"path"`
+		Line         *int            `json:"line"`
+		Character    *int            `json:"character"`
+		Col          *int            `json:"col"`
+		Column       *int            `json:"column"`
+		Start        json.RawMessage `json:"start"`
+		End          json.RawMessage `json:"end"`
+		Position     json.RawMessage `json:"position"`
+		Range        json.RawMessage `json:"range"`
+		TextDocument *struct {
+			URI string `json:"uri"`
+		} `json:"textDocument"`
+		Location *struct {
+			URI   string          `json:"uri"`
+			Range json.RawMessage `json:"range"`
+		} `json:"location"`
+	}
+	if err := json.Unmarshal(trimmed, &payload); err != nil {
+		return previewScrollTarget{}, false
+	}
+	if payload.TaskID != "" && payload.TaskID != previewTaskID {
+		return previewScrollTarget{}, false
+	}
+
+	rawPath := payload.FilePath
+	if rawPath == "" {
+		rawPath = payload.URI
+	}
+	if rawPath == "" {
+		rawPath = payload.Path
+	}
+	if rawPath == "" && payload.TextDocument != nil {
+		rawPath = payload.TextDocument.URI
+	}
+	if rawPath == "" && payload.Location != nil {
+		rawPath = payload.Location.URI
+	}
+	filePath := strings.TrimSpace(URIToPath(rawPath))
+	if filePath == "" {
+		return previewScrollTarget{}, false
+	}
+
+	var pos Position
+	hasPos := false
+	if len(bytes.TrimSpace(payload.Range)) > 0 {
+		var rng struct {
+			Start json.RawMessage `json:"start"`
+			End   json.RawMessage `json:"end"`
+		}
+		if json.Unmarshal(payload.Range, &rng) == nil {
+			if p, ok := parseScrollPositionValue(rng.Start); ok {
+				pos = p
+				hasPos = true
+			} else if p, ok := parseScrollPositionValue(rng.End); ok {
+				pos = p
+				hasPos = true
+			}
+		}
+	}
+	if !hasPos && len(bytes.TrimSpace(payload.Position)) > 0 {
+		if p, ok := parseScrollPositionValue(payload.Position); ok {
+			pos = p
+			hasPos = true
+		}
+	}
+	if !hasPos && len(bytes.TrimSpace(payload.Start)) > 0 {
+		if p, ok := parseScrollPositionValue(payload.Start); ok {
+			pos = p
+			hasPos = true
+		}
+	}
+	if !hasPos && len(bytes.TrimSpace(payload.End)) > 0 {
+		if p, ok := parseScrollPositionValue(payload.End); ok {
+			pos = p
+			hasPos = true
+		}
+	}
+	if !hasPos && payload.Location != nil && len(bytes.TrimSpace(payload.Location.Range)) > 0 {
+		var rng struct {
+			Start json.RawMessage `json:"start"`
+			End   json.RawMessage `json:"end"`
+		}
+		if json.Unmarshal(payload.Location.Range, &rng) == nil {
+			if p, ok := parseScrollPositionValue(rng.Start); ok {
+				pos = p
+				hasPos = true
+			} else if p, ok := parseScrollPositionValue(rng.End); ok {
+				pos = p
+				hasPos = true
+			}
+		}
+	}
+	if !hasPos && payload.Line != nil {
+		pos.Line = *payload.Line
+		switch {
+		case payload.Character != nil:
+			pos.Character = *payload.Character
+		case payload.Col != nil:
+			pos.Character = *payload.Col
+		case payload.Column != nil:
+			pos.Character = *payload.Column
+		}
+		hasPos = true
+	}
+	if !hasPos {
+		return previewScrollTarget{}, false
+	}
+
+	if pos.Line < 0 {
+		pos.Line = 0
+	}
+	if pos.Character < 0 {
+		pos.Character = 0
+	}
+	return previewScrollTarget{
+		TaskID:   payload.TaskID,
+		FilePath: filePath,
+		Pos:      pos,
+	}, true
+}
+
+func parseScrollPositionValue(raw json.RawMessage) (Position, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return Position{}, false
+	}
+	if trimmed[0] == '[' {
+		var arr []int
+		if err := json.Unmarshal(trimmed, &arr); err != nil || len(arr) == 0 {
+			return Position{}, false
+		}
+		pos := Position{Line: arr[0]}
+		if len(arr) >= 2 {
+			pos.Character = arr[1]
+		}
+		return pos, true
+	}
+	var obj struct {
+		Line      *int `json:"line"`
+		Character *int `json:"character"`
+		Col       *int `json:"col"`
+		Column    *int `json:"column"`
+	}
+	if err := json.Unmarshal(trimmed, &obj); err != nil || obj.Line == nil {
+		return Position{}, false
+	}
+	pos := Position{Line: *obj.Line}
+	switch {
+	case obj.Character != nil:
+		pos.Character = *obj.Character
+	case obj.Col != nil:
+		pos.Character = *obj.Col
+	case obj.Column != nil:
+		pos.Character = *obj.Column
+	}
+	return pos, true
+}
+
+func (m *Manager) handlePreviewScrollSource(gen uint64, params json.RawMessage) {
+	m.mu.Lock()
+	if m.shuttingDown || m.gen != gen {
+		m.mu.Unlock()
+		return
+	}
+	previewRoot := m.previewRoot
+	rootURI := m.rootURI
+	m.mu.Unlock()
+
+	target, ok := parsePreviewScrollSource(params)
+	if !ok {
+		return
+	}
+
+	if !filepath.IsAbs(target.FilePath) {
+		switch {
+		case previewRoot != "":
+			target.FilePath = filepath.Join(previewRoot, target.FilePath)
+		case URIToPath(rootURI) != "":
+			target.FilePath = filepath.Join(URIToPath(rootURI), target.FilePath)
+		default:
+			if abs, err := filepath.Abs(target.FilePath); err == nil {
+				target.FilePath = abs
+			}
+		}
+	}
+
+	action.EnqueueUI(func() {
+		m.mu.Lock()
+		stale := m.shuttingDown || m.gen != gen
+		m.mu.Unlock()
+		if stale {
+			return
+		}
+		var bp *action.BufPane
+		if action.Tabs != nil && len(action.Tabs.List) > 0 {
+			if idx := action.Tabs.Active(); idx >= 0 && idx < len(action.Tabs.List) {
+				if mt := action.Tabs.List[idx]; mt != nil {
+					bp = mt.CurPane()
+				}
+			}
+		}
+		m.jumpToFilePosition(bp, target.FilePath, target.Pos)
+	})
+}
+
+func (m *Manager) cancelHighlightForShared(shared *buffer.SharedBuffer) {
+	m.mu.Lock()
+	if shared == nil || m.highlightShared == shared {
+		if m.highlightTimer != nil {
+			m.highlightTimer.Stop()
+			m.highlightTimer = nil
+		}
+		m.highlightSeq++
+		m.highlightShared = nil
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) scheduleDocumentHighlight(b *buffer.Buffer, loc buffer.Loc) {
+	if b == nil {
+		return
+	}
+	if !readGlobalBool("typst.documentHighlight", true) {
+		m.mu.Lock()
+		prevShared := m.highlightShared
+		if m.highlightTimer != nil {
+			m.highlightTimer.Stop()
+			m.highlightTimer = nil
+		}
+		m.highlightSeq++
+		m.highlightShared = nil
+		m.mu.Unlock()
+		if prevShared != nil && prevShared != b.SharedBuffer {
+			prevShared.ClearSymbolHighlights()
+		}
+		b.ClearSymbolHighlights()
+		return
+	}
+
+	m.mu.Lock()
+	prevShared := m.highlightShared
+	if m.shuttingDown || m.State() != StateReady || m.client == nil || !m.docHighlightSupported {
+		if m.highlightTimer != nil {
+			m.highlightTimer.Stop()
+			m.highlightTimer = nil
+		}
+		m.highlightSeq++
+		m.highlightShared = nil
+		m.mu.Unlock()
+		if prevShared != nil && prevShared != b.SharedBuffer {
+			prevShared.ClearSymbolHighlights()
+		}
+		b.ClearSymbolHighlights()
+		return
+	}
+	if m.highlightTimer != nil {
+		m.highlightTimer.Stop()
+	}
+	m.highlightSeq++
+	seq := m.highlightSeq
+	gen := m.gen
+	m.highlightShared = b.SharedBuffer
+	reqVer := b.Version()
+	targetBuf := b
+	m.highlightTimer = time.AfterFunc(documentHighlightDelay, func() {
+		action.EnqueueUI(func() {
+			m.dispatchDocumentHighlight(targetBuf, gen, seq, reqVer, loc)
+		})
+	})
+	m.mu.Unlock()
+	if prevShared != nil && prevShared != b.SharedBuffer {
+		prevShared.ClearSymbolHighlights()
+	}
+}
+
+func (m *Manager) dispatchDocumentHighlight(targetBuf *buffer.Buffer, gen, seq, reqVer uint64, reqLoc buffer.Loc) {
+	m.mu.Lock()
+	if m.shuttingDown || m.gen != gen || m.highlightSeq != seq || m.State() != StateReady || m.client == nil || !m.docHighlightSupported {
+		m.mu.Unlock()
+		return
+	}
+	c := m.client
+	sessionCtx := m.sessionCtx
+	m.mu.Unlock()
+
+	if !readGlobalBool("typst.documentHighlight", true) {
+		if targetBuf != nil {
+			targetBuf.ClearSymbolHighlights()
+		}
+		return
+	}
+	if !isBufferOpenAndAt(targetBuf, reqVer, reqLoc, false) {
+		return
+	}
+
+	m.flushDocChangeNow(targetBuf)
+
+	if targetBuf.AbsPath == "" {
+		return
+	}
+	uri := PathToURI(targetBuf.AbsPath)
+	rawLine := targetBuf.LineBytes(reqLoc.Y)
+	lineCopy := append([]byte(nil), rawLine...)
+	utf16Col := RuneColToUTF16(lineCopy, locXToRuneCol(lineCopy, reqLoc.X))
+	shared := targetBuf.SharedBuffer
+
+	go func() {
+		if sessionCtx == nil {
+			sessionCtx = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(sessionCtx, 1500*time.Millisecond)
+		var raw json.RawMessage
+		err := c.Call(ctx, "textDocument/documentHighlight", DocumentHighlightParams{
+			TextDocument: TextDocumentIdentifier{URI: uri},
+			Position:     Position{Line: reqLoc.Y, Character: utf16Col},
+		}, &raw)
+		canceled := ctx.Err() == context.Canceled
+		cancel()
+
+		if err != nil {
+			var rpcErr *RPCError
+			if errors.As(err, &rpcErr) && rpcErr.Code == -32601 {
+				m.mu.Lock()
+				if !m.shuttingDown && m.gen == gen {
+					m.docHighlightSupported = false
+				}
+				m.mu.Unlock()
+			}
+			if !canceled {
+				action.EnqueueUI(func() {
+					m.mu.Lock()
+					stale := m.shuttingDown || m.gen != gen || m.highlightSeq != seq
+					m.mu.Unlock()
+					if stale || targetBuf.SharedBuffer != shared || !isBufferOpenAndAt(targetBuf, reqVer, reqLoc, false) {
+						return
+					}
+					targetBuf.ClearSymbolHighlights()
+				})
+			}
+			return
+		}
+
+		highlights, perr := ParseDocumentHighlights(raw)
+		action.EnqueueUI(func() {
+			m.mu.Lock()
+			stale := m.shuttingDown || m.gen != gen || m.highlightSeq != seq
+			m.mu.Unlock()
+			if stale || targetBuf.SharedBuffer != shared || !isBufferOpenAndAt(targetBuf, reqVer, reqLoc, false) {
+				return
+			}
+			if !readGlobalBool("typst.documentHighlight", true) || perr != nil || len(highlights) == 0 {
+				targetBuf.ClearSymbolHighlights()
+				return
+			}
+			numLines := targetBuf.LinesNum()
+			ranges := make([]buffer.HighlightRange, 0, len(highlights))
+			for _, h := range highlights {
+				if numLines <= 0 || h.Range.End.Line < 0 || h.Range.Start.Line >= numLines {
+					continue
+				}
+				start := lspPositionToLoc(targetBuf, h.Range.Start)
+				end := lspPositionToLoc(targetBuf, h.Range.End)
+				if end.LessThan(start) {
+					start, end = end, start
+				}
+				if start == end {
+					continue
+				}
+				ranges = append(ranges, buffer.HighlightRange{Start: start, End: end})
+			}
+			if len(ranges) == 0 {
+				targetBuf.ClearSymbolHighlights()
+				return
+			}
+			targetBuf.SetSymbolHighlights(ranges)
+		})
+	}()
+}
+
+func clearAllSymbolHighlights() {
+	seen := make(map[*buffer.SharedBuffer]bool)
+	for _, b := range buffer.OpenBuffers {
+		if b == nil || b.SharedBuffer == nil || seen[b.SharedBuffer] {
+			continue
+		}
+		seen[b.SharedBuffer] = true
+		b.ClearSymbolHighlights()
+	}
 }

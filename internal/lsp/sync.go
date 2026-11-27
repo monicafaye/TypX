@@ -113,6 +113,12 @@ func (m *Manager) OnBufferOpen(b *buffer.Buffer) {
 // OnBufferChange snapshots buffer text on the main goroutine and schedules a
 // debounced textDocument/didChange notification.
 func (m *Manager) OnBufferChange(b *buffer.Buffer, ev buffer.ChangeEvent) {
+	if b == nil {
+		return
+	}
+	b.ClearSymbolHighlights()
+	m.cancelHighlightForShared(b.SharedBuffer)
+	m.invalidateSelectionForShared(b.SharedBuffer)
 	if !isTrackableTypst(b) {
 		return
 	}
@@ -393,6 +399,9 @@ func (m *Manager) OnBufferSave(b *buffer.Buffer, ev buffer.SaveEvent) {
 			}
 			if !isTrackableTypst(b) {
 				b.ClearMessages(diagnosticOwner)
+				b.ClearSymbolHighlights()
+				m.cancelHighlightForShared(b.SharedBuffer)
+				m.invalidateSelectionForShared(b.SharedBuffer)
 				return
 			}
 		}
@@ -487,6 +496,9 @@ func (m *Manager) OnBufferClose(b *buffer.Buffer) {
 	if b == nil || b.Shared() {
 		return
 	}
+	b.ClearSymbolHighlights()
+	m.cancelHighlightForShared(b.SharedBuffer)
+	m.invalidateSelectionForShared(b.SharedBuffer)
 	if b.Path == "" || b.Type.Scratch {
 		return
 	}

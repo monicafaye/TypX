@@ -147,6 +147,8 @@ func Init(opts Options) {
 		action.RegisterAction("LspWorkspaceSymbols", LspWorkspaceSymbolsAction())
 		action.RegisterAction("NextDiagnostic", NextDiagnosticAction())
 		action.RegisterAction("PrevDiagnostic", PrevDiagnosticAction())
+		action.RegisterAction("SelectExpand", SelectExpandAction())
+		action.RegisterAction("SelectShrink", SelectShrinkAction())
 
 		action.RegisterCommand("diagnostics", DiagnosticsCommand(), nil)
 		action.RegisterCommand("tinymist-status", TinymistStatusCommand(), nil)
@@ -167,6 +169,8 @@ func Init(opts Options) {
 		action.RegisterCommand("symbols", WorkspaceSymbolsCommand(), nil)
 		action.RegisterCommand("diag-next", DiagNextCommand(), nil)
 		action.RegisterCommand("diag-prev", DiagPrevCommand(), nil)
+		action.RegisterCommand("select-expand", SelectExpandCommand(), nil)
+		action.RegisterCommand("select-shrink", SelectShrinkCommand(), nil)
 
 		action.RegisterPreActionHook("Save", defaultManager.handlePreSaveFormat)
 
@@ -182,6 +186,8 @@ func Init(opts Options) {
 		action.RegisterDefaultBindingWithFallback("buffer", "Alt-s", "LspWorkspaceSymbols")
 		action.RegisterDefaultBindingWithFallback("buffer", "F8", "NextDiagnostic")
 		action.RegisterDefaultBindingWithFallback("buffer", "Shift-F8", "PrevDiagnostic")
+		action.RegisterDefaultBindingWithFallback("buffer", "Alt-w", "SelectExpand")
+		action.RegisterDefaultBindingWithFallback("buffer", "Alt-W", "SelectShrink")
 
 		display.SetStatusInfoFn("typst.lsp", StatusLineInfo())
 	})
@@ -193,6 +199,11 @@ func Init(opts Options) {
 // Safe and idempotent to call even if Init was never called.
 func Shutdown() {
 	defaultManager.Shutdown()
+}
+
+// IsOffline reports whether tinymist LSP is disabled (StateOff) or missing (StateMissing).
+func IsOffline() bool {
+	return defaultManager.IsOffline()
 }
 
 // Check verifies tinymist availability (including a 2-second version probe) and
@@ -646,5 +657,33 @@ func WorkspaceSymbolsCommand() func(*action.BufPane, []string) {
 	return func(bp *action.BufPane, args []string) {
 		query := strings.TrimSpace(strings.Join(args, " "))
 		defaultManager.triggerWorkspaceSymbols(bp, query, true)
+	}
+}
+
+// SelectExpandAction returns the BufKeyAction for Alt+W smart selection expansion.
+func SelectExpandAction() action.BufKeyAction {
+	return func(bp *action.BufPane) bool {
+		return defaultManager.triggerSelectExpand(bp, false)
+	}
+}
+
+// SelectShrinkAction returns the BufKeyAction for Alt+Shift+W smart selection shrink.
+func SelectShrinkAction() action.BufKeyAction {
+	return func(bp *action.BufPane) bool {
+		return defaultManager.triggerSelectShrink(bp, false)
+	}
+}
+
+// SelectExpandCommand returns the :select-expand command handler.
+func SelectExpandCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		defaultManager.triggerSelectExpand(bp, true)
+	}
+}
+
+// SelectShrinkCommand returns the :select-shrink command handler.
+func SelectShrinkCommand() func(*action.BufPane, []string) {
+	return func(bp *action.BufPane, args []string) {
+		defaultManager.triggerSelectShrink(bp, true)
 	}
 }

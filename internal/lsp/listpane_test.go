@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/micro-editor/tcell/v2"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/monicafaye/TypX/internal/action"
 	"github.com/monicafaye/TypX/internal/buffer"
+	"github.com/monicafaye/TypX/internal/screen"
 )
 
 func TestListPaneDockNavigateFilterSelectAndClose(t *testing.T) {
@@ -121,6 +123,156 @@ func TestListPaneTextFilter(t *testing.T) {
 	assert.Len(t, lp.VisibleItems(), 3)
 	require.NotNil(t, ListPaneForTab(tab))
 
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone, ""))
+	assert.Nil(t, ListPaneForTab(tab))
+}
+
+func readScreenRowText(sim tcell.SimulationScreen, x, y, width int) string {
+	var rs []rune
+	for col := 0; col < width; {
+		r, _, _, rw := sim.GetContent(x+col, y)
+		if r == 0 {
+			r = ' '
+		}
+		rs = append(rs, r)
+		if rw > 1 {
+			col += rw
+		} else {
+			col++
+		}
+	}
+	return strings.TrimRight(string(rs), " ")
+}
+
+func TestOpenListPaneWithOptionsPickerReuseAndCloseOnSelect(t *testing.T) {
+	setupLSPEnv(t, 0)
+	Init(Options{})
+	action.InitBindings()
+	action.InitCommands()
+	action.InitGlobals()
+
+	b := buffer.NewBufferFromString("start ", "main.typ", buffer.BTDefault)
+	action.InitTabs([]*buffer.Buffer{b})
+	tab := action.MainTab()
+	bp := tab.CurPane()
+	require.NotNil(t, bp)
+
+	// 1. Open Diagnostics first, move down, and turn on errors-only mode.
+	diagItems := []ListItem{
+		{Severity: SeverityWarning, Primary: "warn 1"},
+		{Severity: SeverityError, Primary: "err 1"},
+	}
+	diagLP := OpenListPane(bp, "Diagnostics", true, diagItems)
+	require.NotNil(t, diagLP)
+	assert.Equal(t, "", diagLP.Badge())
+	assert.Equal(t, "", diagLP.EnterLabel())
+	assert.True(t, diagLP.IsDiagnosticsMode())
+	assert.True(t, diagLP.IsFilterable())
+
+	diagLP.HandleEvent(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone, ""))
+	diagLP.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'f', tcell.ModNone, ""))
+	assert.True(t, diagLP.IsErrorsOnly())
+
+	// 2. Reuse the open ListPane for a custom CloseOnSelect picker with StartFiltering & InitialQuery.
+	var callbackRan bool
+	var paneDuringSelect *ListPane
+	var activeDuringSelect action.Pane
+	var bpActiveDuringSelect bool
+	pickerItems := []ListItem{
+		{Badge: "built-in", Primary: "frac", Secondary: "$1/$2"},
+		{
+			Badge:     "user",
+			Primary:   "eq",
+			Secondary: "$ a = b $",
+			OnSelect: func() {
+				callbackRan = true
+				paneDuringSelect = ListPaneForTab(tab)
+				activeDuringSelect = tab.ActivePane()
+				bpActiveDuringSelect = bp.IsActive()
+				b.Insert(buffer.Loc{X: 6, Y: 0}, "$ a = b $")
+			},
+		},
+	}
+
+	lp := OpenListPaneWithOptions(bp, ListPaneOptions{
+		Title:           "Snippets",
+		StartFiltering:  true,
+		InitialQuery:    "eq",
+		EnterLabel:      "Insert",
+		Badge:           "SNIPPETS",
+		DiagnosticsMode: false,
+		CloseOnSelect:   true,
+	}, pickerItems)
+	require.Same(t, diagLP, lp)
+	assert.Len(t, tab.Panes, 2)
+	assert.Equal(t, "Snippets", lp.Name())
+	assert.Equal(t, "SNIPPETS", lp.Badge())
+	assert.Equal(t, "Insert", lp.EnterLabel())
+	assert.False(t, lp.IsDiagnosticsMode())
+	assert.False(t, lp.IsFilterable())
+	assert.False(t, lp.IsErrorsOnly())
+	assert.True(t, lp.IsFiltering())
+	assert.Equal(t, "eq", lp.FilterQuery())
+	assert.Equal(t, 0, lp.SelectedIndex())
+	require.Len(t, lp.VisibleItems(), 1)
+	assert.Equal(t, "eq", lp.VisibleItems()[0].Primary)
+
+	// Exit filter mode and verify 'f' does NOT toggle errorsOnly in non-diagnostics mode.
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone, ""))
+	assert.False(t, lp.IsFiltering())
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'f', tcell.ModNone, ""))
+	assert.False(t, lp.IsErrorsOnly())
+
+	// Re-enter filter, type "eq", press Enter -> closes ListPane & restores bp focus BEFORE OnSelect.
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, '/', tcell.ModNone, ""))
+	for _, ch := range "eq" {
+		lp.HandleEvent(tcell.NewEventKey(tcell.KeyRune, ch, tcell.ModNone, ""))
+	}
+	lp.HandleEvent(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone, ""))
+
+	assert.True(t, callbackRan)
+	assert.Nil(t, paneDuringSelect, "ListPane must be closed before OnSelect runs")
+	assert.Same(t, bp, activeDuringSelect, "target BufPane must be active before OnSelect runs")
+	assert.True(t, bpActiveDuringSelect, "target BufPane must be focused before OnSelect runs")
+	assert.Equal(t, "start $ a = b $", string(b.Bytes()))
+	assert.Nil(t, ListPaneForTab(tab))
+	assert.Len(t, tab.Panes, 1)
+}
+
+func TestListPaneDisplayCustomFooterAndEscWithInitialQuery(t *testing.T) {
+	setupLSPEnv(t, 0)
+	Init(Options{})
+	action.InitBindings()
+	action.InitCommands()
+	action.InitGlobals()
+
+	b := buffer.NewBufferFromString("hello\n", "main.typ", buffer.BTDefault)
+	action.InitTabs([]*buffer.Buffer{b})
+	tab := action.MainTab()
+	bp := tab.CurPane()
+
+	lp := OpenListPaneWithOptions(bp, ListPaneOptions{
+		Title:           "Symbols",
+		StartFiltering:  false,
+		InitialQuery:    "foo",
+		EnterLabel:      "Insert",
+		Badge:           "SYMBOLS",
+		DiagnosticsMode: false,
+		CloseOnSelect:   true,
+	}, []ListItem{{Badge: "math", Primary: "foo", Secondary: "φ"}})
+	require.NotNil(t, lp)
+
+	sim, ok := screen.Screen.(tcell.SimulationScreen)
+	require.True(t, ok)
+
+	lp.Display()
+	v := lp.GetView()
+	footer := readScreenRowText(sim, v.X, v.Y+v.Height-1, v.Width)
+	assert.Contains(t, footer, "Enter:insert")
+	assert.NotContains(t, footer, "f:errors only")
+	assert.NotContains(t, footer, "Enter:jump")
+
+	// When StartFiltering is false (even with InitialQuery), single Esc closes the pane.
 	lp.HandleEvent(tcell.NewEventKey(tcell.KeyEscape, 0, tcell.ModNone, ""))
 	assert.Nil(t, ListPaneForTab(tab))
 }

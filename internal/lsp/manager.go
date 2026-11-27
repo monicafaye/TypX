@@ -49,11 +49,12 @@ func (s State) String() string {
 }
 
 const (
-	diagnosticOwner       = "tinymist"
-	previewTaskID         = "default_preview"
-	defaultRestartBackoff = 500 * time.Millisecond
-	cursorSyncDelay       = 100 * time.Millisecond
-	maxCompletionItems    = 50
+	diagnosticOwner        = "tinymist"
+	previewTaskID          = "default_preview"
+	defaultRestartBackoff  = 500 * time.Millisecond
+	cursorSyncDelay        = 100 * time.Millisecond
+	documentHighlightDelay = 150 * time.Millisecond
+	maxCompletionItems     = 50
 )
 
 // CompileState tracks live Typst compilation status reported by tinymist.
@@ -128,6 +129,7 @@ type Manager struct {
 	completionTriggers map[string]bool
 	sigHelpTriggers    map[string]bool
 	jumpStacks         map[*action.Tab][]jumpOrigin
+	selectionStacks    map[*action.BufPane]*selectionStack
 
 	previewActive bool
 	previewURL    string
@@ -139,10 +141,14 @@ type Manager struct {
 	previewProxy  *previewProxy
 	previewJob    *ProcessJob
 	previewDone   chan struct{}
-	cursorTimer       *time.Timer
-	autoCompleteTimer *time.Timer
-	sigHelpTimer      *time.Timer
-	lastSigMsg        string
+	cursorTimer           *time.Timer
+	highlightTimer        *time.Timer
+	highlightSeq          uint64
+	highlightShared       *buffer.SharedBuffer
+	docHighlightSupported bool
+	autoCompleteTimer     *time.Timer
+	sigHelpTimer          *time.Timer
+	lastSigMsg            string
 
 	hoverBuf  *buffer.Buffer
 	statusBuf *buffer.Buffer
@@ -170,9 +176,11 @@ func newManager() *Manager {
 		docErrors:          make(map[string][]string),
 		docDiagnostics:     make(map[string][]Diagnostic),
 		docDiagnosticPaths: make(map[string]string),
-		serverCommands:     make(map[string]bool),
-		jumpStacks:         make(map[*action.Tab][]jumpOrigin),
-		discoverFn:     Discover,
+		serverCommands:        make(map[string]bool),
+		jumpStacks:            make(map[*action.Tab][]jumpOrigin),
+		selectionStacks:       make(map[*action.BufPane]*selectionStack),
+		docHighlightSupported: true,
+		discoverFn:            Discover,
 		probeFn:        ProbeVersion,
 		startClientFn: func(ctx context.Context, bin string, h Handlers) (*Client, error) {
 			return StartProcessClient(ctx, bin, []string{"lsp"}, "", h)
@@ -208,6 +216,15 @@ func (m *Manager) resetCompileStatusLocked() {
 // State returns the current LSP manager state.
 func (m *Manager) State() State {
 	return State(m.atomicState.Load())
+}
+
+// IsOffline reports whether the tinymist LSP backend is disabled or missing.
+func (m *Manager) IsOffline() bool {
+	if m == nil {
+		return true
+	}
+	st := m.State()
+	return st == StateOff || st == StateMissing
 }
 
 // Init starts or resets the manager with the given options. Must be called on
@@ -262,6 +279,14 @@ func (m *Manager) Init(opts Options) {
 	m.docDiagnosticPaths = make(map[string]string)
 	m.serverCommands = make(map[string]bool)
 	m.jumpStacks = make(map[*action.Tab][]jumpOrigin)
+	m.selectionStacks = make(map[*action.BufPane]*selectionStack)
+	m.docHighlightSupported = true
+	m.highlightShared = nil
+	m.highlightSeq++
+	if m.highlightTimer != nil {
+		m.highlightTimer.Stop()
+		m.highlightTimer = nil
+	}
 	m.resetCompileStatusLocked()
 	m.unregObserver = buffer.RegisterObserver(m)
 
@@ -303,6 +328,12 @@ func (m *Manager) Shutdown() {
 		m.cursorTimer.Stop()
 		m.cursorTimer = nil
 	}
+	if m.highlightTimer != nil {
+		m.highlightTimer.Stop()
+		m.highlightTimer = nil
+	}
+	m.highlightSeq++
+	m.highlightShared = nil
 	if m.autoCompleteTimer != nil {
 		m.autoCompleteTimer.Stop()
 		m.autoCompleteTimer = nil
@@ -333,6 +364,7 @@ func (m *Manager) Shutdown() {
 	m.docDiagnosticPaths = make(map[string]string)
 	m.serverCommands = make(map[string]bool)
 	m.jumpStacks = make(map[*action.Tab][]jumpOrigin)
+	m.selectionStacks = make(map[*action.BufPane]*selectionStack)
 
 	c := m.client
 	m.client = nil
@@ -369,6 +401,7 @@ func (m *Manager) Shutdown() {
 	if unreg != nil {
 		unreg()
 	}
+	action.EnqueueUI(clearAllSymbolHighlights)
 	if pProxy != nil {
 		pProxy.Close()
 	}
@@ -704,6 +737,7 @@ func (m *Manager) handshake(gen uint64, sessionCtx context.Context, client *Clie
 		m.sigHelpTriggers["("] = true
 		m.sigHelpTriggers[","] = true
 	}
+	m.docHighlightSupported = SupportsProvider(res.Capabilities.DocumentHighlightProvider)
 	m.mu.Unlock()
 
 	return client.Notify("initialized", InitializedParams{})
@@ -734,11 +768,22 @@ func (m *Manager) watchClient(gen uint64, client *Client) {
 	m.docDiagnostics = make(map[string][]Diagnostic)
 	m.docDiagnosticPaths = make(map[string]string)
 
+	if m.highlightTimer != nil {
+		m.highlightTimer.Stop()
+		m.highlightTimer = nil
+	}
+	m.highlightSeq++
+	m.highlightShared = nil
+	m.selectionStacks = make(map[*action.BufPane]*selectionStack)
+
 	restarts := m.autoRestarts
 	backoff := m.restartBackoff
 	stopCh := m.stopCh
 
-	action.EnqueueUI(clearAllTinymistDiagnostics)
+	action.EnqueueUI(func() {
+		clearAllTinymistDiagnostics()
+		clearAllSymbolHighlights()
+	})
 
 	if restarts < 1 {
 		m.autoRestarts++
@@ -848,6 +893,9 @@ func (m *Manager) handleNotification(gen uint64, method string, params json.RawM
 			pProxy.Close()
 		}
 		action.EnqueueUI(func() {})
+
+	case "tinymist/preview/scrollSource", "editorScrollTo":
+		m.handlePreviewScrollSource(gen, params)
 	}
 }
 
@@ -1037,6 +1085,13 @@ func (m *Manager) restart() {
 
 	oldClient := m.client
 	m.client = nil
+	if m.highlightTimer != nil {
+		m.highlightTimer.Stop()
+		m.highlightTimer = nil
+	}
+	m.highlightSeq++
+	m.highlightShared = nil
+	m.docHighlightSupported = true
 	for _, doc := range m.docs {
 		if doc.timer != nil {
 			doc.timer.Stop()
@@ -1055,6 +1110,7 @@ func (m *Manager) restart() {
 	m.docDiagnostics = make(map[string][]Diagnostic)
 	m.docDiagnosticPaths = make(map[string]string)
 	m.serverCommands = make(map[string]bool)
+	m.selectionStacks = make(map[*action.BufPane]*selectionStack)
 	m.rootURI = ""
 	if !lspEnabled {
 		if oldClient != nil {
@@ -1066,6 +1122,7 @@ func (m *Manager) restart() {
 			oldCancel()
 		}
 		clearAllTinymistDiagnostics()
+		clearAllSymbolHighlights()
 		if oldClient != nil {
 			go func() {
 				defer m.lifecycleWG.Done()
@@ -1085,6 +1142,7 @@ func (m *Manager) restart() {
 	}
 
 	clearAllTinymistDiagnostics()
+	clearAllSymbolHighlights()
 
 	// Snapshot currently open Typst buffers so they are re-opened cleanly.
 	for _, b := range buffer.OpenBuffers {

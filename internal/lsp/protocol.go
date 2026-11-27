@@ -42,6 +42,13 @@ const (
 	MessageTypeLog     = 4
 )
 
+// DocumentHighlightKind values defined by LSP 3.17.
+const (
+	DocumentHighlightKindText  = 1
+	DocumentHighlightKindRead  = 2
+	DocumentHighlightKindWrite = 3
+)
+
 // SymbolKind values defined by LSP 3.17.
 const (
 	SymbolKindFile      = 1
@@ -179,11 +186,23 @@ type TextDocumentClientCapabilities struct {
 	SignatureHelp      *SignatureHelpClientCapabilities      `json:"signatureHelp,omitempty"`
 	PublishDiagnostics *PublishDiagnosticsClientCapabilities `json:"publishDiagnostics,omitempty"`
 	DocumentSymbol     *DocumentSymbolClientCapabilities     `json:"documentSymbol,omitempty"`
+	DocumentHighlight  *DocumentHighlightClientCapabilities  `json:"documentHighlight,omitempty"`
+	SelectionRange     *SelectionRangeClientCapabilities     `json:"selectionRange,omitempty"`
 	Definition         *DefinitionClientCapabilities         `json:"definition,omitempty"`
 	References         *ReferenceClientCapabilities          `json:"references,omitempty"`
 	Rename             *RenameClientCapabilities             `json:"rename,omitempty"`
 	CodeAction         *CodeActionClientCapabilities         `json:"codeAction,omitempty"`
 	Formatting         *FormattingClientCapabilities         `json:"formatting,omitempty"`
+}
+
+// DocumentHighlightClientCapabilities describes textDocument/documentHighlight capabilities.
+type DocumentHighlightClientCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
+}
+
+// SelectionRangeClientCapabilities describes textDocument/selectionRange capabilities.
+type SelectionRangeClientCapabilities struct {
+	DynamicRegistration bool `json:"dynamicRegistration,omitempty"`
 }
 
 // ReferenceClientCapabilities describes textDocument/references capabilities.
@@ -305,12 +324,14 @@ type ExecuteCommandOptions struct {
 
 // ServerCapabilities describes server-provided capabilities.
 type ServerCapabilities struct {
-	PositionEncoding       string                 `json:"positionEncoding,omitempty"`
-	TextDocumentSync       any                    `json:"textDocumentSync,omitempty"`
+	PositionEncoding           string                 `json:"positionEncoding,omitempty"`
+	TextDocumentSync           any                    `json:"textDocumentSync,omitempty"`
 	CompletionProvider         any                    `json:"completionProvider,omitempty"`
 	HoverProvider              any                    `json:"hoverProvider,omitempty"`
 	SignatureHelpProvider      any                    `json:"signatureHelpProvider,omitempty"`
 	DocumentSymbolProvider     any                    `json:"documentSymbolProvider,omitempty"`
+	DocumentHighlightProvider  any                    `json:"documentHighlightProvider,omitempty"`
+	SelectionRangeProvider     any                    `json:"selectionRangeProvider,omitempty"`
 	DefinitionProvider         any                    `json:"definitionProvider,omitempty"`
 	ReferencesProvider         any                    `json:"referencesProvider,omitempty"`
 	RenameProvider             any                    `json:"renameProvider,omitempty"`
@@ -593,6 +614,30 @@ type ConfigurationParams struct {
 	Items []ConfigurationItem `json:"items"`
 }
 
+// DocumentHighlightParams is sent with textDocument/documentHighlight.
+type DocumentHighlightParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+}
+
+// DocumentHighlight represents a document highlight range and optional kind.
+type DocumentHighlight struct {
+	Range Range `json:"range"`
+	Kind  int   `json:"kind,omitempty"`
+}
+
+// SelectionRangeParams is sent with textDocument/selectionRange.
+type SelectionRangeParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Positions    []Position             `json:"positions"`
+}
+
+// SelectionRange represents a nested selection range returned by textDocument/selectionRange.
+type SelectionRange struct {
+	Range  Range           `json:"range"`
+	Parent *SelectionRange `json:"parent,omitempty"`
+}
+
 // DefaultClientCapabilities returns TypX's LSP 3.17 client capabilities.
 func DefaultClientCapabilities() ClientCapabilities {
 	return ClientCapabilities{
@@ -645,6 +690,12 @@ func DefaultClientCapabilities() ClientCapabilities {
 			},
 			DocumentSymbol: &DocumentSymbolClientCapabilities{
 				HierarchicalDocumentSymbolSupport: true,
+			},
+			DocumentHighlight: &DocumentHighlightClientCapabilities{
+				DynamicRegistration: false,
+			},
+			SelectionRange: &SelectionRangeClientCapabilities{
+				DynamicRegistration: false,
 			},
 			Definition: &DefinitionClientCapabilities{
 				DynamicRegistration: false,
@@ -1165,6 +1216,53 @@ func ParseWorkspaceSymbols(raw json.RawMessage) ([]WorkspaceSymbol, error) {
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+// SupportsProvider reports whether an LSP ServerCapabilities provider field
+// (boolean or options object) enables the capability.
+func SupportsProvider(provider any) bool {
+	switch v := provider.(type) {
+	case bool:
+		return v
+	case *bool:
+		return v != nil && *v
+	case map[string]any:
+		return v != nil
+	default:
+		return false
+	}
+}
+
+// ParseDocumentHighlights parses a textDocument/documentHighlight response (supporting null).
+func ParseDocumentHighlights(raw json.RawMessage) ([]DocumentHighlight, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	var highlights []DocumentHighlight
+	if err := json.Unmarshal(trimmed, &highlights); err != nil {
+		return nil, err
+	}
+	if len(highlights) == 0 {
+		return nil, nil
+	}
+	return highlights, nil
+}
+
+// ParseSelectionRanges parses a textDocument/selectionRange response (supporting null).
+func ParseSelectionRanges(raw json.RawMessage) ([]SelectionRange, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	var ranges []SelectionRange
+	if err := json.Unmarshal(trimmed, &ranges); err != nil {
+		return nil, err
+	}
+	if len(ranges) == 0 {
+		return nil, nil
+	}
+	return ranges, nil
 }
 
 // UTF16ToRuneCol converts a zero-based UTF-16 code-unit column offset into a

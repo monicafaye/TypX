@@ -341,6 +341,46 @@ func (m *Manager) jumpToLocation(bp *action.BufPane, loc Location) *action.BufPa
 	return m.jumpToFilePosition(bp, targetPath, loc.Range.Start)
 }
 
+// OpenFileAt opens or focuses filePath (honoring typst.gotoOpenMode) and moves
+// the cursor to the 0-based line and 0-based rune column, centering the view.
+// If bp is nil, it falls back to the active tab's CurPane (or a new tab).
+func OpenFileAt(bp *action.BufPane, filePath string, line, col int) *action.BufPane {
+	return defaultManager.openFileAt(bp, filePath, line, col)
+}
+
+func (m *Manager) openFileAt(bp *action.BufPane, filePath string, line, col int) *action.BufPane {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return nil
+	}
+	if !filepath.IsAbs(filePath) {
+		if abs, err := filepath.Abs(filePath); err == nil {
+			filePath = abs
+		}
+	}
+	if bp == nil && action.Tabs != nil && len(action.Tabs.List) > 0 {
+		if idx := action.Tabs.Active(); idx >= 0 && idx < len(action.Tabs.List) {
+			if mt := action.Tabs.List[idx]; mt != nil {
+				bp = mt.CurPane()
+			}
+		}
+	}
+	pane := m.openOrFocusTargetPane(bp, filePath)
+	if pane == nil || pane.Buf == nil {
+		return nil
+	}
+	loc := buffer.Loc{X: 0, Y: 0}
+	if n := pane.Buf.LinesNum(); n > 0 {
+		y := util.Clamp(line, 0, n-1)
+		lineBytes := pane.Buf.LineBytes(y)
+		x := runeColToLocX(lineBytes, col)
+		x = util.Clamp(x, 0, util.CharacterCount(lineBytes))
+		loc = buffer.Loc{X: x, Y: y}
+	}
+	applyCursorJump(pane, loc)
+	return pane
+}
+
 func (m *Manager) jumpToFilePosition(bp *action.BufPane, targetPath string, pos Position) *action.BufPane {
 	pane := m.openOrFocusTargetPane(bp, targetPath)
 	if pane == nil || pane.Buf == nil {
@@ -399,6 +439,17 @@ func (m *Manager) openOrFocusTargetPane(bp *action.BufPane, targetPath string) *
 		return nil
 	}
 
+	mode := strings.ToLower(strings.TrimSpace(readGlobalString("typst.gotoOpenMode", "tab")))
+	if mode == "current" && bp != nil && bp.Buf != nil && bp.Buf.Modified() && !bp.Buf.Shared() {
+		mode = "tab"
+	}
+	if action.Tabs == nil {
+		canUseBP := (mode == "current" && bp != nil) || (mode == "vsplit" && bp != nil && bp.Tab() != nil)
+		if !canUseBP {
+			return nil
+		}
+	}
+
 	b, err := buffer.NewBufferFromFileWithCommand(targetPath, buffer.BTDefault, buffer.Command{})
 	if err != nil {
 		setInfoError(fmt.Sprintf("Failed to open %s: %v", filepath.Base(targetPath), err))
@@ -407,11 +458,6 @@ func (m *Manager) openOrFocusTargetPane(bp *action.BufPane, targetPath string) *
 	if isTypstPackageCachePath(targetPath) {
 		_ = b.SetOptionNative("readonly", true)
 		b.Type.Readonly = true
-	}
-
-	mode := strings.ToLower(strings.TrimSpace(readGlobalString("typst.gotoOpenMode", "tab")))
-	if mode == "current" && bp != nil && bp.Buf != nil && bp.Buf.Modified() && !bp.Buf.Shared() {
-		mode = "tab"
 	}
 
 	switch mode {
@@ -430,7 +476,11 @@ func (m *Manager) openOrFocusTargetPane(bp *action.BufPane, targetPath string) *
 		}
 	}
 
-	return openBufferInNewTabPane(b)
+	pane := openBufferInNewTabPane(b)
+	if pane == nil {
+		b.Close()
+	}
+	return pane
 }
 
 func openBufferInNewTabPane(b *buffer.Buffer) *action.BufPane {
@@ -491,6 +541,10 @@ func applyCursorJump(pane *action.BufPane, loc buffer.Loc) {
 		y := util.Clamp(loc.Y, 0, numLines-1)
 		x := util.Clamp(loc.X, 0, util.CharacterCount(pane.Buf.LineBytes(y)))
 		loc = buffer.Loc{X: x, Y: y}
+	}
+	if pane.Buf.NumCursors() > 1 {
+		pane.Buf.ClearCursors()
+		pane.Cursor = pane.Buf.GetActiveCursor()
 	}
 	if pane.Cursor != nil {
 		pane.Cursor.ResetSelection()

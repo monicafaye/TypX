@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/monicafaye/TypX/internal/action"
 	"github.com/monicafaye/TypX/internal/buffer"
+	"github.com/monicafaye/TypX/internal/util"
 )
 
 var (
@@ -23,6 +25,76 @@ type completionCandidate struct {
 	rawInsert    string
 	prefixStartX int
 	isSnippet    bool
+}
+
+type activeCompletion struct {
+	candidates    []completionCandidate
+	reqVersion    uint64
+	reqLine       int
+	reqLoc        buffer.Loc
+	reqLinePrefix string
+}
+
+var (
+	completionHooksOnce sync.Once
+	activeCompletionMu  sync.Mutex
+	activeCompletions   = make(map[*buffer.SharedBuffer]*activeCompletion)
+)
+
+type completionCleanupObserver struct {
+	buffer.NopObserver
+}
+
+func (completionCleanupObserver) OnBufferClose(b *buffer.Buffer) {
+	if b == nil || b.Shared() || b.SharedBuffer == nil {
+		return
+	}
+	clearActiveCompletion(b.SharedBuffer)
+}
+
+// RegisterCompletionHooks registers pre-action hooks for InsertNewline,
+// Autocomplete, and Escape so active LSP completions can be committed
+// (including snippet tabstop expansion) or reverted. Safe and idempotent to
+// call multiple times.
+func RegisterCompletionHooks() {
+	completionHooksOnce.Do(func() {
+		action.RegisterPreActionHook("InsertNewline", handleCompletionInsertNewline)
+		action.RegisterPreActionHook("Autocomplete", handleCompletionAutocomplete)
+		action.RegisterPreActionHook("Escape", handleCompletionEscape)
+		buffer.RegisterObserver(completionCleanupObserver{})
+	})
+}
+
+func setActiveCompletion(sb *buffer.SharedBuffer, sess *activeCompletion) {
+	if sb == nil {
+		return
+	}
+	activeCompletionMu.Lock()
+	if sess == nil {
+		delete(activeCompletions, sb)
+	} else {
+		activeCompletions[sb] = sess
+	}
+	activeCompletionMu.Unlock()
+}
+
+func getActiveCompletion(sb *buffer.SharedBuffer) *activeCompletion {
+	if sb == nil {
+		return nil
+	}
+	activeCompletionMu.Lock()
+	sess := activeCompletions[sb]
+	activeCompletionMu.Unlock()
+	return sess
+}
+
+func clearActiveCompletion(sb *buffer.SharedBuffer) {
+	if sb == nil {
+		return
+	}
+	activeCompletionMu.Lock()
+	delete(activeCompletions, sb)
+	activeCompletionMu.Unlock()
 }
 
 func (m *Manager) triggerCompletion(bp *action.BufPane) bool {
@@ -99,39 +171,229 @@ func (m *Manager) requestCompletion(bp *action.BufPane, triggerChar string, expl
 			if stale || !isBufferOpenAndAt(targetBuf, reqVersion, reqLoc, true) {
 				return
 			}
-			candidates := buildCompletionCandidates(targetBuf, lineCopy, reqLoc, items)
-			if len(candidates) == 0 {
-				if explicit {
-					notifyInfoMessage("No completions")
-				}
-				return
-			}
-
-			if explicit && len(candidates) == 1 && candidates[0].isSnippet {
-				if expand := getSnippetExpander(); expand != nil {
-					start := buffer.Loc{X: candidates[0].prefixStartX, Y: reqLoc.Y}
-					if expand(bp, start, reqLoc, candidates[0].rawInsert) {
-						return
-					}
-				}
-			}
-
-			completions := make([]string, len(candidates))
-			suggestions := make([]string, len(candidates))
-			for i, cand := range candidates {
-				completions[i] = cand.suffix
-				suggestions[i] = cand.label
-			}
-			completer := func(*buffer.Buffer) ([]string, []string) {
-				return completions, suggestions
-			}
-			if explicit {
-				targetBuf.Autocomplete(completer)
-			} else {
-				targetBuf.ShowSuggestions(completer)
-			}
+			applyCompletionItems(bp, targetBuf, lineCopy, reqVersion, reqLoc, items, explicit)
 		})
 	}()
+	return true
+}
+
+func applyCompletionItems(bp *action.BufPane, targetBuf *buffer.Buffer, lineBytes []byte, reqVersion uint64, reqLoc buffer.Loc, items []CompletionItem, explicit bool) {
+	if targetBuf == nil {
+		return
+	}
+	targetBP := activeBufPaneForBuffer(targetBuf)
+	if targetBP == nil && bp != nil && bp.Buf == targetBuf {
+		targetBP = bp
+	}
+
+	candidates := buildCompletionCandidates(targetBuf, lineBytes, reqLoc, items)
+	if len(candidates) == 0 {
+		clearActiveCompletion(targetBuf.SharedBuffer)
+		if explicit {
+			notifyInfoMessage("No completions")
+		}
+		return
+	}
+
+	if explicit && len(candidates) == 1 && candidates[0].isSnippet && targetBP != nil {
+		if expand := getSnippetExpander(); expand != nil {
+			start := buffer.Loc{X: candidates[0].prefixStartX, Y: reqLoc.Y}
+			if expand(targetBP, start, reqLoc, candidates[0].rawInsert) {
+				clearActiveCompletion(targetBuf.SharedBuffer)
+				return
+			}
+		}
+	}
+
+	reqLinePrefix := ""
+	if reqLoc.Y >= 0 && reqLoc.Y < targetBuf.LinesNum() {
+		reqLinePrefix = string(targetBuf.Substr(buffer.Loc{X: 0, Y: reqLoc.Y}, reqLoc))
+	}
+
+	completions := make([]string, len(candidates))
+	suggestions := make([]string, len(candidates))
+	for i, cand := range candidates {
+		completions[i] = cand.suffix
+		suggestions[i] = cand.label
+	}
+	completer := func(*buffer.Buffer) ([]string, []string) {
+		return completions, suggestions
+	}
+	if explicit {
+		targetBuf.Autocomplete(completer)
+	} else {
+		targetBuf.ShowSuggestions(completer)
+	}
+
+	if targetBuf.HasSuggestions {
+		setActiveCompletion(targetBuf.SharedBuffer, &activeCompletion{
+			candidates:    candidates,
+			reqVersion:    reqVersion,
+			reqLine:       reqLoc.Y,
+			reqLoc:        reqLoc,
+			reqLinePrefix: reqLinePrefix,
+		})
+	} else {
+		clearActiveCompletion(targetBuf.SharedBuffer)
+	}
+}
+
+func slicesMatchCandidates(completions, suggestions []string, cands []completionCandidate) bool {
+	if len(completions) != len(cands) || len(suggestions) != len(cands) {
+		return false
+	}
+	for i, c := range cands {
+		if completions[i] != c.suffix || suggestions[i] != c.label {
+			return false
+		}
+	}
+	return true
+}
+
+func resolveActiveCompletion(bp *action.BufPane) (*activeCompletion, int, buffer.Loc, bool) {
+	if bp == nil || bp.Buf == nil || bp.Buf.SharedBuffer == nil || !bp.Buf.HasSuggestions {
+		if bp != nil && bp.Buf != nil && bp.Buf.SharedBuffer != nil {
+			clearActiveCompletion(bp.Buf.SharedBuffer)
+		}
+		return nil, 0, buffer.Loc{}, false
+	}
+
+	sess := getActiveCompletion(bp.Buf.SharedBuffer)
+	if sess == nil {
+		return nil, 0, buffer.Loc{}, false
+	}
+
+	// Ignore non-LSP completers (e.g. BufferComplete or offline bibliography)
+	// without clearing their HasSuggestions state.
+	if !slicesMatchCandidates(bp.Buf.Completions, bp.Buf.Suggestions, sess.candidates) {
+		clearActiveCompletion(bp.Buf.SharedBuffer)
+		return nil, 0, buffer.Loc{}, false
+	}
+
+	b := bp.Buf
+	if !b.IsTypst() || b.Type.Readonly || b.NumCursors() != 1 || bp.Cursor == nil || bp.Cursor.HasSelection() {
+		clearActiveCompletion(b.SharedBuffer)
+		b.HasSuggestions = false
+		return nil, 0, buffer.Loc{}, false
+	}
+	if sess.reqLine < 0 || sess.reqLine >= b.LinesNum() {
+		clearActiveCompletion(b.SharedBuffer)
+		b.HasSuggestions = false
+		return nil, 0, buffer.Loc{}, false
+	}
+	if util.CharacterCount(b.LineBytes(sess.reqLine)) < sess.reqLoc.X ||
+		string(b.Substr(buffer.Loc{X: 0, Y: sess.reqLine}, sess.reqLoc)) != sess.reqLinePrefix {
+		clearActiveCompletion(b.SharedBuffer)
+		b.HasSuggestions = false
+		return nil, 0, buffer.Loc{}, false
+	}
+
+	if b.CurSuggestion == -1 {
+		if b.Version() != sess.reqVersion || bp.Cursor.Loc != sess.reqLoc {
+			clearActiveCompletion(b.SharedBuffer)
+			b.HasSuggestions = false
+			return nil, 0, buffer.Loc{}, false
+		}
+		return sess, 0, sess.reqLoc, true
+	}
+
+	if b.CurSuggestion >= 0 && b.CurSuggestion < len(sess.candidates) {
+		cand := sess.candidates[b.CurSuggestion]
+		expectedEnd := sess.reqLoc.Move(util.CharacterCountInString(cand.suffix), b)
+		if bp.Cursor.Loc != expectedEnd || string(b.Substr(sess.reqLoc, bp.Cursor.Loc)) != cand.suffix {
+			clearActiveCompletion(b.SharedBuffer)
+			b.HasSuggestions = false
+			return nil, 0, buffer.Loc{}, false
+		}
+		return sess, b.CurSuggestion, bp.Cursor.Loc, true
+	}
+
+	clearActiveCompletion(b.SharedBuffer)
+	b.HasSuggestions = false
+	return nil, 0, buffer.Loc{}, false
+}
+
+func handleCompletionInsertNewline(bp *action.BufPane) bool {
+	sess, idx, curLoc, ok := resolveActiveCompletion(bp)
+	if !ok {
+		return false
+	}
+	cand := sess.candidates[idx]
+	curSel := bp.Buf.CurSuggestion
+
+	clearActiveCompletion(bp.Buf.SharedBuffer)
+	bp.Buf.HasSuggestions = false
+
+	if cand.isSnippet {
+		if expand := getSnippetExpander(); expand != nil {
+			start := buffer.Loc{X: cand.prefixStartX, Y: sess.reqLine}
+			end := sess.reqLoc
+			if curSel >= 0 {
+				end = curLoc
+			}
+			if expand(bp, start, end, cand.rawInsert) {
+				bp.Buf.HasSuggestions = false
+				return true
+			}
+		}
+	}
+
+	if curSel < 0 && cand.suffix != "" {
+		bp.Buf.Insert(sess.reqLoc, cand.suffix)
+		if bp.Cursor != nil {
+			bp.Cursor.StoreVisualX()
+		}
+		if bp.BWindow != nil {
+			bp.Relocate()
+		}
+	}
+	bp.Buf.HasSuggestions = false
+	return true
+}
+
+func handleCompletionAutocomplete(bp *action.BufPane) bool {
+	if bp == nil || bp.Buf == nil || !bp.Buf.HasSuggestions || bp.Buf.CurSuggestion >= 0 {
+		return false
+	}
+	sess, idx, _, ok := resolveActiveCompletion(bp)
+	if !ok || len(sess.candidates) != 1 || idx != 0 || !sess.candidates[0].isSnippet {
+		return false
+	}
+	cand := sess.candidates[0]
+	expand := getSnippetExpander()
+	if expand == nil {
+		return false
+	}
+	clearActiveCompletion(bp.Buf.SharedBuffer)
+	bp.Buf.HasSuggestions = false
+	start := buffer.Loc{X: cand.prefixStartX, Y: sess.reqLine}
+	if expand(bp, start, sess.reqLoc, cand.rawInsert) {
+		bp.Buf.HasSuggestions = false
+		return true
+	}
+	return false
+}
+
+func handleCompletionEscape(bp *action.BufPane) bool {
+	sess, _, curLoc, ok := resolveActiveCompletion(bp)
+	if !ok {
+		return false
+	}
+	curSel := bp.Buf.CurSuggestion
+
+	clearActiveCompletion(bp.Buf.SharedBuffer)
+	if curSel >= 0 && sess.reqLoc != curLoc {
+		bp.Buf.Remove(sess.reqLoc, curLoc)
+		if bp.Cursor != nil {
+			bp.Cursor.GotoLoc(sess.reqLoc)
+			bp.Cursor.ResetSelection()
+			bp.Cursor.StoreVisualX()
+		}
+		if bp.BWindow != nil {
+			bp.Relocate()
+		}
+	}
+	bp.Buf.HasSuggestions = false
 	return true
 }
 
@@ -225,7 +487,7 @@ func buildCompletionCandidates(b *buffer.Buffer, lineBytes []byte, reqLoc buffer
 		}
 		isSnippet := item.InsertTextFormat == InsertTextFormatSnippet
 		plainInsert := rawInsert
-		if isSnippet || strings.Contains(rawInsert, "$") {
+		if isSnippet || (item.InsertTextFormat == 0 && strings.Contains(rawInsert, "$")) {
 			plainInsert = stripSnippetPlaceholders(rawInsert)
 			if plainInsert != rawInsert {
 				isSnippet = true
@@ -396,8 +658,25 @@ func cleanHoverText(s string) string {
 
 func stripSnippetPlaceholders(s string) string {
 	s = reSnippetChoice.ReplaceAllString(s, "$1")
-	s = reSnippetNested.ReplaceAllString(s, "$1")
+	for i := 0; i < 4; i++ {
+		next := reSnippetNested.ReplaceAllString(s, "$1")
+		if next == s {
+			break
+		}
+		s = next
+	}
 	s = reSnippetStop.ReplaceAllString(s, "")
+	if strings.ContainsRune(s, '\\') {
+		var b strings.Builder
+		b.Grow(len(s))
+		for i := 0; i < len(s); i++ {
+			if s[i] == '\\' && i+1 < len(s) && (s[i+1] == '$' || s[i+1] == '}' || s[i+1] == '\\') {
+				i++
+			}
+			b.WriteByte(s[i])
+		}
+		s = b.String()
+	}
 	return s
 }
 

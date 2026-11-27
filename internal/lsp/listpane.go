@@ -34,6 +34,17 @@ type ListItem struct {
 	OnSelect  func()
 }
 
+// ListPaneOptions configures a bottom-docked ListPane.
+type ListPaneOptions struct {
+	Title           string
+	StartFiltering  bool
+	InitialQuery    string
+	EnterLabel      string
+	Badge           string
+	DiagnosticsMode bool
+	CloseOnSelect   bool
+}
+
 // ListPane implements action.Pane, action.AuxiliaryPane, and display.Window as a
 // reusable bottom-docked interactive list (used for diagnostics, definitions, etc.).
 type ListPane struct {
@@ -42,18 +53,21 @@ type ListPane struct {
 	tab    *action.Tab
 	target *action.BufPane
 
-	title         string
-	filterable    bool
-	errorsOnly    bool
-	filtering     bool
-	filterQuery   string
-	items         []ListItem
-	visible       []ListItem
-	selectedIdx   int
-	scrollTop     int
-	active        bool
-	mouseReleased bool
-	closed        bool
+	title           string
+	badge           string
+	enterLabel      string
+	diagnosticsMode bool
+	closeOnSelect   bool
+	errorsOnly      bool
+	filtering       bool
+	filterQuery     string
+	items           []ListItem
+	visible         []ListItem
+	selectedIdx     int
+	scrollTop       int
+	active          bool
+	mouseReleased   bool
+	closed          bool
 }
 
 var (
@@ -92,17 +106,31 @@ func ListPaneForTab(tab *action.Tab) *ListPane {
 // OpenListPane opens or updates the single bottom-docked ListPane on bp's Tab
 // and focuses it.
 func OpenListPane(bp *action.BufPane, title string, filterable bool, items []ListItem) *ListPane {
+	return OpenListPaneWithOptions(bp, ListPaneOptions{
+		Title:           title,
+		DiagnosticsMode: filterable,
+	}, items)
+}
+
+// OpenListPaneWithOptions opens or updates the single bottom-docked ListPane on
+// bp's Tab using opts and focuses it.
+func OpenListPaneWithOptions(bp *action.BufPane, opts ListPaneOptions, items []ListItem) *ListPane {
 	if bp == nil || bp.Tab() == nil {
 		return nil
 	}
 	tab := bp.Tab()
 	if existing := ListPaneForTab(tab); existing != nil {
 		existing.target = bp
-		existing.title = title
-		existing.filterable = filterable
+		existing.title = opts.Title
+		existing.badge = opts.Badge
+		existing.enterLabel = opts.EnterLabel
+		existing.diagnosticsMode = opts.DiagnosticsMode
+		existing.closeOnSelect = opts.CloseOnSelect
 		existing.errorsOnly = false
-		existing.filtering = false
-		existing.filterQuery = ""
+		existing.filtering = opts.StartFiltering
+		existing.filterQuery = opts.InitialQuery
+		existing.selectedIdx = 0
+		existing.scrollTop = 0
 		existing.setItems(items)
 		for i, p := range tab.Panes {
 			if p == existing {
@@ -130,13 +158,18 @@ func OpenListPane(bp *action.BufPane, title string, filterable bool, items []Lis
 	}
 
 	lp := &ListPane{
-		view:          &display.View{},
-		id:            dockID,
-		tab:           tab,
-		target:        bp,
-		title:         title,
-		filterable:    filterable,
-		mouseReleased: true,
+		view:            &display.View{},
+		id:              dockID,
+		tab:             tab,
+		target:          bp,
+		title:           opts.Title,
+		badge:           opts.Badge,
+		enterLabel:      opts.EnterLabel,
+		diagnosticsMode: opts.DiagnosticsMode,
+		closeOnSelect:   opts.CloseOnSelect,
+		filtering:       opts.StartFiltering,
+		filterQuery:     opts.InitialQuery,
+		mouseReleased:   true,
 	}
 	lp.setItems(items)
 
@@ -213,7 +246,10 @@ func (lp *ListPane) Tab() *action.Tab           { return lp.tab }
 func (lp *ListPane) IsAuxiliary() bool          { return true }
 func (lp *ListPane) GetView() *display.View     { return lp.view }
 func (lp *ListPane) IsActive() bool             { return lp.active }
-func (lp *ListPane) IsFilterable() bool         { return lp.filterable }
+func (lp *ListPane) Badge() string              { return lp.badge }
+func (lp *ListPane) EnterLabel() string         { return lp.enterLabel }
+func (lp *ListPane) IsDiagnosticsMode() bool    { return lp.diagnosticsMode }
+func (lp *ListPane) IsFilterable() bool         { return lp.diagnosticsMode }
 func (lp *ListPane) IsErrorsOnly() bool         { return lp.errorsOnly }
 func (lp *ListPane) IsFiltering() bool          { return lp.filtering }
 func (lp *ListPane) FilterQuery() string        { return lp.filterQuery }
@@ -426,6 +462,19 @@ func (lp *ListPane) activateSelected() {
 		return
 	}
 	item := lp.visible[lp.selectedIdx]
+	tab := lp.tab
+	target := lp.resolveTarget()
+	if lp.closeOnSelect {
+		CloseListPaneForTab(tab)
+		if tab != nil && target != nil && tab.ActivePane() != target {
+			for i, p := range tab.Panes {
+				if p == target {
+					tab.SetActive(i)
+					break
+				}
+			}
+		}
+	}
 	if item.OnSelect != nil {
 		item.OnSelect()
 	}
@@ -593,7 +642,7 @@ func (lp *ListPane) handleKeyEvent(e *tcell.EventKey) {
 				lp.ensureSelectionVisible()
 			}
 		case 'f':
-			if lp.filterable {
+			if lp.diagnosticsMode {
 				lp.errorsOnly = !lp.errorsOnly
 				lp.rebuildVisible()
 			}
@@ -644,7 +693,7 @@ func (lp *ListPane) Display() {
 
 	headerStyle := lp.headerStyle()
 	headerText := " " + lp.title
-	if lp.filterable && lp.errorsOnly {
+	if lp.diagnosticsMode && lp.errorsOnly {
 		headerText += fmt.Sprintf(" [Errors: %d]", len(lp.visible))
 	} else {
 		headerText += fmt.Sprintf(" (%d)", len(lp.visible))
@@ -660,7 +709,7 @@ func (lp *ListPane) Display() {
 			emptyMsg := " (empty)"
 			if lp.filterQuery != "" {
 				emptyMsg = " (no matches)"
-			} else if lp.errorsOnly {
+			} else if lp.diagnosticsMode && lp.errorsOnly {
 				emptyMsg = " (no errors — press 'f' to show all)"
 			}
 			dimStyle := lookupListStyle("comment", config.DefStyle)
@@ -687,14 +736,18 @@ func (lp *ListPane) Display() {
 
 	if lp.hasFooter() {
 		footerY := lp.view.Y + lp.view.Height - 1
-		footerText := " Enter:jump  /:filter  Esc/q:close"
+		enterVerb := strings.ToLower(strings.TrimSpace(lp.enterLabel))
+		if enterVerb == "" {
+			enterVerb = "jump"
+		}
+		footerText := fmt.Sprintf(" Enter:%s  /:filter  Esc/q:close", enterVerb)
 		if lp.filtering {
-			footerText = " Type to filter  ↑/↓:select  Enter:jump  Esc:clear"
-		} else if lp.filterable {
+			footerText = fmt.Sprintf(" Type to filter  ↑/↓:select  Enter:%s  Esc:clear", enterVerb)
+		} else if lp.diagnosticsMode {
 			if lp.errorsOnly {
-				footerText = " Enter:jump  f:show all  /:filter  Esc/q:close"
+				footerText = fmt.Sprintf(" Enter:%s  f:show all  /:filter  Esc/q:close", enterVerb)
 			} else {
-				footerText = " Enter:jump  f:errors only  /:filter  Esc/q:close"
+				footerText = fmt.Sprintf(" Enter:%s  f:errors only  /:filter  Esc/q:close", enterVerb)
 			}
 		}
 		drawListClippedRow(lp.view.X, footerY, lp.view.Width, footerText, headerStyle)
