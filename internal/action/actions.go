@@ -693,6 +693,7 @@ func (h *BufPane) InsertNewline() bool {
 		h.Relocate()
 		return true
 	}
+	h.Buf.HasSuggestions = false
 	// Insert a newline
 	if h.Cursor.HasSelection() {
 		h.Cursor.DeleteSelection()
@@ -915,6 +916,9 @@ func (h *BufPane) OutdentSelection() bool {
 
 // Autocomplete cycles the suggestions and performs autocompletion if there are suggestions
 func (h *BufPane) Autocomplete() bool {
+	if runPreActionHooks("Autocomplete", h) {
+		return true
+	}
 	b := h.Buf
 
 	if h.Cursor.HasSelection() {
@@ -1890,6 +1894,7 @@ func (h *BufPane) Escape() bool {
 	if runPreActionHooks("Escape", h) {
 		return true
 	}
+	h.Buf.HasSuggestions = false
 	return true
 }
 

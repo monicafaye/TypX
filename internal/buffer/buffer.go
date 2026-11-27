@@ -64,6 +64,12 @@ var (
 	BTStdout = BufType{6, false, true, true}
 )
 
+// HighlightRange represents a half-open [Start, End) buffer range in rune coordinates.
+type HighlightRange struct {
+	Start Loc
+	End   Loc
+}
+
 // SharedBuffer is a struct containing info that is shared among buffers
 // that have the same file open
 type SharedBuffer struct {
@@ -125,10 +131,44 @@ type SharedBuffer struct {
 
 	// version is incremented atomically on every text mutation
 	version atomic.Uint64
+
+	// SymbolHighlights stores semantic symbol occurrence ranges (main goroutine only).
+	SymbolHighlights []HighlightRange
+}
+
+// SetSymbolHighlights replaces the active symbol highlight ranges with a
+// normalized defensive copy. Must be called from the main goroutine.
+func (b *SharedBuffer) SetSymbolHighlights(ranges []HighlightRange) {
+	if len(ranges) == 0 {
+		b.SymbolHighlights = nil
+		return
+	}
+	copied := make([]HighlightRange, 0, len(ranges))
+	for _, r := range ranges {
+		if r.End.LessThan(r.Start) {
+			r.Start, r.End = r.End, r.Start
+		}
+		if r.Start == r.End {
+			continue
+		}
+		copied = append(copied, r)
+	}
+	if len(copied) == 0 {
+		b.SymbolHighlights = nil
+		return
+	}
+	b.SymbolHighlights = copied
+}
+
+// ClearSymbolHighlights removes all symbol highlight ranges. Must be called
+// from the main goroutine.
+func (b *SharedBuffer) ClearSymbolHighlights() {
+	b.SymbolHighlights = nil
 }
 
 func (b *SharedBuffer) insert(pos Loc, value []byte) {
 	b.HasSuggestions = false
+	b.SymbolHighlights = nil
 	b.LineArray.insert(pos, value)
 	b.setModified()
 
@@ -138,6 +178,7 @@ func (b *SharedBuffer) insert(pos Loc, value []byte) {
 
 func (b *SharedBuffer) remove(start, end Loc) []byte {
 	b.HasSuggestions = false
+	b.SymbolHighlights = nil
 	defer b.setModified()
 	defer b.MarkModified(start.Y, end.Y)
 	return b.LineArray.remove(start, end)
@@ -1333,6 +1374,7 @@ func (b *Buffer) Retab() {
 		b.MarkModified(i, i)
 	}
 
+	b.SymbolHighlights = nil
 	b.setModified()
 }
 

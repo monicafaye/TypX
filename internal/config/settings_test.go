@@ -20,6 +20,7 @@ func TestTypstSettingsDefaultsAndValidation(t *testing.T) {
 	assert.Equal(t, "", DefaultGlobalOnlySettings["typst.tinymistPath"])
 	assert.Equal(t, true, DefaultGlobalOnlySettings["typst.lspEnabled"])
 	assert.Equal(t, float64(150), DefaultGlobalOnlySettings["typst.debounceMs"])
+	assert.Equal(t, true, DefaultGlobalOnlySettings["typst.documentHighlight"])
 	assert.Equal(t, true, DefaultGlobalOnlySettings["typst.previewOpenBrowser"])
 	assert.Equal(t, "auto", DefaultGlobalOnlySettings["typst.previewProtocol"])
 	assert.Equal(t, float64(30), DefaultGlobalOnlySettings["typst.outlineWidth"])
@@ -33,6 +34,7 @@ func TestTypstSettingsDefaultsAndValidation(t *testing.T) {
 		"typst.tinymistPath",
 		"typst.lspEnabled",
 		"typst.debounceMs",
+		"typst.documentHighlight",
 		"typst.previewOpenBrowser",
 		"typst.previewProtocol",
 		"typst.outlineWidth",
@@ -41,6 +43,18 @@ func TestTypstSettingsDefaultsAndValidation(t *testing.T) {
 		_, ok := all[key]
 		assert.True(t, ok, "missing setting %s", key)
 	}
+
+	origGlobal := GlobalSettings
+	t.Cleanup(func() { GlobalSettings = origGlobal })
+	GlobalSettings = DefaultAllSettings()
+	valFalse, err := GetNativeValue("typst.documentHighlight", "false")
+	require.NoError(t, err)
+	assert.Equal(t, false, valFalse)
+	valTrue, err := GetNativeValue("typst.documentHighlight", "true")
+	require.NoError(t, err)
+	assert.Equal(t, true, valTrue)
+	_, err = GetNativeValue("typst.documentHighlight", "yes-invalid")
+	assert.Equal(t, ErrInvalidValue, err)
 
 	// Validators
 	require.NoError(t, OptionIsValid("typst.concealMode", "line"))

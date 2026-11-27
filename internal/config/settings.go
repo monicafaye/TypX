@@ -154,6 +154,7 @@ var DefaultGlobalOnlySettings = map[string]any{
 	"tabreverse":               true,
 	"typst.autoComplete":       true,
 	"typst.debounceMs":         float64(150),
+	"typst.documentHighlight":  true,
 	"typst.exportOnSave":       "off",
 	"typst.formatOnSave":       false,
 	"typst.formatter":          "typstyle",

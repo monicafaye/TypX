@@ -757,6 +757,13 @@ func (w *BufWindow) displayBuffer() {
 					if s, ok := config.Colorscheme["hlsearch"]; ok {
 						style = s
 					}
+				} else if matchSymbolHighlight(w.Buf.SymbolHighlights, bloc, activeSpan) {
+					style = config.DefStyle.Reverse(true)
+					if s, ok := config.Colorscheme["symbol-highlight"]; ok {
+						style = s
+					} else if s, ok := config.Colorscheme["hlsearch"]; ok {
+						style = s
+					}
 				}
 
 				_, origBg, _ := style.Decompose()
@@ -1114,4 +1121,26 @@ func (w *BufWindow) Display() {
 	w.displayStatusLine()
 	w.displayScrollBar()
 	w.displayBuffer()
+}
+
+func matchSymbolHighlight(ranges []buffer.HighlightRange, bloc buffer.Loc, activeSpan *conceal.Span) bool {
+	for _, hr := range ranges {
+		start, end := hr.Start, hr.End
+		if end.LessThan(start) {
+			start, end = end, start
+		}
+		if !start.LessThan(end) {
+			continue
+		}
+		if activeSpan != nil {
+			spanStart := buffer.Loc{X: activeSpan.BufStart, Y: bloc.Y}
+			spanEnd := buffer.Loc{X: activeSpan.BufEnd, Y: bloc.Y}
+			if start.LessThan(spanEnd) && spanStart.LessThan(end) {
+				return true
+			}
+		} else if bloc.GreaterEqual(start) && bloc.LessThan(end) {
+			return true
+		}
+	}
+	return false
 }

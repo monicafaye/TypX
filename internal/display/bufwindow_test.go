@@ -331,3 +331,202 @@ func TestConcealBufferImmutability(t *testing.T) {
 		t.Fatalf("buffer bytes mutated: %q -> %q", string(bytesBefore), string(win.Buf.Bytes()))
 	}
 }
+
+func TestSymbolHighlightsRenderingAndBoundaries(t *testing.T) {
+	win, sim, cleanup := newTestWin(t, "ab\tcd\nefghi\n", "doc.typ", 24, 5)
+	defer cleanup()
+
+	win.Buf.Settings["tabsize"] = float64(4)
+	win.Buf.HighlightSearch = false // Must render independently of HighlightSearch.
+
+	hlStyle := tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(tcell.ColorYellow)
+	config.Colorscheme["symbol-highlight"] = hlStyle
+
+	// Multi-line half-open range: from (1,0) 'b' through (3,1) (exclusive of 'h' at col 3 on line 1).
+	// Also highlight '\t' at (2,0)..(3,0) inside the multi-line range:
+	// Line 0: 'a'(0), 'b'(1), '\t'(2 -> visual cols 2..5), EOL(5 -> visual col 6).
+	// Line 1: 'e'(0), 'f'(1), 'g'(2), 'h'(3), 'i'(4).
+	win.Buf.SetSymbolHighlights([]buffer.HighlightRange{
+		{Start: buffer.Loc{X: 1, Y: 0}, End: buffer.Loc{X: 3, Y: 1}},
+	})
+	win.Display()
+
+	// Col 0 ('a') must NOT be highlighted.
+	_, bg0, _ := func() (tcell.Color, tcell.Color, tcell.AttrMask) {
+		_, _, st, _ := sim.GetContent(win.gutterOffset+0, 0)
+		return st.Decompose()
+	}()
+	if bg0 == tcell.ColorYellow {
+		t.Errorf("col 0 ('a') should not have symbol-highlight bg")
+	}
+
+	// Col 1 ('b') and all 4 visual cells of '\t' (cols 2..5) and EOL cell (col 6) must be highlighted.
+	for x := 1; x <= 6; x++ {
+		_, _, st, _ := sim.GetContent(win.gutterOffset+x, 0)
+		_, bg, _ := st.Decompose()
+		if bg != tcell.ColorYellow {
+			t.Errorf("line 0 visual x=%d bg = %v, want ColorYellow", x, bg)
+		}
+	}
+
+	// Line 1 cols 0..2 ('e','f','g') highlighted; col 3 ('h') NOT highlighted (half-open End).
+	for x := 0; x < 3; x++ {
+		_, _, st, _ := sim.GetContent(win.gutterOffset+x, 1)
+		_, bg, _ := st.Decompose()
+		if bg != tcell.ColorYellow {
+			t.Errorf("line 1 visual x=%d bg = %v, want ColorYellow", x, bg)
+		}
+	}
+	_, _, stEnd, _ := sim.GetContent(win.gutterOffset+3, 1)
+	if _, bgEnd, _ := stEnd.Decompose(); bgEnd == tcell.ColorYellow {
+		t.Errorf("line 1 col 3 (half-open End) should not be highlighted")
+	}
+}
+
+func TestSymbolHighlightsColorschemeFallbackAndPrecedence(t *testing.T) {
+	win, sim, cleanup := newTestWin(t, "foo bar foo\n", "doc.typ", 24, 4)
+	defer cleanup()
+
+	win.Buf.SetSymbolHighlights([]buffer.HighlightRange{
+		{Start: buffer.Loc{X: 0, Y: 0}, End: buffer.Loc{X: 3, Y: 0}},
+		{Start: buffer.Loc{X: 8, Y: 0}, End: buffer.Loc{X: 11, Y: 0}},
+	})
+
+	// 1. Empty colorscheme -> DefStyle.Reverse(true)
+	win.Display()
+	_, _, stRev, _ := sim.GetContent(win.gutterOffset+0, 0)
+	if _, _, attrs := stRev.Decompose(); attrs&tcell.AttrReverse == 0 {
+		t.Errorf("expected AttrReverse fallback when colorscheme has neither symbol-highlight nor hlsearch")
+	}
+
+	// 2. Only hlsearch defined -> falls back to hlsearch
+	config.Colorscheme["hlsearch"] = tcell.StyleDefault.Background(tcell.ColorTeal)
+	win.Display()
+	_, _, stHL, _ := sim.GetContent(win.gutterOffset+0, 0)
+	if _, bg, _ := stHL.Decompose(); bg != tcell.ColorTeal {
+		t.Errorf("expected hlsearch fallback ColorTeal, got %v", bg)
+	}
+
+	// 3. symbol-highlight overrides hlsearch fallback
+	config.Colorscheme["symbol-highlight"] = tcell.StyleDefault.Background(tcell.ColorGreen)
+	win.Display()
+	_, _, stSym, _ := sim.GetContent(win.gutterOffset+0, 0)
+	if _, bg, _ := stSym.Decompose(); bg != tcell.ColorGreen {
+		t.Errorf("expected symbol-highlight ColorGreen, got %v", bg)
+	}
+
+	// 4. Active HighlightSearch match beats symbol-highlight on overlapping cell;
+	// non-search occurrence keeps symbol-highlight.
+	win.Buf.LastSearch = "bar"
+	win.Buf.HighlightSearch = true
+	win.Buf.SetSymbolHighlights([]buffer.HighlightRange{
+		{Start: buffer.Loc{X: 0, Y: 0}, End: buffer.Loc{X: 3, Y: 0}},
+		{Start: buffer.Loc{X: 4, Y: 0}, End: buffer.Loc{X: 7, Y: 0}},
+	})
+	win.Display()
+	_, _, stNonSearch, _ := sim.GetContent(win.gutterOffset+0, 0)
+	if _, bg, _ := stNonSearch.Decompose(); bg != tcell.ColorGreen {
+		t.Errorf("non-search symbol occurrence bg = %v, want ColorGreen", bg)
+	}
+	_, _, stSearch, _ := sim.GetContent(win.gutterOffset+4, 0)
+	if _, bg, _ := stSearch.Decompose(); bg != tcell.ColorTeal {
+		t.Errorf("overlapping search match bg = %v, want ColorTeal (hlsearch precedence)", bg)
+	}
+	win.Buf.HighlightSearch = false
+
+	// 5. Cursor selection beats symbol-highlight; cursor-line yields to symbol-highlight bg;
+	// diagnostic message adds AttrUnderline on top of symbol-highlight.
+	config.Colorscheme["selection"] = tcell.StyleDefault.Background(tcell.ColorBlue)
+	config.Colorscheme["cursor-line"] = tcell.StyleDefault.Foreground(tcell.ColorGray)
+	win.Buf.Settings["cursorline"] = true
+	c := win.Buf.GetActiveCursor()
+	c.GotoLoc(buffer.Loc{X: 0, Y: 0})
+	c.SetSelectionStart(buffer.Loc{X: 0, Y: 0})
+	c.SetSelectionEnd(buffer.Loc{X: 2, Y: 0})
+	win.Buf.AddMessage(buffer.NewMessage("tinymist", "warn", buffer.Loc{X: 4, Y: 0}, buffer.Loc{X: 7, Y: 0}, buffer.MTWarning))
+	win.Display()
+
+	_, _, stSel, _ := sim.GetContent(win.gutterOffset+1, 0)
+	if _, bg, _ := stSel.Decompose(); bg != tcell.ColorBlue {
+		t.Errorf("selection overlapping symbol-highlight bg = %v, want ColorBlue", bg)
+	}
+	_, _, stDiag, _ := sim.GetContent(win.gutterOffset+5, 0)
+	if _, bg, attrs := stDiag.Decompose(); bg != tcell.ColorGreen || attrs&tcell.AttrUnderline == 0 {
+		t.Errorf("diagnostic + symbol-highlight = (bg=%v, attrs=%v), want ColorGreen with Underline", bg, attrs)
+	}
+
+	// Without selection, cursor-line must not overwrite symbol-highlight's non-default bg.
+	c.ResetSelection()
+	win.Display()
+	_, _, stCursorLine, _ := sim.GetContent(win.gutterOffset+5, 0)
+	if _, bg, _ := stCursorLine.Decompose(); bg != tcell.ColorGreen {
+		t.Errorf("symbol-highlight bg on cursor line = %v, want ColorGreen preserved over cursor-line", bg)
+	}
+}
+
+func TestSymbolHighlightsConcealAndSoftwrap(t *testing.T) {
+	// Line 0 is active so line 1 is concealed: "$alpha + beta$" -> "$α + β$"
+	win, sim, cleanup := newTestWin(t, "top\n$alpha + beta$\n", "doc.typ", 30, 5)
+	defer cleanup()
+
+	config.Colorscheme["symbol-highlight"] = tcell.StyleDefault.Background(tcell.ColorYellow)
+
+	// Adjacent non-overlapping ranges [0,1) ('$') and [6,7) (' ') plus empty {3,1}..{3,1} must NOT highlight 'α' [1,6).
+	win.Buf.SymbolHighlights = []buffer.HighlightRange{
+		{Start: buffer.Loc{X: 0, Y: 1}, End: buffer.Loc{X: 1, Y: 1}},
+		{Start: buffer.Loc{X: 3, Y: 1}, End: buffer.Loc{X: 3, Y: 1}},
+		{Start: buffer.Loc{X: 6, Y: 1}, End: buffer.Loc{X: 7, Y: 1}},
+	}
+	win.Display()
+	rAlpha, _, stAlphaNoMatch, _ := sim.GetContent(win.gutterOffset+1, 1)
+	if rAlpha != 'α' {
+		t.Fatalf("expected concealed 'α' at (1,1), got %q", rAlpha)
+	}
+	if _, bg, _ := stAlphaNoMatch.Decompose(); bg == tcell.ColorYellow {
+		t.Errorf("adjacent/empty ranges must not highlight concealed 'α'")
+	}
+
+	// Highlighting [1, 6) highlights 'α' at visual col 1.
+	win.Buf.SetSymbolHighlights([]buffer.HighlightRange{
+		{Start: buffer.Loc{X: 1, Y: 1}, End: buffer.Loc{X: 6, Y: 1}},
+	})
+	win.Display()
+	_, _, stAlphaMatch, _ := sim.GetContent(win.gutterOffset+1, 1)
+	if _, bg, _ := stAlphaMatch.Decompose(); bg != tcell.ColorYellow {
+		t.Errorf("concealed 'α' bg = %v, want ColorYellow", bg)
+	}
+
+	// Multi-rune concealed span inside math mode: "$x^(n+1) y$" -> "$xⁿ⁺¹ y$" (all 3 cells of ⁿ⁺¹ highlighted).
+	winSup, simSup, cleanupSup := newTestWin(t, "top\n$x^(n+1) y$\n", "sup.typ", 24, 4)
+	defer cleanupSup()
+	config.Colorscheme["symbol-highlight"] = tcell.StyleDefault.Background(tcell.ColorYellow)
+	winSup.Buf.SetSymbolHighlights([]buffer.HighlightRange{
+		{Start: buffer.Loc{X: 4, Y: 1}, End: buffer.Loc{X: 5, Y: 1}}, // 'n' inside ^(n+1) [2,8)
+	})
+	winSup.Display()
+	if got := readSimRow(simSup, 1, 24); got != "$xⁿ⁺¹ y$" {
+		t.Fatalf("line 1 concealed = %q, want %q", got, "$xⁿ⁺¹ y$")
+	}
+	for x := 2; x <= 4; x++ {
+		_, _, st, _ := simSup.GetContent(winSup.gutterOffset+x, 1)
+		if _, bg, _ := st.Decompose(); bg != tcell.ColorYellow {
+			t.Errorf("multi-rune concealed cell x=%d bg = %v, want ColorYellow", x, bg)
+		}
+	}
+
+	// Softwrap: range on wrapped portion of line renders on visual row y+1.
+	winWrap, simWrap, cleanupWrap := newTestWin(t, "abcdef1234\n", "wrap.typ", 6, 4)
+	defer cleanupWrap()
+	config.Colorscheme["symbol-highlight"] = tcell.StyleDefault.Background(tcell.ColorYellow)
+	winWrap.Buf.Settings["softwrap"] = true
+	winWrap.Buf.SetSymbolHighlights([]buffer.HighlightRange{
+		{Start: buffer.Loc{X: 7, Y: 0}, End: buffer.Loc{X: 9, Y: 0}}, // "23" on wrapped row 1 cols 1..2
+	})
+	winWrap.Display()
+	for x := 1; x <= 2; x++ {
+		r, _, st, _ := simWrap.GetContent(winWrap.gutterOffset+x, 1)
+		if _, bg, _ := st.Decompose(); bg != tcell.ColorYellow {
+			t.Errorf("softwrap row 1 x=%d (%q) bg = %v, want ColorYellow", x, r, bg)
+		}
+	}
+}

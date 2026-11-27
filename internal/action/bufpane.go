@@ -561,7 +561,9 @@ func (h *BufPane) DoKeyEvent(e Event) bool {
 }
 
 func (h *BufPane) execAction(action BufAction, name string, te *tcell.EventMouse) bool {
-	if name != "Autocomplete" && name != "CycleAutocompleteBack" && name != "SnippetNext" && name != "SnippetPrev" {
+	if name != "Autocomplete" && name != "CycleAutocompleteBack" &&
+		name != "SnippetNext" && name != "SnippetPrev" &&
+		name != "InsertNewline" && name != "Escape" && name != "InsertEnter" {
 		h.Buf.HasSuggestions = false
 	}
 

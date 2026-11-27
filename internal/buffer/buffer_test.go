@@ -2,10 +2,13 @@ package buffer
 
 import (
 	"math/rand"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	lua "github.com/yuin/gopher-lua"
 	"github.com/monicafaye/TypX/internal/config"
 	ulua "github.com/monicafaye/TypX/internal/lua"
@@ -320,4 +323,89 @@ func BenchmarkEdit1000000Lines100Cursors(b *testing.B) {
 
 func BenchmarkEdit1000000Lines1000Cursors(b *testing.B) {
 	benchEdit(b, 1000000, 1000)
+}
+
+func TestSymbolHighlights(t *testing.T) {
+	t.Run("set defensive copy and normalization", func(t *testing.T) {
+		b := NewBufferFromString("let alpha = 1\nalpha + 2\n", "test.typ", BTDefault)
+		defer b.Close()
+
+		input := []HighlightRange{
+			{Start: Loc{X: 9, Y: 0}, End: Loc{X: 4, Y: 0}},   // reversed -> {4,0}..{9,0}
+			{Start: Loc{X: 2, Y: 1}, End: Loc{X: 2, Y: 1}},   // empty -> dropped
+			{Start: Loc{X: 0, Y: 1}, End: Loc{X: 5, Y: 1}},   // normal
+		}
+		b.SetSymbolHighlights(input)
+		// Mutate caller slice to verify defensive copy.
+		input[0].Start = Loc{X: 99, Y: 99}
+		input[2].End = Loc{X: 99, Y: 99}
+
+		expected := []HighlightRange{
+			{Start: Loc{X: 4, Y: 0}, End: Loc{X: 9, Y: 0}},
+			{Start: Loc{X: 0, Y: 1}, End: Loc{X: 5, Y: 1}},
+		}
+		assert.Equal(t, expected, b.SymbolHighlights)
+
+		// Empty / all-empty inputs normalize to nil.
+		b.SetSymbolHighlights([]HighlightRange{{Start: Loc{X: 1, Y: 0}, End: Loc{X: 1, Y: 0}}})
+		assert.Nil(t, b.SymbolHighlights)
+
+		b.SetSymbolHighlights(expected)
+		require.Len(t, b.SymbolHighlights, 2)
+		b.SetSymbolHighlights(nil)
+		assert.Nil(t, b.SymbolHighlights)
+
+		b.SetSymbolHighlights(expected)
+		b.SetSymbolHighlights([]HighlightRange{})
+		assert.Nil(t, b.SymbolHighlights)
+	})
+
+	t.Run("clear and shared buffer synchronization", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "shared.typ")
+		require.NoError(t, os.WriteFile(p, []byte("foo + foo\n"), 0644))
+
+		b1, err := NewBufferFromFile(p, BTDefault)
+		require.NoError(t, err)
+		defer b1.Close()
+
+		b2, err := NewBufferFromFile(p, BTDefault)
+		require.NoError(t, err)
+		defer b2.Close()
+
+		ranges := []HighlightRange{
+			{Start: Loc{X: 0, Y: 0}, End: Loc{X: 3, Y: 0}},
+			{Start: Loc{X: 6, Y: 0}, End: Loc{X: 9, Y: 0}},
+		}
+		b1.SetSymbolHighlights(ranges)
+		assert.Equal(t, ranges, b2.SymbolHighlights)
+
+		b2.ClearSymbolHighlights()
+		assert.Nil(t, b1.SymbolHighlights)
+		assert.Nil(t, b2.SymbolHighlights)
+	})
+
+	t.Run("cleared on insert, remove, and retab", func(t *testing.T) {
+		b := NewBufferFromString("\tfoo + bar\n", "edit.typ", BTDefault)
+		defer b.Close()
+
+		r := []HighlightRange{{Start: Loc{X: 1, Y: 0}, End: Loc{X: 4, Y: 0}}}
+
+		b.SetSymbolHighlights(r)
+		require.NotNil(t, b.SymbolHighlights)
+		b.Insert(Loc{X: 0, Y: 0}, "x")
+		assert.Nil(t, b.SymbolHighlights)
+
+		b.SetSymbolHighlights(r)
+		require.NotNil(t, b.SymbolHighlights)
+		b.Remove(Loc{X: 0, Y: 0}, Loc{X: 1, Y: 0})
+		assert.Nil(t, b.SymbolHighlights)
+
+		b.Settings["tabstospaces"] = true
+		b.Settings["tabsize"] = float64(2)
+		b.SetSymbolHighlights(r)
+		require.NotNil(t, b.SymbolHighlights)
+		b.Retab()
+		assert.Nil(t, b.SymbolHighlights)
+	})
 }
