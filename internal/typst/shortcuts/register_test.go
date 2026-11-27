@@ -22,6 +22,7 @@ func TestRegisterAllWiringFallbacksAndDuplicatePanic(t *testing.T) {
 		"HeadingPromote",
 		"HeadingDemote",
 		"InsertPalette",
+		"SymbolPicker",
 	}
 	for _, name := range expectedActions {
 		if _, ok := action.BufKeyActions[name]; !ok {
@@ -34,6 +35,7 @@ func TestRegisterAllWiringFallbacksAndDuplicatePanic(t *testing.T) {
 		"Alt-m":    "MathInline|SpawnMultiCursorSelect",
 		"Alt-M":    "MathDisplay",
 		"Alt-i":    "InsertPalette",
+		"Alt-y":    "SymbolPicker",
 		"Alt-b":    "WrapBold|WordLeft",
 		"Alt-e":    "WrapItalic|EndOfLine",
 		"AltLeft":  "HeadingPromote|",
@@ -93,6 +95,23 @@ func TestRegisterAllWiringFallbacksAndDuplicatePanic(t *testing.T) {
 	}
 	if bpNonHead.Cursor.X == 5 {
 		t.Fatalf("AltLeft fallback did not move cursor from X=5")
+	}
+
+	// Verify Alt-y and :symbol invoke registered SymbolPicker / symbol command
+	var symbolCalls int
+	SetPicker(func(_ *action.BufPane, title, badge, initialQuery string, _ []PickerItem) bool {
+		symbolCalls++
+		if title != "Math Symbols" || badge != "SYMBOLS" {
+			t.Fatalf("unexpected symbol picker header: %q %q", title, badge)
+		}
+		return true
+	})
+	t.Cleanup(func() { SetPicker(nil) })
+	bpSym := newTestBufPane(t, "", "sym.typ")
+	bpSym.HandleEvent(tcell.NewEventKey(tcell.KeyRune, 'y', tcell.ModAlt, ""))
+	bpSym.HandleCommand("symbol alpha")
+	if symbolCalls != 2 {
+		t.Fatalf("expected Alt-y and :symbol to invoke picker twice, got %d", symbolCalls)
 	}
 
 	// Duplicate RegisterAll() must panic loudly per extension.go contract

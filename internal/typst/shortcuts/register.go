@@ -13,6 +13,7 @@ func RegisterAll() {
 	action.RegisterAction("HeadingPromote", NewHeadingPromoteAction())
 	action.RegisterAction("HeadingDemote", NewHeadingDemoteAction())
 	action.RegisterAction("InsertPalette", NewInsertPaletteAction())
+	action.RegisterAction("SymbolPicker", NewSymbolPickerAction())
 	action.RegisterAction("SnippetNext", NewSnippetNextAction())
 	action.RegisterAction("SnippetPrev", NewSnippetPrevAction())
 
@@ -26,10 +27,12 @@ func RegisterAll() {
 	for _, name := range TemplateNames() {
 		action.RegisterCommand("insert-"+name, NewInsertTemplateCmd(name), nil)
 	}
+	action.RegisterCommand("symbol", NewSymbolCmd(), nil)
 
 	action.RegisterDefaultBindingWithFallback("buffer", "Alt-m", "MathInline")
 	action.RegisterDefaultBindingWithFallback("buffer", "Alt-M", "MathDisplay")
 	action.RegisterDefaultBindingWithFallback("buffer", "Alt-i", "InsertPalette")
+	action.RegisterDefaultBindingWithFallback("buffer", "Alt-y", "SymbolPicker")
 	action.RegisterDefaultBindingWithFallback("buffer", "Alt-b", "WrapBold")
 	action.RegisterDefaultBindingWithFallback("buffer", "Alt-e", "WrapItalic")
 	action.RegisterDefaultBindingWithFallback("buffer", "AltLeft", "HeadingPromote")

@@ -12,6 +12,13 @@ type SymbolRule struct {
 	Glyph   rune
 }
 
+// CatalogSymbol describes a named Typst math symbol for picker/catalog consumers.
+type CatalogSymbol struct {
+	Name     string
+	Glyph    rune
+	Category string
+}
+
 // GreekLower contains lowercase Greek letters and Typst .alt variants.
 var GreekLower = []SymbolRule{
 	{Pattern: "alpha", Glyph: 'α'},
@@ -304,7 +311,64 @@ var (
 	subParenMap   map[rune]rune
 	bbMap         map[rune]rune
 	calMap        map[rune]rune
+	symbolCatalog []CatalogSymbol
 )
+
+func isIdentifierSymbol(pattern string) bool {
+	if pattern == "" {
+		return false
+	}
+	r := pattern[0]
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+}
+
+var operatorCategory = map[string]string{
+	// relations
+	"approx": "relations", "approx.not": "relations", "eq.not": "relations",
+	"equiv": "relations", "equiv.not": "relations", "prop": "relations",
+	"tilde.op": "relations", "tilde.eq": "relations", "tilde.equiv": "relations",
+	"approx.eq": "relations", "prec": "relations", "prec.eq": "relations",
+	"succ": "relations", "succ.eq": "relations", "lt.eq": "relations",
+	"gt.eq": "relations", "lt.double": "relations", "gt.double": "relations",
+	"parallel": "relations", "divides": "relations", "divides.not": "relations",
+	"perp": "relations",
+
+	// sets
+	"in": "sets", "in.not": "sets", "in.rev": "sets", "in.rev.not": "sets",
+	"notin": "sets", "subset": "sets", "subset.not": "sets", "subseteq": "sets",
+	"subset.eq": "sets", "subset.eq.not": "sets", "subset.neq": "sets",
+	"supset": "sets", "supset.not": "sets", "supseteq": "sets",
+	"supset.eq": "sets", "supset.eq.not": "sets", "supset.neq": "sets",
+	"union": "sets", "sect": "sets", "inter": "sets", "emptyset": "sets",
+	"without": "sets", "aleph": "sets", "NN": "sets", "ZZ": "sets",
+	"QQ": "sets", "RR": "sets", "CC": "sets",
+
+	// logic
+	"forall": "logic", "exists": "logic", "exists.not": "logic",
+	"and": "logic", "or": "logic", "not": "logic", "xor": "logic",
+	"top": "logic", "bot": "logic", "tack": "logic", "tack.r": "logic",
+	"tack.l": "logic", "tack.r.not": "logic", "tack.r.double": "logic",
+	"models": "logic", "therefore": "logic", "because": "logic", "qed": "logic",
+
+	// brackets
+	"angle.l": "brackets", "angle.r": "brackets",
+	"chevron.l": "brackets", "chevron.r": "brackets",
+	"floor.l": "brackets", "floor.r": "brackets",
+	"ceil.l": "brackets", "ceil.r": "brackets",
+
+	// operators
+	"times": "operators", "dot": "operators", "dot.c": "operators",
+	"dots": "operators", "dots.c": "operators", "dots.h": "operators",
+	"dots.v": "operators", "dots.down": "operators", "plus.minus": "operators",
+	"minus.plus": "operators", "plus.circle": "operators", "times.circle": "operators",
+	"infinity": "operators", "oo": "operators", "nabla": "operators",
+	"partial": "operators", "degree": "operators", "hbar": "operators",
+	"ell": "operators", "angle": "operators", "div": "operators",
+	"ast": "operators", "star": "operators", "bullet": "operators",
+	"compose": "operators", "circle.tiny": "operators", "dagger": "operators",
+	"dagger.double": "operators", "planck.reduce": "operators",
+	"Re": "operators", "Im": "operators",
+}
 
 func init() {
 	mathBuckets = make(map[rune][]symbolEntry)
@@ -394,6 +458,40 @@ func init() {
 		'O': '𝒪', 'P': '𝒫', 'Q': '𝒬', 'R': 'ℛ', 'S': '𝒮', 'T': '𝒯', 'U': '𝒰',
 		'V': '𝒱', 'W': '𝒲', 'X': '𝒳', 'Y': '𝒴', 'Z': '𝒵',
 	}
+
+	symbolCatalog = make([]CatalogSymbol, 0, len(GreekLower)+len(GreekUpper)+len(Arrows)+len(Operators)+len(BigOperators))
+	addCatalog := func(rules []SymbolRule, fixedCat string) {
+		for _, rule := range rules {
+			if !isIdentifierSymbol(rule.Pattern) {
+				continue
+			}
+			cat := fixedCat
+			if cat == "" {
+				cat = operatorCategory[rule.Pattern]
+				if cat == "" {
+					cat = "operators"
+				}
+			}
+			symbolCatalog = append(symbolCatalog, CatalogSymbol{
+				Name:     rule.Pattern,
+				Glyph:    rule.Glyph,
+				Category: cat,
+			})
+		}
+	}
+	addCatalog(GreekLower, "greek")
+	addCatalog(GreekUpper, "greek")
+	addCatalog(Arrows, "arrows")
+	addCatalog(Operators, "")
+	addCatalog(BigOperators, "big-operators")
+}
+
+// SymbolCatalog returns a fresh copy of all named Typst math symbols with
+// their Unicode glyphs and categories.
+func SymbolCatalog() []CatalogSymbol {
+	out := make([]CatalogSymbol, len(symbolCatalog))
+	copy(out, symbolCatalog)
+	return out
 }
 
 // LookupSymbol looks up a Typst math or markup pattern in the curated tables.

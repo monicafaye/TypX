@@ -347,3 +347,36 @@ func TestSmartListContinuationAndExit(t *testing.T) {
 		t.Fatal("list continuation should respect autoindent=false")
 	}
 }
+
+func TestHandleTypstNewlineYieldsWhenHasSuggestions(t *testing.T) {
+	// 1. List line yields when autocomplete suggestions are open
+	bp := newTestBufPane(t, "- first item", "test.typ")
+	bp.Cursor.GotoLoc(buffer.Loc{X: 12, Y: 0})
+	bp.Buf.HasSuggestions = true
+	if HandleTypstNewline(bp) {
+		t.Fatal("HandleTypstNewline should return false when HasSuggestions is true on a list line")
+	}
+	if got := bufferText(bp.Buf); got != "- first item" {
+		t.Fatalf("buffer mutated on yielded list line: %q", got)
+	}
+
+	// 2. Empty smart pair yields when autocomplete suggestions are open
+	bpPair := newTestBufPane(t, "{}", "test.typ")
+	bpPair.Cursor.GotoLoc(buffer.Loc{X: 1, Y: 0})
+	bpPair.Buf.HasSuggestions = true
+	if HandleTypstNewline(bpPair) {
+		t.Fatal("HandleTypstNewline should return false when HasSuggestions is true inside empty pair")
+	}
+	if got := bufferText(bpPair.Buf); got != "{}" {
+		t.Fatalf("buffer mutated on yielded empty pair: %q", got)
+	}
+
+	// 3. Clearing HasSuggestions restores normal smart newline behavior
+	bpPair.Buf.HasSuggestions = false
+	if !HandleTypstNewline(bpPair) {
+		t.Fatal("HandleTypstNewline should handle empty pair once HasSuggestions is false")
+	}
+	if got := bufferText(bpPair.Buf); got != "{\n  \n}" {
+		t.Fatalf("smart newline after clearing HasSuggestions = %q, want %q", got, "{\n  \n}")
+	}
+}

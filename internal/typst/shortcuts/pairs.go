@@ -280,7 +280,7 @@ func HandleTypstBackspace(bp *action.BufPane) bool {
 // autoindent-aware indentation, and continues or exits Typst markup lists
 // (-, +, N., /). Does not expand "". Returns true if handled.
 func HandleTypstNewline(bp *action.BufPane) bool {
-	if !canEditTypst(bp) || !smartPairsEnabled(bp.Buf) {
+	if !canEditTypst(bp) || bp.Buf.HasSuggestions || !smartPairsEnabled(bp.Buf) {
 		return false
 	}
 	c := activeCursor(bp)

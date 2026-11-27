@@ -55,10 +55,11 @@ func InsertCompleter(b *buffer.Buffer) ([]string, []string) {
 	}
 	input, argstart := b.GetArg()
 
+	entries := loadSnippetsForBuffer(b, false)
 	var suggestions []string
-	for _, name := range sortedTemplateNames {
-		if strings.HasPrefix(name, input) {
-			suggestions = append(suggestions, name)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name, input) {
+			suggestions = append(suggestions, entry.Name)
 		}
 	}
 	if len(suggestions) == 0 {
@@ -84,20 +85,14 @@ func NewInsertCmd() func(bp *action.BufPane, args []string) {
 			return
 		}
 		name := args[0]
-		tmpl, ok := typstTemplates[name]
+		entry, ok := lookupSnippetForBuffer(bp.Buf, name, true)
 		if !ok {
 			if action.InfoBar != nil {
 				action.InfoBar.Error("Unknown Typst template: ", name)
 			}
 			return
 		}
-		if len(bp.Buf.GetCursors()) <= 1 {
-			ExpandSnippetAt(bp, tmpl)
-			return
-		}
-		forEachCursorReverse(bp, func(c *buffer.Cursor) {
-			expandTemplateAt(bp.Buf, c, tmpl)
-		})
+		expandSnippetInPane(bp, entry.Body)
 	}
 }
 
@@ -107,20 +102,14 @@ func NewInsertTemplateCmd(name string) func(bp *action.BufPane, args []string) {
 		if !guardTypstCmd(bp) {
 			return
 		}
-		tmpl, ok := typstTemplates[name]
+		entry, ok := lookupSnippetForBuffer(bp.Buf, name, true)
 		if !ok {
 			if action.InfoBar != nil {
 				action.InfoBar.Error("Unknown Typst template: ", name)
 			}
 			return
 		}
-		if len(bp.Buf.GetCursors()) <= 1 {
-			ExpandSnippetAt(bp, tmpl)
-			return
-		}
-		forEachCursorReverse(bp, func(c *buffer.Cursor) {
-			expandTemplateAt(bp.Buf, c, tmpl)
-		})
+		expandSnippetInPane(bp, entry.Body)
 	}
 }
 
@@ -135,6 +124,33 @@ func NewInsertPaletteAction() action.BufKeyAction {
 }
 
 func openInsertPalette(bp *action.BufPane) bool {
+	if !canEditTypst(bp) {
+		return false
+	}
+	entries := loadSnippetsForBuffer(bp.Buf, true)
+	if picker := getPicker(); picker != nil {
+		items := make([]PickerItem, 0, len(entries))
+		for _, entry := range entries {
+			body := entry.Body
+			previewSrc := entry.Description
+			if strings.TrimSpace(previewSrc) == "" {
+				previewSrc = entry.Body
+			}
+			items = append(items, PickerItem{
+				Badge:     entry.Source,
+				Primary:   entry.Name,
+				Secondary: singleLinePreview(previewSrc, 44),
+				OnSelect: func() {
+					target := resolveEditableTypstPane(bp)
+					if target != nil {
+						expandSnippetInPane(target, body)
+					}
+				},
+			})
+		}
+		return picker(bp, "Snippets", "SNIPPETS", "", items)
+	}
+
 	if action.InfoBar == nil {
 		return false
 	}
@@ -146,23 +162,12 @@ func openInsertPalette(bp *action.BufPane) bool {
 		if resp == "" {
 			return
 		}
-		target := bp
-		if tab := action.MainTab(); tab != nil {
-			if cur := tab.CurPane(); cur != nil {
-				target = cur
-			}
-		}
-		if !canEditTypst(target) {
+		target := resolveEditableTypstPane(bp)
+		if target == nil {
 			return
 		}
-		if tmpl, ok := typstTemplates[resp]; ok {
-			if len(target.Buf.GetCursors()) <= 1 {
-				ExpandSnippetAt(target, tmpl)
-				return
-			}
-			forEachCursorReverse(target, func(c *buffer.Cursor) {
-				expandTemplateAt(target.Buf, c, tmpl)
-			})
+		if entry, ok := lookupSnippetForBuffer(target.Buf, resp, true); ok {
+			expandSnippetInPane(target, entry.Body)
 			return
 		}
 		target.HandleCommand(resp)
