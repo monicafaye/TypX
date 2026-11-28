@@ -64,8 +64,11 @@ flowchart TB
     Features --> Config
 
     Conceal --> Mode
+    Shortcuts --> Mode
+    Shortcuts --> Conceal
     Shortcuts --> Action
     Shortcuts --> Buffer
+    Shortcuts --> Config
     Bib --> Action
     Bib --> Buffer
     Outline --> Mode
@@ -88,6 +91,7 @@ flowchart TB
     LSP --> Action
     LSP --> Buffer
     LSP --> Display
+    LSP --> Screen
     LSP --> Config
 
     Action --> Buffer

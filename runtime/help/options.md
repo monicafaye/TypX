@@ -797,6 +797,7 @@ options in JSON format:
     "tabsize": 4,
     "tabstospaces": false,
     "truecolor": "auto",
+    "typst.autoComplete": true,
     "typst.conceal": true,
     "typst.concealMode": "line",
     "typst.debounceMs": 150,
